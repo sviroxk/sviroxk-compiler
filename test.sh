@@ -75,6 +75,33 @@ sources=(
     "examples/v1_while.svx"
     "examples/p0_unknown_backend_type.svx"
     "examples/p0_struct_field_store.svx"
+    "examples/b1_forward_call.svx"
+    "examples/b1_factorial.svx"
+    "examples/b1_mutual_recursion.svx"
+    "examples/p0_array_non_i32.svx"
+    "examples/b2_numeric_input.svx"
+    "examples/b2_string_input.svx"
+    "examples/b2_pointer.svx"
+    "examples/b2_dynamic_array.svx"
+    "examples/b2_file_read.svx"
+    "examples/p0_array_types.svx"
+    "examples/a11_file_write.svx"
+    "examples/a10_lexer_literals.svx"
+    "examples/a11_string_input.svx"
+    "examples/a12_widening.svx"
+    "examples/a13_literal_arithmetic.svx"
+    "examples/a14_shadowing.svx"
+    "examples/a16_builtin_types.svx"
+    "examples/a18_struct_field_collision.svx"
+    "examples/a2_cast_precedence.svx"
+    "examples/a3_void_return.svx"
+    "examples/a4_else_if.svx"
+    "examples/a6_str_type.svx"
+    "examples/a7_char.svx"
+    "examples/a8_builtin_names.svx"
+    "examples/a9_file_open.svx"
+    "examples/contextual_numeric_literals.svx"
+    "examples/unsigned_print.svx"
 )
 
 for source in "${sources[@]}"; do
@@ -83,6 +110,10 @@ for source in "${sources[@]}"; do
     mkdir -p "$work"
     echo "=== $source ==="
 
+    if [[ "$source" == "examples/b2_file_read.svx" ]]; then
+        printf '%s
+' 'file data' > "$work/b2-input.tmp"
+    fi
     if (ulimit -c 0; timeout --signal=TERM 15s ./sc "$source" >"$work/module.ll" 2>"$work/compiler.err"); then
         :
     else
@@ -118,7 +149,23 @@ for source in "${sources[@]}"; do
         cat "$work/link.err" >&2
         exit 1
     fi
-    if ! timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"; then
+    if [[ "$source" == "examples/b2_numeric_input.svx" ]]; then
+        printf '%s
+' '37' | timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"
+    elif [[ "$source" == "examples/b2_string_input.svx" ]]; then
+        printf '%s
+' 'hello' | timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"
+    elif [[ "$source" == "examples/a11_string_input.svx" ]]; then
+        printf '%s
+' 'hello' | timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"
+    elif [[ "$source" == "examples/b2_file_read.svx" ]]; then
+        (cd "$work" && timeout --signal=TERM 10s ./program) >"$work/output.txt" 2>"$work/runtime.err"
+    elif [[ "$source" == "examples/a11_file_write.svx" ]]; then
+        (cd "$work" && timeout --signal=TERM 10s "$work/program") >"$work/output.txt" 2>"$work/runtime.err"
+    else
+        timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"
+    fi
+    if [[ $? -ne 0 ]]; then
         echo "FAIL: program failed or exceeded 10s for $source" >&2
         cat "$work/runtime.err" >&2
         exit 1
@@ -319,6 +366,195 @@ for source in "${sources[@]}"; do
             cat "$work/output.txt" >&2
             exit 1
         fi
+    elif [[ "$source" == "examples/p0_array_types.svx" ]]; then
+        expected=$'1\n1\n1\n1\n1\n1\n1\n1.000000'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: array element type mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/p0_array_non_i32.svx" ]]; then
+        expected=$'1.500000\n2.500000\n3.500000'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: f64 array element mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b1_forward_call.svx" ]]; then
+        expected=$'6'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: forward function call mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b1_factorial.svx" ]]; then
+        expected=$'120'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: recursive function result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b1_mutual_recursion.svx" ]]; then
+        expected=$'1\n1'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: mutual recursion result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b2_numeric_input.svx" ]]; then
+        expected=$'number: 37'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: numeric input result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b2_string_input.svx" ]]; then
+        expected=$'text: hello'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: string input result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b2_pointer.svx" ]]; then
+        expected=$'9'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: pointer write/read result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b2_dynamic_array.svx" ]]; then
+        expected=$'15'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: dynamic array result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b2_file_read.svx" ]]; then
+        expected=$'file data'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: file read result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a11_file_write.svx" ]]; then
+        expected=$'1'
+        if [[ "$(cat "$work/output.txt")" != "$expected" || "$(cat "$work/sc-a11.tmp" 2>/dev/null)" != "ok" ]]; then
+            echo "FAIL: file write result mismatch" >&2
+            cat "$work/output.txt" "$work/sc-a11.tmp" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a10_lexer_literals.svx" ]]; then
+        expected=$(printf '84\n'"'"'\na')
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: lexer literal mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a11_string_input.svx" ]]; then
+        expected=$'text: hello'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: string input mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a12_widening.svx" ]]; then
+        expected=$'12\n200\n200\n1.500000'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: numeric widening mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a13_literal_arithmetic.svx" ]]; then
+        expected=$'5\n7\n11\n3.750000'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: literal arithmetic mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a14_shadowing.svx" ]]; then
+        expected=$'20\n10'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: variable shadowing mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a16_builtin_types.svx" ]]; then
+        expected=$'3.000000\n8.000000\n9\n7\n3\n2.000000\n2.500000\n3.500000\n2.500000\n3000000000\n2.500000'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: builtin type mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a18_struct_field_collision.svx" ]]; then
+        expected=$'9\n42'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: struct field collision mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a2_cast_precedence.svx" ]]; then
+        expected=$'128'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: cast precedence mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a3_void_return.svx" ]]; then
+        expected=$'1'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: void return mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a4_else_if.svx" ]]; then
+        expected=$'2'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: else-if mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a6_str_type.svx" ]]; then
+        expected=$'ok'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: string type mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a7_char.svx" ]]; then
+        expected=$'a'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: char mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a8_builtin_names.svx" ]]; then
+        expected=$'7'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: builtin name shadowing mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a9_file_open.svx" ]]; then
+        expected=$'1'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: file open/close mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/contextual_numeric_literals.svx" ]]; then
+        expected=$'5\n7\n6.250000\n3000000000\n4000000000'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: contextual numeric literal mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/unsigned_print.svx" ]]; then
+        expected=$'4000000000\n18446744073709551615'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: unsigned print mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
     elif [[ "$source" == "docs/conformance/basic.svx" ]]; then
         expected=$'42'
         if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
@@ -466,7 +702,9 @@ expect_compile_error "short-overflow" 'short value = 32768;'
 expect_compile_error "f32-overflow" 'f32 value = 1e999;'
 expect_compile_error "malformed-exponent" 'double value = 1e;'
 expect_compile_error "malformed-multiple-decimals" 'double value = 1.2.3;'
-expect_compile_error "exact-array-not-yet-supported" 'i16[] values = [1, 2];'
+# exact-array-not-yet-supported is now supported (i16, u16, f32, u8, i8, u32, u64, i64)
+# Keep a test for an array type that should still be rejected
+expect_compile_error "array-unsupported-element" 'ptr[] values = [1, 2];'
 expect_compile_error "unsigned-mixed-sign" 'u32 positive = 1; i32 signed = -1; let result: int = positive + signed;'
 expect_compile_error "unsigned-width-mix" 'u64 large = 2; i64 signed = -1; let result: i64 = large + signed;'
 expect_compile_error "mixed-signedness-comparison" 'u32 unsigned_value = 1; i32 signed_value = 1; if (unsigned_value > signed_value) { print(1); }'
@@ -474,6 +712,17 @@ expect_compile_error "array-index-type" 'svi rox[] values = [1, 2]; svi dor inde
 expect_compile_error "unknown-type" 'mystery value = 1;'
 expect_compile_error "duplicate-variable" 'let result: int = 1; let result: int = 2;'
 expect_compile_error "break-outside-loop" 'brk;'
+expect_compile_error "builtin-function-collision" 'fn int max(int left, int right) { return left + right; }'
+expect_compile_error "nested-function" 'if (1) { fn int inner(int value) { return value; } }'
+expect_compile_error "unreachable-after-return" 'fn void dead() { return; print(2); }'
+expect_compile_error "unreachable-after-break" 'fn void dead() { cert ceh (2) { brk; print(3); } }'
+expect_compile_error "unreachable-after-continue" 'fn void dead() { cert ceh (2) { cont; print(4); } }'
+expect_compile_error "continue-in-counted-loop" 'let total: int = 0; cert ceh (5) { cont; total = total + 1; } print(total);'
+expect_compile_error "string-arithmetic" 'let bad: int = "x" + "y";'
+expect_compile_error "int-overflow-negative" 'int overflow = -2147483649;'
+expect_compile_error "array-index-float" 'svi rox[] values = [1, 2]; svi dor index = 0.5; slov(values[index]);'
+expect_compile_error "builtin-no-args" 'sqrt();'
+expect_compile_error "type-mismatch-initializer" 'int count = "wrong";'
 
 IMPORT_DIR="$TMP_DIR/imports"
 mkdir -p "$IMPORT_DIR/lib"

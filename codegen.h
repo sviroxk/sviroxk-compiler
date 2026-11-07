@@ -17,6 +17,7 @@ class CodeGen {
         std::map<std::string, unsigned> integerWidths;
         std::map<std::string, llvm::AllocaInst*> arrays;
         std::map<std::string, unsigned> arrayLengths;
+        std::map<std::string, llvm::Type*> arrayElementTypes;
         std::map<std::string, std::string> structTypesByVariable;
     };
 
@@ -34,6 +35,7 @@ public:
     std::map<std::string, unsigned> integerWidths;
     std::map<std::string, llvm::AllocaInst*> arrays;
     std::map<std::string, unsigned> arrayLengths;
+    std::map<std::string, llvm::Type*> arrayElementTypes;
     std::map<std::string, llvm::Function*> funcs;
     std::map<std::string, std::vector<std::string>> funcParamTypes;
     std::map<std::string, std::string> funcReturnTypes;
