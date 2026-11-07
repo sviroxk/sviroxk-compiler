@@ -167,6 +167,10 @@ clang output.s -o program -lm
 ./program
 ```
 
+## Лицензия
+
+Проект распространяется под лицензией Apache 2.0. См. [LICENSE](LICENSE).
+
 ## Автор
 
 winchestersdc79-hub — создан с нуля на телефоне через Termux
