@@ -951,7 +951,9 @@ void CodeGen::genNode(const Node& node) {
         for (unsigned i = 0; i < n; i++) {
             llvm::Value* gep = builder.CreateInBoundsGEP(
                 at, arr, {builder.getInt32(0), builder.getInt32(i)});
-            builder.CreateStore(genExpr(node.args[i]), gep);
+            llvm::Value* val = genExpr(node.args[i]);
+            val = castTo(val, elementType, isUnsignedExpr(node.args[i]));
+            builder.CreateStore(val, gep);
         }
     }
     else if (node.type == NODE_STRUCT_DEF) {

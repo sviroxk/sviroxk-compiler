@@ -84,6 +84,7 @@ sources=(
     "examples/b2_pointer.svx"
     "examples/b2_dynamic_array.svx"
     "examples/b2_file_read.svx"
+    "examples/p0_array_types.svx"
     "examples/a11_file_write.svx"
     "examples/a10_lexer_literals.svx"
     "examples/a11_string_input.svx"
@@ -362,6 +363,13 @@ for source in "${sources[@]}"; do
         expected=$'9223372036854775806'
         if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
             echo "FAIL: struct aggregate i64 field store mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/p0_array_types.svx" ]]; then
+        expected=$'1\n1\n1\n1\n1\n1\n1\n1.000000'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: array element type mismatch" >&2
             cat "$work/output.txt" >&2
             exit 1
         fi
@@ -694,7 +702,9 @@ expect_compile_error "short-overflow" 'short value = 32768;'
 expect_compile_error "f32-overflow" 'f32 value = 1e999;'
 expect_compile_error "malformed-exponent" 'double value = 1e;'
 expect_compile_error "malformed-multiple-decimals" 'double value = 1.2.3;'
-expect_compile_error "exact-array-not-yet-supported" 'i16[] values = [1, 2];'
+# exact-array-not-yet-supported is now supported (i16, u16, f32, u8, i8, u32, u64, i64)
+# Keep a test for an array type that should still be rejected
+expect_compile_error "array-unsupported-element" 'ptr[] values = [1, 2];'
 expect_compile_error "unsigned-mixed-sign" 'u32 positive = 1; i32 signed = -1; let result: int = positive + signed;'
 expect_compile_error "unsigned-width-mix" 'u64 large = 2; i64 signed = -1; let result: i64 = large + signed;'
 expect_compile_error "mixed-signedness-comparison" 'u32 unsigned_value = 1; i32 signed_value = 1; if (unsigned_value > signed_value) { print(1); }'

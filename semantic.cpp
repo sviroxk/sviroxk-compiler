@@ -666,16 +666,18 @@ private:
         }
         case NODE_ARRAY_DECL: {
             std::string element = normalize(node.varType);
-            if (element != "i32" && element != "f64" && element != "str" && element != "bool")
-                error(node, "массивы точных типов пока не поддерживаются backend'ом; используйте i32, f64, str или bool");
             if (!knownType(element)) error(node, "неизвестный тип элемента массива '" + element + "'");
+            const bool elementIsInteger = isInteger(element);
             for (const Node& value : node.args) {
-                std::string actual = expression(value);
+                std::string actual;
+                const bool contextualIntegerLiteral = value.type == NODE_NUMBER &&
+                    value.varType.empty() &&
+                    value.value.find_first_of(".eE") == std::string::npos &&
+                    elementIsInteger;
+                actual = contextualIntegerLiteral ? element : expression(value);
                 if (actual != "<error>" && !compatible(element, actual))
                     error(value, "элемент массива должен иметь тип '" + typeName(element) + "'");
             }
-            if (element != "i32" && element != "f64" && element != "str" && element != "bool")
-                error(node, "backend пока не поддерживает массивы типа '" + typeName(element) + "'");
             declare(node.varName, "array<" + element + ">", node);
             break;
         }
