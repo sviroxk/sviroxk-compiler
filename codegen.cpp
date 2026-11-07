@@ -23,7 +23,7 @@ bool blockHasTerminator(const llvm::BasicBlock* block) {
 
 CodeGen::ScopeSnapshot CodeGen::saveScope() const {
     return {vars, unsignedVars, charVars, constVars, integerWidths, arrays, arrayLengths,
-            structTypesByVariable};
+            arrayElementTypes, structTypesByVariable};
 }
 
 void CodeGen::restoreScope(const ScopeSnapshot& scope) {
@@ -34,6 +34,7 @@ void CodeGen::restoreScope(const ScopeSnapshot& scope) {
     integerWidths = scope.integerWidths;
     arrays = scope.arrays;
     arrayLengths = scope.arrayLengths;
+    arrayElementTypes = scope.arrayElementTypes;
     structTypesByVariable = scope.structTypesByVariable;
 }
 
@@ -231,13 +232,14 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         if (arrays.count(node.varName)) {
             llvm::AllocaInst* arr = arrays[node.varName];
             unsigned n = arrayLengths[node.varName];
-            llvm::ArrayType* at =
-                llvm::ArrayType::get(builder.getInt32Ty(), n);
+            llvm::Type* elementType = arrayElementTypes[node.varName];
+            if (!elementType) elementType = builder.getInt32Ty();
+            llvm::ArrayType* at = llvm::ArrayType::get(elementType, n);
             llvm::Value* idx = genExpr(*node.left);
             emitArrayBoundsCheck(idx, n, node);
             llvm::Value* gep = builder.CreateInBoundsGEP(
                 at, arr, {builder.getInt32(0), idx});
-            return builder.CreateLoad(builder.getInt32Ty(), gep);
+            return builder.CreateLoad(elementType, gep);
         }
         codegenFailure(node, "неизвестный массив '" + node.varName + "'");
     }
@@ -904,8 +906,9 @@ void CodeGen::genNode(const Node& node) {
             } else if (arrays.count(node.varName)) {
                 llvm::AllocaInst* arr = arrays[node.varName];
                 unsigned n = arrayLengths[node.varName];
-                llvm::ArrayType* at =
-                    llvm::ArrayType::get(builder.getInt32Ty(), n);
+                llvm::Type* elementType = arrayElementTypes[node.varName];
+                if (!elementType) elementType = builder.getInt32Ty();
+                llvm::ArrayType* at = llvm::ArrayType::get(elementType, n);
                 llvm::Value* idx = genExpr(*node.left);
                 emitArrayBoundsCheck(idx, n, node);
                 llvm::Value* gep = builder.CreateInBoundsGEP(
@@ -939,12 +942,12 @@ void CodeGen::genNode(const Node& node) {
     }
     else if (node.type == NODE_ARRAY_DECL) {
         unsigned n = (unsigned)node.args.size();
-        llvm::ArrayType* at =
-            llvm::ArrayType::get(builder.getInt32Ty(), n);
-        llvm::AllocaInst* arr =
-            builder.CreateAlloca(at, nullptr, node.varName);
+        llvm::Type* elementType = svType(node.varType);
+        llvm::ArrayType* at = llvm::ArrayType::get(elementType, n);
+        llvm::AllocaInst* arr = builder.CreateAlloca(at, nullptr, node.varName);
         arrays[node.varName] = arr;
         arrayLengths[node.varName] = n;
+        arrayElementTypes[node.varName] = elementType;
         for (unsigned i = 0; i < n; i++) {
             llvm::Value* gep = builder.CreateInBoundsGEP(
                 at, arr, {builder.getInt32(0), builder.getInt32(i)});

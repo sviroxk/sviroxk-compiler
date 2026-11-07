@@ -78,6 +78,7 @@ sources=(
     "examples/b1_forward_call.svx"
     "examples/b1_factorial.svx"
     "examples/b1_mutual_recursion.svx"
+    "examples/p0_array_non_i32.svx"
     "examples/b2_numeric_input.svx"
     "examples/b2_string_input.svx"
     "examples/b2_pointer.svx"
@@ -139,6 +140,8 @@ for source in "${sources[@]}"; do
 ' 'hello' | timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"
     elif [[ "$source" == "examples/b2_file_read.svx" ]]; then
         (cd "$work" && timeout --signal=TERM 10s ./program) >"$work/output.txt" 2>"$work/runtime.err"
+    elif [[ "$source" == "examples/a11_file_write.svx" ]]; then
+        (cd "$work" && timeout --signal=TERM 10s "$work/program") >"$work/output.txt" 2>"$work/runtime.err"
     else
         timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"
     fi
@@ -343,6 +346,13 @@ for source in "${sources[@]}"; do
             cat "$work/output.txt" >&2
             exit 1
         fi
+    elif [[ "$source" == "examples/p0_array_non_i32.svx" ]]; then
+        expected=$'1.500000\n2.500000\n3.500000'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: f64 array element mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
     elif [[ "$source" == "examples/b1_forward_call.svx" ]]; then
         expected=$'6'
         if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
@@ -401,7 +411,7 @@ for source in "${sources[@]}"; do
         fi
     elif [[ "$source" == "examples/a11_file_write.svx" ]]; then
         expected=$'1'
-        if [[ "$(cat "$work/output.txt")" != "$expected" || "$(cat "$work/sc-a11.tmp")" != "ok" ]]; then
+        if [[ "$(cat "$work/output.txt")" != "$expected" || "$(cat "$work/sc-a11.tmp" 2>/dev/null)" != "ok" ]]; then
             echo "FAIL: file write result mismatch" >&2
             cat "$work/output.txt" "$work/sc-a11.tmp" >&2
             exit 1

@@ -526,11 +526,30 @@ std::vector<Node> parseBlock() {
     return nodes;
 }
 
+// Parse the body of a declaration: `= <expr> ;` or `= [ <expr> , ... ] ;`.
+// Sets node.type to NODE_ARRAY_DECL for array form, NODE_VAR_DECL otherwise.
+static void parseDeclBody(Node& node, bool isArray) {
+    expect(EQUALS);
+    if (isArray) {
+        node.type = NODE_ARRAY_DECL;
+        expect(LBRACKET);
+        while (peek().type != RBRACKET && peek().type != END) {
+            node.args.push_back(parseExpr());
+            if (peek().type == COMMA) consume();
+        }
+        expect(RBRACKET);
+    } else {
+        node.type = NODE_VAR_DECL;
+        node.left = makeNode(parseExpr());
+    }
+    expect(SEMICOLON);
+}
+
 Node parseOne() {
     // Short variable and constant declarations.
     if (peek().type == LET || peek().type == CONST_T) {
         Token declarationToken = consume();
-        Node node; node.type = NODE_VAR_DECL;
+        Node node;
         node.isConst = declarationToken.type == CONST_T;
         node.line = declarationToken.line;
         node.column = declarationToken.column;
@@ -539,16 +558,43 @@ Node parseOne() {
         if (!isNameToken(nameToken.type))
             failAt(nameToken, "ожидалось имя переменной");
         node.varName = consume().value;
+        bool isArray = false;
         if (peek().type == COLON) {
             consume();
             Token typeToken = consume();
             if (!isTypeName(typeToken.value))
                 failAt(typeToken, "неизвестный тип '" + typeToken.value + "'");
             node.varType = canonicalType(typeToken.value);
+            if (peek().type == LBRACKET) {
+                consume(); expect(RBRACKET);
+                isArray = true;
+            }
         }
-        expect(EQUALS);
-        node.left = makeNode(parseExpr());
-        expect(SEMICOLON);
+        parseDeclBody(node, isArray);
+        return node;
+    }
+    // Type-first declarations: int value = 42; f64[] values = [...]
+    bool isTypeFirstDecl = false;
+    if (isTypeToken(peek().type)) {
+        if (peek(1).type == IDENTIFIER) isTypeFirstDecl = true;
+        if (peek(1).type == LBRACKET && peek(2).type == RBRACKET && peek(3).type == IDENTIFIER) isTypeFirstDecl = true;
+    }
+    if (isTypeFirstDecl) {
+        Token typeToken = consume();
+        if (!isTypeName(typeToken.value))
+            failAt(typeToken, "неизвестный тип '" + typeToken.value + "'");
+        Node node;
+        node.line = typeToken.line;
+        node.column = typeToken.column;
+        node.file = typeToken.file;
+        node.varType = canonicalType(typeToken.value);
+        bool isArray = false;
+        if (peek().type == LBRACKET) {
+            consume(); expect(RBRACKET);
+            isArray = true;
+        }
+        node.varName = consume().value;
+        parseDeclBody(node, isArray);
         return node;
     }
     // svi
