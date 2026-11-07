@@ -235,14 +235,6 @@ Node parsePrimary() {
         expect(RPAREN);
         return left;
     }
-    // &x — адрес
-    if (peek().type == AMP) {
-        consume();
-        Token name = consume();
-        left.type = NODE_ADDR;
-        left.varName = name.value;
-        return left;
-    }
     // *p — разыменование
     if (peek().type == STAR) {
         consume();
@@ -314,6 +306,19 @@ Node parsePrimary() {
 }
 
 Node parseUnary() {
+    if (peek().type == BIT_AND) {
+        Token address = consume();
+        Token name = peek();
+        if (!isNameToken(name.type))
+            failAt(name, "после '&' ожидалось имя переменной");
+        consume();
+        Node node; node.type = NODE_ADDR;
+        node.line = address.line;
+        node.column = address.column;
+        node.file = address.file;
+        node.varName = name.value;
+        return node;
+    }
     if (peek().type == BIT_NOT) {
         Token op = consume();
         Node node; node.type = NODE_BINOP;

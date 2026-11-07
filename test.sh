@@ -75,6 +75,15 @@ sources=(
     "examples/v1_while.svx"
     "examples/p0_unknown_backend_type.svx"
     "examples/p0_struct_field_store.svx"
+    "examples/b1_forward_call.svx"
+    "examples/b1_factorial.svx"
+    "examples/b1_mutual_recursion.svx"
+    "examples/b2_numeric_input.svx"
+    "examples/b2_string_input.svx"
+    "examples/b2_pointer.svx"
+    "examples/b2_dynamic_array.svx"
+    "examples/b2_file_read.svx"
+    "examples/a11_file_write.svx"
 )
 
 for source in "${sources[@]}"; do
@@ -83,6 +92,10 @@ for source in "${sources[@]}"; do
     mkdir -p "$work"
     echo "=== $source ==="
 
+    if [[ "$source" == "examples/b2_file_read.svx" ]]; then
+        printf '%s
+' 'file data' > "$work/b2-input.tmp"
+    fi
     if (ulimit -c 0; timeout --signal=TERM 15s ./sc "$source" >"$work/module.ll" 2>"$work/compiler.err"); then
         :
     else
@@ -118,7 +131,18 @@ for source in "${sources[@]}"; do
         cat "$work/link.err" >&2
         exit 1
     fi
-    if ! timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"; then
+    if [[ "$source" == "examples/b2_numeric_input.svx" ]]; then
+        printf '%s
+' '37' | timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"
+    elif [[ "$source" == "examples/b2_string_input.svx" ]]; then
+        printf '%s
+' 'hello' | timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"
+    elif [[ "$source" == "examples/b2_file_read.svx" ]]; then
+        (cd "$work" && timeout --signal=TERM 10s ./program) >"$work/output.txt" 2>"$work/runtime.err"
+    else
+        timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"
+    fi
+    if [[ $? -ne 0 ]]; then
         echo "FAIL: program failed or exceeded 10s for $source" >&2
         cat "$work/runtime.err" >&2
         exit 1
@@ -317,6 +341,69 @@ for source in "${sources[@]}"; do
         if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
             echo "FAIL: struct aggregate i64 field store mismatch" >&2
             cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b1_forward_call.svx" ]]; then
+        expected=$'6'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: forward function call mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b1_factorial.svx" ]]; then
+        expected=$'120'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: recursive function result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b1_mutual_recursion.svx" ]]; then
+        expected=$'1\n1'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: mutual recursion result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b2_numeric_input.svx" ]]; then
+        expected=$'number: 37'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: numeric input result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b2_string_input.svx" ]]; then
+        expected=$'text: hello'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: string input result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b2_pointer.svx" ]]; then
+        expected=$'9'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: pointer write/read result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b2_dynamic_array.svx" ]]; then
+        expected=$'15'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: dynamic array result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/b2_file_read.svx" ]]; then
+        expected=$'file data'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: file read result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/a11_file_write.svx" ]]; then
+        expected=$'1'
+        if [[ "$(cat "$work/output.txt")" != "$expected" || "$(cat "$work/sc-a11.tmp")" != "ok" ]]; then
+            echo "FAIL: file write result mismatch" >&2
+            cat "$work/output.txt" "$work/sc-a11.tmp" >&2
             exit 1
         fi
     elif [[ "$source" == "docs/conformance/basic.svx" ]]; then
