@@ -40,7 +40,8 @@ static std::string tokenDescription(const Token& token) {
     return "'" + token.value + "'";
 }
 
-static void failAt(const Token& token, const std::string& message) {
+static void failAt(const Token& token, const std::string& message,
+                   const std::string& code = "E_SYNTAX_EXPECTED") {
     if (!recovering) {
         ++parseErrorCount;
         lastErrorPos = pos;
@@ -50,7 +51,7 @@ static void failAt(const Token& token, const std::string& message) {
                 previous.column == token.column && previous.type == token.type)
                 lastErrorPos = pos - 1;
         }
-        sc::reportDiagnostic(token.file, token.line, token.column, "syntax", message);
+        sc::reportDiagnostic(token.file, token.line, token.column, "syntax", message, code);
     }
     recovering = true;
 }
@@ -285,9 +286,15 @@ Node parsePrimary() {
         } else if (peek().type == DOT) {
             consume();
             Token field = consume();
-            left.type = NODE_STRUCT_FIELD;
-            left.varName = t.value;
-            left.op = field.value;
+            // Special handling for string .len
+            if (field.value == "len") {
+                left.type = NODE_STR_LEN;
+                left.varName = t.value;
+            } else {
+                left.type = NODE_STRUCT_FIELD;
+                left.varName = t.value;
+                left.op = field.value;
+            }
         } else if (peek().type == LBRACKET) {
             consume();
             Node* access = makeNode();
@@ -563,7 +570,7 @@ Node parseOne() {
             consume();
             Token typeToken = consume();
             if (!isTypeName(typeToken.value))
-                failAt(typeToken, "неизвестный тип '" + typeToken.value + "'");
+                failAt(typeToken, "неизвестный тип '" + typeToken.value + "'", "E_SYNTAX_UNKNOWN_TYPE");
             node.varType = canonicalType(typeToken.value);
             if (peek().type == LBRACKET) {
                 consume(); expect(RBRACKET);
@@ -582,7 +589,7 @@ Node parseOne() {
     if (isTypeFirstDecl) {
         Token typeToken = consume();
         if (!isTypeName(typeToken.value))
-            failAt(typeToken, "неизвестный тип '" + typeToken.value + "'");
+            failAt(typeToken, "неизвестный тип '" + typeToken.value + "'", "E_SYNTAX_UNKNOWN_TYPE");
         Node node;
         node.line = typeToken.line;
         node.column = typeToken.column;
@@ -635,7 +642,7 @@ Node parseOne() {
         }
         Token declaredType = consume();
         if (!isTypeName(declaredType.value))
-            failAt(declaredType, "неизвестный тип '" + declaredType.value + "'");
+            failAt(declaredType, "неизвестный тип '" + declaredType.value + "'", "E_SYNTAX_UNKNOWN_TYPE");
         std::string varType = canonicalType(declaredType.value);
         bool isArray = false;
         if (peek().type == LBRACKET) {
@@ -670,6 +677,20 @@ Node parseOne() {
             return node;
         }
     }
+    // defer — execute the block at function exit (LIFO order).
+    if (peek().type == DEFER_T) {
+        Node node;
+        node.type = NODE_DEFER;
+        node.line = peek().line;
+        node.column = peek().column;
+        node.file = peek().file;
+        consume();
+        expect(LBRACE);
+        node.children = parseBlock();
+        expect(RBRACE);
+        if (peek().type == SEMICOLON) consume();
+        return node;
+    }
     // slov
     if (peek().type == SLOV) {
         Node node; node.type = NODE_SLOV;
@@ -698,7 +719,7 @@ Node parseOne() {
                    peek(2).type == LPAREN) {
             Token returnType = consume();
             if (!isTypeName(returnType.value))
-                failAt(returnType, "неизвестный тип результата '" + returnType.value + "'");
+                failAt(returnType, "неизвестный тип результата '" + returnType.value + "'", "E_SYNTAX_UNKNOWN_TYPE");
             node.varType = canonicalType(returnType.value);
         }
         Token functionName = peek();
@@ -711,7 +732,7 @@ Node parseOne() {
             if (!isTypeToken(typeToken.type))
                 failAt(typeToken, "ожидался тип параметра функции");
             if (!isTypeName(typeToken.value))
-                failAt(typeToken, "неизвестный тип параметра '" + typeToken.value + "'");
+                failAt(typeToken, "неизвестный тип параметра '" + typeToken.value + "'", "E_SYNTAX_UNKNOWN_TYPE");
             std::string ptype = canonicalType(typeToken.value);
             Token parameterName = peek();
             if (!isNameToken(parameterName.type))
@@ -907,7 +928,7 @@ Node parseOne() {
         (peek().type != IDENTIFIER || peek(1).type == IDENTIFIER)) {
         Token typeToken = consume();
         if (!isTypeName(typeToken.value))
-            failAt(typeToken, "неизвестный тип '" + typeToken.value + "'");
+            failAt(typeToken, "неизвестный тип '" + typeToken.value + "'", "E_SYNTAX_UNKNOWN_TYPE");
         Node node; node.type = NODE_VAR_DECL;
         node.line = typeToken.line; node.column = typeToken.column; node.file = typeToken.file;
         node.varType = canonicalType(typeToken.value);
@@ -1051,6 +1072,46 @@ Node parseOne() {
         expect(RBRACE);
         return node;
     }
+    // switch — fall-through case/default with break.
+    if (peek().type == SWITCH_T) {
+        Node node;
+        node.type = NODE_SWITCH;
+        node.line = peek().line;
+        node.column = peek().column;
+        node.file = peek().file;
+        consume();
+        expect(LPAREN);
+        node.left = makeNode(parseExpr());
+        expect(RPAREN);
+        expect(LBRACE);
+        while (peek().type != RBRACE && peek().type != END) {
+            Node caseNode;
+            caseNode.line = peek().line;
+            caseNode.column = peek().column;
+            caseNode.file = peek().file;
+            if (peek().type == CASE_T) {
+                consume();
+                caseNode.left = makeNode(parseExpr());
+                expect(COLON);
+            } else if (peek().type == DEFAULT_T) {
+                consume();
+                expect(COLON);
+            } else {
+                failAt(peek(), "ожидалось case или default");
+            }
+            while (peek().type != CASE_T && peek().type != DEFAULT_T &&
+                   peek().type != RBRACE && peek().type != END) {
+                const unsigned errorsBeforeCase = parseErrorCount;
+                Node statement = parseOne();
+                if (parseErrorCount == errorsBeforeCase)
+                    caseNode.children.push_back(std::move(statement));
+            }
+            node.children.push_back(std::move(caseNode));
+        }
+        expect(RBRACE);
+        if (peek().type == SEMICOLON) consume();
+        return node;
+    }
     // cert
     if (peek().type == CERT) {
         Node node;
@@ -1101,7 +1162,7 @@ Node parseOne() {
             Node field; field.type = NODE_VAR_DECL;
             Token fieldType = consume();
             if (!isTypeName(fieldType.value))
-                failAt(fieldType, "неизвестный тип поля '" + fieldType.value + "'");
+                failAt(fieldType, "неизвестный тип поля '" + fieldType.value + "'", "E_SYNTAX_UNKNOWN_TYPE");
             field.varType = canonicalType(fieldType.value);
             field.varName = consume().value;
             expect(EQUALS);

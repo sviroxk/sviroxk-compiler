@@ -771,7 +771,7 @@ private:
             size_t separator = param.find(':');
             std::string type = param.substr(0, separator);
             std::string name = separator == std::string::npos ? "" : param.substr(separator + 1);
-            if (!knownType(type)) error(node, "неизвестный тип параметра '" + type + "'");
+            if (!knownType(type)) error(node, "неизвестный тип параметра '" + type + "'", "E_SEMANTIC_UNKNOWN_TYPE");
             declare(name, type, node);
         }
         checkStatements(node.children);
@@ -785,7 +785,7 @@ private:
         switch (node.type) {
         case NODE_VAR_DECL: {
             const bool inferType = node.varType.empty();
-            if (!inferType && !knownType(node.varType)) error(node, "неизвестный тип переменной '" + node.varType + "'");
+            if (!inferType && !knownType(node.varType)) error(node, "неизвестный тип переменной '" + node.varType + "'", "E_SEMANTIC_UNKNOWN_TYPE");
             const std::string declaredType = normalize(node.varType);
             const bool contextualIntegerLiteral = node.left->type == NODE_NUMBER &&
                 node.left->varType.empty() &&
@@ -802,7 +802,7 @@ private:
             } else if (!inferType && actual != "<error>" && !compatible(node.varType, actual) && !literalInRange) {
                 error(node, "переменная '" + node.varName + "' имеет тип '" +
                       typeName(effectiveType) + "', но инициализируется значением типа '"+
-                      typeName(actual) + "'");
+                      typeName(actual) + "'", "E_SEMANTIC_REDEF");
             }
             declare(node.varName, node.varType, node, node.isConst);
             break;
