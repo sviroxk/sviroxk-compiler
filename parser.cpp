@@ -285,9 +285,54 @@ Node parsePrimary() {
         } else if (peek().type == DOT) {
             consume();
             Token field = consume();
-            left.type = NODE_STRUCT_FIELD;
-            left.varName = t.value;
-            left.op = field.value;
+            // Array methods: arr.push(x), arr.pop(), arr.resize(n), arr.len(), arr.cap()
+            if (field.type == IDENTIFIER && field.value == "push") {
+                left.type = NODE_ARRAY_PUSH;
+                left.varName = t.value;
+                left.line = field.line;
+                left.column = field.column;
+                left.file = field.file;
+                expect(LPAREN);
+                left.args.push_back(parseExpr());
+                expect(RPAREN);
+            } else if (field.type == IDENTIFIER && field.value == "pop") {
+                left.type = NODE_ARRAY_POP;
+                left.varName = t.value;
+                left.line = field.line;
+                left.column = field.column;
+                left.file = field.file;
+                expect(LPAREN);
+                expect(RPAREN);
+            } else if (field.type == IDENTIFIER && field.value == "resize") {
+                left.type = NODE_ARRAY_RESIZE;
+                left.varName = t.value;
+                left.line = field.line;
+                left.column = field.column;
+                left.file = field.file;
+                expect(LPAREN);
+                left.args.push_back(parseExpr());
+                expect(RPAREN);
+            } else if (field.type == IDENTIFIER && field.value == "len") {
+                left.type = NODE_ARRAY_LEN;
+                left.varName = t.value;
+                left.line = field.line;
+                left.column = field.column;
+                left.file = field.file;
+                expect(LPAREN);
+                expect(RPAREN);
+            } else if (field.type == IDENTIFIER && field.value == "cap") {
+                left.type = NODE_ARRAY_CAP;
+                left.varName = t.value;
+                left.line = field.line;
+                left.column = field.column;
+                left.file = field.file;
+                expect(LPAREN);
+                expect(RPAREN);
+            } else {
+                left.type = NODE_STRUCT_FIELD;
+                left.varName = t.value;
+                left.op = field.value;
+            }
         } else if (peek().type == LBRACKET) {
             consume();
             Node* access = makeNode();

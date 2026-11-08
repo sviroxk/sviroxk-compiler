@@ -1,4 +1,5 @@
 #include "codegen.h"
+#include "type.h"
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/IR/Verifier.h>
 #include <iostream>
@@ -44,17 +45,26 @@ llvm::Value* CodeGen::getStringPtr(const std::string& str) {
         {builder.getInt32(0), builder.getInt32(0)});
 }
 
+llvm::Type* sc::Type::llvmType(llvm::LLVMContext& ctx) const {
+    switch (kind) {
+    case TypeKind::Integer: return llvm::Type::getIntNTy(ctx, width);
+    case TypeKind::Float:   return width == 64 ? llvm::Type::getDoubleTy(ctx) : llvm::Type::getFloatTy(ctx);
+    case TypeKind::Bool:    return llvm::Type::getInt8Ty(ctx);
+    case TypeKind::Char:    return llvm::Type::getInt8Ty(ctx);
+    case TypeKind::Str:     return llvm::PointerType::get(ctx, 0);
+    case TypeKind::Ptr:     return llvm::PointerType::get(ctx, 0);
+    case TypeKind::Void:    return llvm::Type::getVoidTy(ctx);
+    case TypeKind::File:    return llvm::PointerType::get(ctx, 0);
+    case TypeKind::Struct:  return llvm::PointerType::get(ctx, 0);
+    case TypeKind::Array:   return llvm::PointerType::get(ctx, 0);
+    case TypeKind::DynArray: return llvm::PointerType::get(ctx, 0);
+    default: break;
+    }
+    return llvm::Type::getInt32Ty(ctx);
+}
+
 llvm::Type* CodeGen::svType(const std::string& name) {
-    if (name == "int" || name == "i32" || name == "rox" || name == "uint" || name == "u32") return builder.getInt32Ty();
-    if (name == "short" || name == "i16" || name == "ushort" || name == "u16") return builder.getInt16Ty();
-    if (name == "i8" || name == "u8" || name == "byte" || name == "char" || name == "chr") return builder.getInt8Ty();
-    if (name == "long" || name == "i64" || name == "ulong" || name == "u64" || name == "rox64") return builder.getInt64Ty();
-    if (name == "float" || name == "f32" || name == "dor") return builder.getFloatTy();
-    if (name == "double" || name == "f64") return builder.getDoubleTy();
-    if (name == "str" || name == "string" || name == "cos" || name == "ptr" || name == "file") return builder.getPtrTy();
-    if (name == "bool" || name == "bue") return builder.getInt8Ty();
-    if (name == "void") return builder.getVoidTy();
-    throw std::logic_error("внутренняя ошибка codegen: неизвестный тип '" + name + "'");
+    return sc::Type::from(name).llvmType(context);
 }
 
 llvm::Value* CodeGen::castTo(llvm::Value* val, llvm::Type* ty, bool sourceUnsigned) {
@@ -161,6 +171,44 @@ llvm::StructType* CodeGen::dynArrayType() {
         builder.getInt64Ty(),      // capacity
     }, false);
     return type;
+}
+
+void CodeGen::growDynArray(const std::string& varName, llvm::Value* newCapacity) {
+    auto found = dynArrays.find(varName);
+    if (found == dynArrays.end()) return;
+    llvm::StructType* descType = dynArrayType();
+    llvm::AllocaInst* desc = found->second;
+    llvm::Type* elementType = dynArrayElementTypes[varName];
+    if (!elementType) elementType = builder.getInt32Ty();
+    llvm::Value* dataPtr = builder.CreateLoad(builder.getPtrTy(),
+        builder.CreateStructGEP(descType, desc, 0));
+    llvm::Function* mallocF = module.getFunction("malloc");
+    if (!mallocF) mallocF = llvm::Function::Create(
+        llvm::FunctionType::get(builder.getPtrTy(), {builder.getInt64Ty()}, false),
+        llvm::Function::ExternalLinkage, "malloc", module);
+    llvm::Value* bytes = builder.CreateMul(newCapacity,
+        builder.getInt64(elementType->getPrimitiveSizeInBits() / 8));
+    llvm::Value* newData = builder.CreateCall(mallocF, {bytes});
+    llvm::Value* oldLength = builder.CreateLoad(builder.getInt64Ty(),
+        builder.CreateStructGEP(descType, desc, 1));
+    // Copy existing elements into the new buffer.
+    llvm::Value* copyBytes = builder.CreateMul(oldLength,
+        builder.getInt64(elementType->getPrimitiveSizeInBits() / 8));
+    llvm::FunctionType* memcpyType = llvm::FunctionType::get(
+        builder.getPtrTy(),
+        {builder.getPtrTy(), builder.getPtrTy(), builder.getInt64Ty()}, false);
+    llvm::Function* memcpyF = module.getFunction("memcpy");
+    if (!memcpyF) memcpyF = llvm::Function::Create(memcpyType,
+        llvm::Function::ExternalLinkage, "memcpy", module);
+    builder.CreateCall(memcpyF, {newData, dataPtr, copyBytes});
+    // Free the old buffer.
+    llvm::Function* freeF = module.getFunction("free");
+    if (!freeF) freeF = llvm::Function::Create(
+        llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()}, false),
+        llvm::Function::ExternalLinkage, "free", module);
+    builder.CreateCall(freeF, {dataPtr});
+    builder.CreateStore(newData, builder.CreateStructGEP(descType, desc, 0));
+    builder.CreateStore(newCapacity, builder.CreateStructGEP(descType, desc, 2));
 }
 
 bool CodeGen::isUnsignedExpr(const Node& node) const {
@@ -285,6 +333,52 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             return builder.CreateLoad(builder.getInt32Ty(), ptr);
         }
         codegenFailure(node, "неизвестный указатель '" + node.varName + "'");
+    }
+    if (node.type == NODE_ARRAY_LEN || node.type == NODE_ARRAY_CAP) {
+        auto found = dynArrays.find(node.varName);
+        if (found == dynArrays.end()) {
+            codegenFailure(node, "неизвестный динамический массив '" + node.varName + "'");
+        }
+        llvm::StructType* descType = dynArrayType();
+        llvm::AllocaInst* desc = found->second;
+        unsigned field = (node.type == NODE_ARRAY_LEN) ? 1 : 2;
+        return builder.CreateLoad(builder.getInt64Ty(),
+            builder.CreateStructGEP(descType, desc, field));
+    }
+    if (node.type == NODE_ARRAY_POP) {
+        auto found = dynArrays.find(node.varName);
+        if (found == dynArrays.end()) {
+            codegenFailure(node, "неизвестный динамический массив '" + node.varName + "'");
+        }
+        llvm::StructType* descType = dynArrayType();
+        llvm::AllocaInst* desc = found->second;
+        llvm::Value* length = builder.CreateLoad(builder.getInt64Ty(),
+            builder.CreateStructGEP(descType, desc, 1));
+        llvm::Value* dataPtr = builder.CreateLoad(builder.getPtrTy(),
+            builder.CreateStructGEP(descType, desc, 0));
+        llvm::Value* isNonEmpty = builder.CreateICmpNE(length, builder.getInt64(0));
+        llvm::Function* function = builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* hasElem = llvm::BasicBlock::Create(context, "pop_has", function);
+        llvm::BasicBlock* done = llvm::BasicBlock::Create(context, "pop_done", function);
+        builder.CreateCondBr(isNonEmpty, hasElem, done);
+        builder.SetInsertPoint(hasElem);
+        llvm::Value* lastIdx = builder.CreateSub(length, builder.getInt64(1));
+        llvm::Type* elementType = dynArrayElementTypes[node.varName];
+        if (!elementType) elementType = builder.getInt32Ty();
+        llvm::Value* gep = builder.CreateGEP(elementType, dataPtr, {lastIdx});
+        llvm::Value* value = builder.CreateLoad(elementType, gep);
+        builder.CreateStore(lastIdx,
+            builder.CreateStructGEP(descType, desc, 1));
+        builder.CreateBr(done);
+        builder.SetInsertPoint(done);
+        llvm::PHINode* phi = builder.CreatePHI(elementType, 2);
+        phi->addIncoming(value, hasElem);
+        phi->addIncoming(llvm::Constant::getNullValue(elementType), done);
+        return phi;
+    }
+    if (node.type == NODE_ARRAY_PUSH || node.type == NODE_ARRAY_RESIZE) {
+        genNode(node);
+        return builder.getTrue();
     }
     if (node.type == NODE_DYN_ARRAY) {
         llvm::FunctionType* mallocType =
