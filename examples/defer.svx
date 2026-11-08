@@ -1,0 +1,13 @@
+fn i32 test_defer() {
+    let x: i32 = 0;
+    defer {
+        x = 42;
+    }
+    return x;
+}
+
+fn i32 main() {
+    let result: i32 = test_defer();
+    print(result);
+    return 0;
+}

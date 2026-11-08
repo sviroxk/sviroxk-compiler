@@ -1,0 +1,7 @@
+fn i32 add(i32 a, i32 b) { return a + b; }
+fn i32 add(i32 a, i32 b, i32 c) { return a + b + c; }
+fn f64 add(f64 a, f64 b) { return a + b; }
+
+print(add(1, 2));
+print(add(1, 2, 3));
+print(add(1.5, 2.5));

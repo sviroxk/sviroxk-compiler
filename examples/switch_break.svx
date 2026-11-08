@@ -1,0 +1,21 @@
+// switch with break (fall-through prevention) and no default.
+fn i32 classify(i32 x) {
+    switch (x) {
+        case 1:
+            print("one");
+            break;
+        case 2:
+            print("two");
+            break;
+        default:
+            print("other");
+    }
+    return 0;
+}
+
+fn i32 main() {
+    classify(1);
+    classify(2);
+    classify(3);
+    return 0;
+}

@@ -1,0 +1,11 @@
+tip Point {
+    rox x = 0;
+    rox y = 0;
+}
+
+svi tip Point lor a = { x = 1; y = 2; };
+svi tip Point lor b = { x = 1; y = 2; };
+svi tip Point lor c = { x = 1; y = 3; };
+slov(a == b);
+slov(a == c);
+slov(a != b);

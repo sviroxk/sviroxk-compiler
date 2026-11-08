@@ -14,6 +14,12 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
         tokens.push_back({type, value, tokLine, tokCol, filename});
     };
 
+    auto lexError = [&](int tokLine, int tokCol, const std::string& code,
+                         const std::string& message) {
+        sc::reportDiagnostic(filename, tokLine, tokCol, "lex", message, code);
+        std::exit(1);
+    };
+
     while (i < (int)code.size()) {
         if (code[i] == '\n') {
             line++;
@@ -62,9 +68,8 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
                 }
             }
             if (!closed) {
-                std::cerr << "Ошибка " << commentLine << ':' << commentColumn
-                          << ": незакрытый блочный комментарий" << std::endl;
-                std::exit(1);
+                lexError(commentLine, commentColumn, "E_LEX_UNCLOSED_COMMENT",
+                         "незакрытый блочный комментарий");
             }
             continue;
         }
@@ -149,6 +154,10 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
             else if (word == "rox64") add(ROX64, word, tokLine, tokCol);
             else if (word == "true")  add(TRUE_T, word, tokLine, tokCol);
             else if (word == "false") add(FALSE_T, word, tokLine, tokCol);
+            else if (word == "defer") add(DEFER_T, word, tokLine, tokCol);
+            else if (word == "switch") add(SWITCH_T, word, tokLine, tokCol);
+            else if (word == "case") add(CASE_T, word, tokLine, tokCol);
+            else if (word == "default") add(DEFAULT_T, word, tokLine, tokCol);
             else add(IDENTIFIER, word, tokLine, tokCol);
             continue;
         }
@@ -172,18 +181,16 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
                     (i < static_cast<int>(code.size()) &&
                      isalnum(static_cast<unsigned char>(code[i])))) malformed = true;
                 if (malformed) {
-                    std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                              << ": некорректный числовой литерал '" << num << "'" << std::endl;
-                    std::exit(1);
+                    lexError(tokLine, tokCol, "E_LEX_MALFORMED_NUMBER",
+                             "некорректный числовой литерал '" + num + "'");
                 }
                 try {
                     const unsigned long long value = std::stoull(num.substr(2), nullptr,
                         prefix == 'x' ? 16 : 2);
                     num = std::to_string(value);
                 } catch (const std::exception&) {
-                    std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                              << ": числовой литерал вне диапазона u64" << std::endl;
-                    std::exit(1);
+                    lexError(tokLine, tokCol, "E_LEX_NUMBER_OUT_OF_RANGE",
+                             "числовой литерал вне диапазона u64");
                 }
                 add(NUMBER, num, tokLine, tokCol);
                 continue;
@@ -243,9 +250,8 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
                 }
             }
             if (malformed) {
-                std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                          << ": некорректный числовой литерал '" << num << "'" << std::endl;
-                std::exit(1);
+                lexError(tokLine, tokCol, "E_LEX_MALFORMED_NUMBER",
+                         "некорректный числовой литерал '" + num + "'");
             }
             add(NUMBER, num, tokLine, tokCol);
             continue;
@@ -255,17 +261,15 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
             ++i;
             ++column;
             if (i >= static_cast<int>(code.size()) || code[i] == '\n' || code[i] == '\'') {
-                std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                          << ": ожидался один символ между одинарными кавычками" << std::endl;
-                std::exit(1);
+                lexError(tokLine, tokCol, "E_LEX_CHAR_EXPECTED",
+                         "ожидался один символ между одинарными кавычками");
             }
             unsigned char charVal;
             if (code[i] == '\\') {
                 ++i; ++column;
                 if (i >= static_cast<int>(code.size()) || code[i] == '\n') {
-                    std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                              << ": незавершённая escape-последовательность в символьном литерале" << std::endl;
-                    std::exit(1);
+                    lexError(tokLine, tokCol, "E_LEX_CHAR_UNESCAPED",
+                             "незавершённая escape-последовательность в символьном литерале");
                 }
                 switch (code[i]) {
                     case '0': charVal = 0; break;
@@ -275,9 +279,8 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
                     case 't': charVal = '\t'; break;
                     case '\\': charVal = '\\'; break;
                     default:
-                        std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                                  << ": неизвестная escape-последовательность в символьном литерале" << std::endl;
-                        std::exit(1);
+                        lexError(tokLine, tokCol, "E_LEX_CHAR_UNKNOWN_ESCAPE",
+                                 "неизвестная escape-последовательность в символьном литерале");
                 }
             } else {
                 charVal = static_cast<unsigned char>(code[i]);
@@ -285,9 +288,8 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
             ++i;
             ++column;
             if (i >= static_cast<int>(code.size()) || code[i] != '\'') {
-                std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                          << ": символьный литерал должен содержать один символ и закрывающую кавычку" << std::endl;
-                std::exit(1);
+                lexError(tokLine, tokCol, "E_LEX_CHAR_MISSING_QUOTE",
+                         "символьный литерал должен содержать один символ и закрывающую кавычку");
             }
             ++i;
             ++column;
@@ -320,9 +322,8 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
                         case '"': str += '"'; break;
                         case '\\': str += '\\'; break;
                         default:
-                            std::cerr << "Ошибка " << line << ':' << column
-                                      << ": неизвестная escape-последовательность" << std::endl;
-                            std::exit(1);
+                            lexError(line, column, "E_LEX_STRING_UNKNOWN_ESCAPE",
+                                     "неизвестная escape-последовательность");
                     }
                     ++i;
                     ++column;
@@ -332,9 +333,8 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
                 ++column;
             }
             if (!closed) {
-                std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                          << ": строковый литерал не закрыт кавычкой" << std::endl;
-                std::exit(1);
+                lexError(tokLine, tokCol, "E_LEX_STRING_UNCLOSED",
+                         "строковый литерал не закрыт кавычкой");
             }
             add(STRING, str, tokLine, tokCol);
             continue;
@@ -436,9 +436,8 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
             case ':': add(COLON, ":", tokLine, tokCol); break;
             case '?': add(QUESTION, "?", tokLine, tokCol); break;
             default:
-                std::cerr << "Ошибка " << tokLine << ":" << tokCol
-                          << " неизвестный символ: " << c << std::endl;
-                exit(1);
+                lexError(tokLine, tokCol, "E_LEX_UNKNOWN_CHAR",
+                         "неизвестный символ: " + std::string(1, c));
         }
         i++;
         column++;

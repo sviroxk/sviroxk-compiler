@@ -1,0 +1,8 @@
+let s: str = "hello";
+print(s.len);
+print(s[0]);
+print(s[4]);
+let t: str = "world";
+print(s + t);
+let a: str = "foo";
+print(a + "bar");

@@ -1,0 +1,40 @@
+// Global variable test
+// Test reading and writing global variables
+
+let global_counter: i32 = 0;
+let global_flag: bool = true;
+let global_array: i32[] = [1, 2, 3];
+const global_const: i32 = 42;
+
+fn int main() {
+    // Test reading global
+    print("global_counter: ");
+    print(global_counter);
+
+    // Test writing global
+    global_counter = 100;
+    print("global_counter after write: ");
+    print(global_counter);
+
+    // Test global flag
+    print("global_flag: ");
+    print(global_flag);
+
+    global_flag = false;
+    print("global_flag after write: ");
+    print(global_flag);
+
+    // Test global array read
+    print("global_array[0]: ");
+    print(global_array[0]);
+
+    global_array[0] = 999;
+    print("global_array[0] after write: ");
+    print(global_array[0]);
+
+    // Test const global
+    print("const_global: ");
+    print(global_const);
+
+    return 0;
+}

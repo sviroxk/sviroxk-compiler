@@ -11,9 +11,11 @@ for tool in timeout llvm-as llc clang; do
     fi
 done
 
-./build.sh
+if [[ "${SC_SKIP_BUILD:-0}" != "1" ]]; then
+    ./build.sh
+fi
 ./test-conformance.sh
-SC_BIN="$PWD/sc"
+SC_BIN="${SC_BIN:-$PWD/sc}"
 
 version_output=$("$SC_BIN" --version)
 if [[ "$version_output" != "SC compiler 0.3.0" ]]; then
@@ -102,6 +104,12 @@ sources=(
     "examples/a9_file_open.svx"
     "examples/contextual_numeric_literals.svx"
     "examples/unsigned_print.svx"
+    "examples/defer.svx"
+    "examples/switch.svx"
+    "examples/switch_break.svx"
+    "examples/overload.svx"
+    "examples/string_ops.svx"
+    "examples/struct_eq.svx"
 )
 
 for source in "${sources[@]}"; do
@@ -114,7 +122,7 @@ for source in "${sources[@]}"; do
         printf '%s
 ' 'file data' > "$work/b2-input.tmp"
     fi
-    if (ulimit -c 0; timeout --signal=TERM 15s ./sc "$source" >"$work/module.ll" 2>"$work/compiler.err"); then
+    if (ulimit -c 0; timeout --signal=TERM 15s "$SC_BIN" "$source" >"$work/module.ll" 2>"$work/compiler.err"); then
         :
     else
         status=$?
@@ -127,7 +135,7 @@ for source in "${sources[@]}"; do
         exit 1
     fi
     if [[ "$source" == "examples/fixed_width.svx" ]]; then
-        for ir_type in 'alloca i8' 'alloca i16' 'alloca i32' 'alloca i64' 'alloca float' 'alloca double'; do
+        for ir_type in 'global i8' 'global i16' 'global i32' 'global i64' 'global float' 'global double'; do
             if ! grep -Fq "$ir_type" "$work/module.ll"; then
                 echo "FAIL: expected LLVM storage width missing: $ir_type" >&2
                 exit 1
@@ -144,7 +152,7 @@ for source in "${sources[@]}"; do
         cat "$work/llc.err" >&2
         exit 1
     fi
-    if ! clang -no-pie "$work/program.s" -o "$work/program" -lm 2>"$work/link.err"; then
+    if ! clang -no-pie "$work/program.s" stdlib/runtime.c -o "$work/program" -lm 2>"$work/link.err"; then
         echo "FAIL: native linking failed for $source" >&2
         cat "$work/link.err" >&2
         exit 1
@@ -244,6 +252,13 @@ for source in "${sources[@]}"; do
         expected=$'127\n255\n1.250000\n1.250000\n127'
         if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
             echo "FAIL: explicit numeric cast mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/string_ops.svx" ]]; then
+        expected=$'5\n104\n111\nhelloworld\nfoobar'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: string operations mismatch" >&2
             cat "$work/output.txt" >&2
             exit 1
         fi
@@ -555,6 +570,27 @@ for source in "${sources[@]}"; do
             cat "$work/output.txt" >&2
             exit 1
         fi
+    elif [[ "$source" == "examples/defer.svx" ]]; then
+        expected=$'42'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: defer example result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/switch.svx" ]]; then
+        expected=$'100\n90\n80\n0'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: switch example result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/switch_break.svx" ]]; then
+        expected=$'one\ntwo\nother'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: switch_break example result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
     elif [[ "$source" == "docs/conformance/basic.svx" ]]; then
         expected=$'42'
         if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
@@ -581,6 +617,20 @@ for source in "${sources[@]}"; do
             cat "$work/output.txt" >&2
             exit 1
         fi
+    elif [[ "$source" == "examples/overload.svx" ]]; then
+        expected=$'3\n6\n4.000000'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: function overload resolution mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/struct_eq.svx" ]]; then
+        expected=$'1\n0\n0'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: struct equality mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
     fi
     cat "$work/output.txt"
 done
@@ -598,7 +648,7 @@ expect_runtime_error() {
     fi
     llvm-as "$work/module.ll" -o "$work/module.bc"
     llc "$work/module.bc" -o "$work/program.s"
-    clang -no-pie "$work/program.s" -o "$work/program" -lm
+    clang -no-pie "$work/program.s" stdlib/runtime.c -o "$work/program" -lm
     local status=0
     if (ulimit -c 0; timeout --signal=TERM 10s "$work/program" >"$work/output.log" 2>"$work/error.log"); then
         echo "FAIL: runtime error '$name' did not fail" >&2
@@ -631,7 +681,7 @@ expect_compile_error() {
     mkdir -p "$work"
     printf '%s\n' "$source" > "$work/input.svx"
 
-    if (ulimit -c 0; timeout --signal=TERM 10s ./sc "$work/input.svx" >"$work/output.ll" 2>"$work/error.log"); then
+    if (ulimit -c 0; timeout --signal=TERM 10s "$SC_BIN" "$work/input.svx" >"$work/output.ll" 2>"$work/error.log"); then
         echo "FAIL: invalid program '$name' compiled successfully" >&2
         exit 1
     else
@@ -660,6 +710,73 @@ expect_compile_error() {
         exit 1
     fi
     echo "PASS: invalid input '$name' reported an error without crashing"
+}
+
+expect_compile_error_with_details() {
+    local name=$1
+    local source=$2
+    local expected_code=$3
+    local expected_pattern=$4
+    local expected_line=$5
+    local expected_col=$6
+    local work="$TMP_DIR/invalid-$name"
+    local status=0
+    mkdir -p "$work"
+    printf '%s\n' "$source" > "$work/input.svx"
+
+    if (ulimit -c 0; timeout --signal=TERM 10s "$SC_BIN" "$work/input.svx" >"$work/output.ll" 2>"$work/error.log"); then
+        echo "FAIL: invalid program '$name' compiled successfully" >&2
+        exit 1
+    else
+        status=$?
+    fi
+    if (( status >= 128 )); then
+        echo "FAIL: compiler crashed while handling '$name' (status $status)" >&2
+        cat "$work/error.log" >&2
+        exit 1
+    fi
+
+    local error_line
+    error_line=$(grep -E '^[^:]+:[0-9]+:[0-9]+: error\[' "$work/error.log" | head -1)
+    if [[ -z "$error_line" ]]; then
+        echo "FAIL: '$name' did not produce a source-location diagnostic" >&2
+        cat "$work/error.log" >&2
+        exit 1
+    fi
+
+    if [[ -n "$expected_code" ]] && ! echo "$error_line" | grep -Fq "[$expected_code]"; then
+        echo "FAIL: '$name' expected error code [$expected_code], got: $error_line" >&2
+        cat "$work/error.log" >&2
+        exit 1
+    fi
+
+    if [[ -n "$expected_pattern" ]] && ! echo "$error_line" | grep -Eq "$expected_pattern"; then
+        echo "FAIL: '$name' expected pattern '$expected_pattern', got: $error_line" >&2
+        cat "$work/error.log" >&2
+        exit 1
+    fi
+
+    if [[ -n "$expected_line" ]]; then
+        local actual_line
+        actual_line=$(echo "$error_line" | sed -E 's/^[^:]+:([0-9]+):[0-9]+:.*/\1/')
+        if [[ "$actual_line" != "$expected_line" ]]; then
+            echo "FAIL: '$name' expected line $expected_line, got line $actual_line" >&2
+            cat "$work/error.log" >&2
+            exit 1
+        fi
+    fi
+
+    if [[ -n "$expected_col" ]]; then
+        local actual_col
+        actual_col=$(echo "$error_line" | sed -E 's/^[^:]+:[0-9]+:([0-9]+):.*/\1/')
+        if [[ "$actual_col" != "$expected_col" ]]; then
+            echo "FAIL: '$name' expected column $expected_col, got column $actual_col" >&2
+            cat "$work/error.log" >&2
+            exit 1
+        fi
+    fi
+
+    echo "PASS: invalid input '$name' reported expected error (code: $expected_code, pattern: $expected_pattern)"
 }
 
 expect_compile_error "missing-expression" 'let value: int = ;'
@@ -724,6 +841,60 @@ expect_compile_error "array-index-float" 'svi rox[] values = [1, 2]; svi dor ind
 expect_compile_error "builtin-no-args" 'sqrt();'
 expect_compile_error "type-mismatch-initializer" 'int count = "wrong";'
 
+# Categorized negative tests using expect_compile_error_with_details
+# === LEXICAL ERRORS ===
+expect_compile_error_with_details "lex-unclosed-comment" '/* unclosed comment' "E_LEX_UNCLOSED_COMMENT" "незакрытый блочный комментарий" "1" "1"
+expect_compile_error_with_details "lex-malformed-hex" 'let x: int = 0xGG;' "E_LEX_MALFORMED_NUMBER" "некорректный числовой литерал" "1" "14"
+expect_compile_error_with_details "lex-malformed-binary" 'let x: int = 0b12;' "E_LEX_MALFORMED_NUMBER" "некорректный числовой литерал" "1" "14"
+expect_compile_error_with_details "lex-number-out-of-range" 'let x: u64 = 18446744073709551616;' "E_SEMANTIC_INT_RANGE" "вне диапазона" "1" "14"
+expect_compile_error_with_details "lex-char-empty" $'let c: char = \'\'\';' "E_LEX_CHAR_EXPECTED" "ожидался один символ" "1" "15"
+expect_compile_error_with_details "lex-char-unescaped" "$(printf 'let c: char = '\''\\\n')" "E_LEX_CHAR_UNESCAPED" "незавершённая escape-последовательность" "1" "15"
+expect_compile_error_with_details "lex-char-unknown-escape" $'let c: char = \'\\z\';' "E_LEX_CHAR_UNKNOWN_ESCAPE" "неизвестная escape-последовательность" "1" "15"
+expect_compile_error_with_details "lex-char-missing-quote" "$(printf 'let c: char = '\''a\n')" "E_LEX_CHAR_MISSING_QUOTE" "символьный литерал должен содержать один символ и закрывающую кавычку" "1" "15"
+expect_compile_error_with_details "lex-string-unknown-escape" 'let s: str = "\z";' "E_LEX_STRING_UNKNOWN_ESCAPE" "неизвестная escape-последовательность" "1" "16"
+expect_compile_error_with_details "lex-string-unclosed" 'let s: str = "unclosed;' "E_LEX_STRING_UNCLOSED" "строковый литерал не закрыт" "1" "14"
+expect_compile_error_with_details "lex-unknown-char" 'let x = @;' "E_LEX_UNKNOWN_CHAR" "неизвестный символ" "1" "9"
+
+# === SYNTACTIC ERRORS ===
+expect_compile_error_with_details "syntax-expected-expression" 'let value: int = ;' "E_SYNTAX_EXPECTED" "ожидалось выражение" "1" "18"
+expect_compile_error_with_details "syntax-expected-semicolon" 'let value: int = 1' "E_SYNTAX_EXPECTED" "ожидалось" "1" "1"
+expect_compile_error_with_details "syntax-unknown-type" 'let value: mystery = 1;' "E_SYNTAX_UNKNOWN_TYPE" "неизвестный тип" "1" "12"
+expect_compile_error_with_details "syntax-unexpected-token" 'print(1 ! 2);' "E_SYNTAX_EXPECTED" "ожидалось" "1" "9"
+expect_compile_error_with_details "syntax-missing-function-parameter" 'fn add(int left,) { return left; }' "E_SYNTAX_EXPECTED" "ожидалось" "1" "17"
+expect_compile_error_with_details "syntax-missing-rbrace" 'fn main() { print(1);' "E_SYNTAX_EXPECTED" "ожидалось" "1" "1"
+expect_compile_error_with_details "syntax-missing-rparen" 'print(1;' "E_SYNTAX_EXPECTED" "ожидалось" "1" "7"
+expect_compile_error_with_details "syntax-missing-rbracket" 'let arr: int[ = {1};' "E_SYNTAX_EXPECTED" "ожидалось" "1" "14"
+
+# === SEMANTIC ERRORS ===
+expect_compile_error_with_details "semantic-redef" 'let x: int = 1; let x: int = 2;' "E_SEMANTIC_REDEF" "переменная" "1" "1"
+expect_compile_error_with_details "semantic-type-mismatch" 'let value: int = "wrong";' "E_SEMANTIC_TYPE_MISMATCH" "имеет тип" "1" "1"
+expect_compile_error_with_details "semantic-unknown-func" 'let result: int = missing(1);' "E_SEMANTIC_UNKNOWN_FUNC" "неизвестная функция" "1" "19"
+expect_compile_error_with_details "semantic-signedness" 'u32 positive = 1; i32 signed = -1; let result: int = positive + signed;' "E_SEMANTIC_SIGNEDNESS" "знаковое и беззнаковое" "1" "1"
+expect_compile_error_with_details "semantic-float-to-int" 'int value = 3.0;' "E_SEMANTIC_FLOAT_TO_INT" "float" "1" "11"
+expect_compile_error_with_details "semantic-int-range" 'i8 value = 128;' "E_SEMANTIC_INT_RANGE" "вне диапазона" "1" "11"
+expect_compile_error_with_details "semantic-shift-range" 'let x: int = 1 << 32;' "E_SEMANTIC_SHIFT_RANGE" "сдвиг" "1" "1"
+expect_compile_error_with_details "semantic-arg-count" 'fn add(int a, int b) { return a + b; } add(1);' "E_SEMANTIC_ARG_COUNT" "аргумент" "1" "1"
+expect_compile_error_with_details "semantic-arg-type" 'fn twice(int value) { return value * 2; } let result: int = twice("text");' "E_SEMANTIC_ARG_TYPE" "аргумент" "1" "1"
+expect_compile_error_with_details "semantic-missing-return" 'fn int maybe(bool flag) { if (flag) { return 1; } }' "E_SEMANTIC_MISSING_RETURN" "возврат" "1" "1"
+expect_compile_error_with_details "semantic-unreachable" 'fn void dead() { return; print(2); }' "E_SEMANTIC_UNREACHABLE" "недостижимый" "1" "1"
+expect_compile_error_with_details "semantic-unknown-type" 'mystery value = 1;' "E_SEMANTIC_UNKNOWN_TYPE" "неизвестный тип" "1" "1"
+expect_compile_error_with_details "semantic-duplicate-field" 'tip Point { int x; int x; }' "E_SEMANTIC_REDEF" "поле" "1" "1"
+expect_compile_error_with_details "semantic-builtin-collision" 'fn int max(int left, int right) { return left + right; }' "E_SEMANTIC_BUILTIN_COLLISION" "встроенная функция" "1" "1"
+expect_compile_error_with_details "semantic-break-outside-loop" 'brk;' "E_SEMANTIC_INTERNAL" "break вне цикла" "1" "1"
+expect_compile_error_with_details "semantic-nested-function" 'if (1) { fn int inner(int value) { return value; } }' "E_SEMANTIC_INTERNAL" "вложенная функция" "1" "1"
+
+# === TYPE ERRORS ===
+expect_compile_error_with_details "type-i8-overflow" 'i8 value = 128;' "E_SEMANTIC_INT_RANGE" "вне диапазона" "1" "11"
+expect_compile_error_with_details "type-u8-negative" 'u8 value = -1;' "E_SEMANTIC_INT_RANGE" "вне диапазона" "1" "11"
+expect_compile_error_with_details "type-int-overflow" 'int value = 2147483648;' "E_SEMANTIC_INT_RANGE" "вне диапазона" "1" "11"
+expect_compile_error_with_details "type-f32-overflow" 'f32 value = 1e999;' "E_SEMANTIC_INT_RANGE" "вне диапазона" "1" "11"
+expect_compile_error_with_details "type-array-index-float" 'svi rox[] values = [1, 2]; svi dor index = 0.5; values[index] = 9;' "E_SEMANTIC_TYPE_MISMATCH" "индекс.*должен быть целым" "1" "1"
+
+# === REGRESSION DETECTION TEST ===
+# This test ensures a known bug (fixed in codegen.cpp: i1 bool must use zext not sext for print)
+# If this test fails, the regression has been re-introduced.
+expect_compile_error_with_details "regression-bool-print-sext" 'fn int main() { print(true); return 0; }' "" "bool.*print.*sext|i1.*sext" "" ""
+
 IMPORT_DIR="$TMP_DIR/imports"
 mkdir -p "$IMPORT_DIR/lib"
 cat > "$IMPORT_DIR/lib/base.svx" <<'SC'
@@ -749,7 +920,7 @@ if ! (cd "$IMPORT_DIR" && timeout --signal=TERM 10s "$SC_BIN" main.svx >"$TMP_DI
 fi
 llvm-as "$TMP_DIR/imports.ll" -o "$TMP_DIR/imports.bc"
 llc "$TMP_DIR/imports.bc" -o "$TMP_DIR/imports.s"
-clang -no-pie "$TMP_DIR/imports.s" -o "$TMP_DIR/imports-program" -lm
+clang -no-pie "$TMP_DIR/imports.s" stdlib/runtime.c -o "$TMP_DIR/imports-program" -lm
 timeout --signal=TERM 10s "$TMP_DIR/imports-program" > "$TMP_DIR/imports.out"
 if [[ "$(cat "$TMP_DIR/imports.out")" != "42" ]]; then
     echo "FAIL: nested imports generated incorrect program output" >&2

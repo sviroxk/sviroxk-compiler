@@ -1,12 +1,19 @@
 #include "codegen.h"
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/ADT/ArrayRef.h>
+#include <llvm/IR/PassManager.h>
+#include <llvm/Passes/PassBuilder.h>
+#include <llvm/TargetParser/Host.h>
+#include <llvm/TargetParser/Triple.h>
+#include <llvm/MC/TargetRegistry.h>
 #include <iostream>
 #include <cstdint>
 #include <climits>
 #include <cstdlib>
 #include <cmath>
 #include <stdexcept>
+#include <vector>
 
 namespace {
 
@@ -23,7 +30,7 @@ bool blockHasTerminator(const llvm::BasicBlock* block) {
 
 CodeGen::ScopeSnapshot CodeGen::saveScope() const {
     return {vars, unsignedVars, charVars, constVars, integerWidths, arrays, arrayLengths,
-            arrayElementTypes, structTypesByVariable};
+            arrayElementTypes, structTypesByVariable, deferred};
 }
 
 void CodeGen::restoreScope(const ScopeSnapshot& scope) {
@@ -36,12 +43,159 @@ void CodeGen::restoreScope(const ScopeSnapshot& scope) {
     arrayLengths = scope.arrayLengths;
     arrayElementTypes = scope.arrayElementTypes;
     structTypesByVariable = scope.structTypesByVariable;
+    deferred = scope.deferred;
+}
+
+// Emit all deferred statements in reverse order (LIFO - last deferred executes first)
+void CodeGen::emitDeferred() {
+    for (auto it = deferred.rbegin(); it != deferred.rend(); ++it) {
+        genNode(*it);
+    }
+}
+
+void CodeGen::emitAggregateInto(llvm::AllocaInst* dst, const Node& src) {
+    // Plain identifier referencing another aggregate variable: a = b.
+    if (src.type == NODE_IDENTIFIER) {
+        if (arrays.count(src.value)) {
+            llvm::AllocaInst* srcArr = arrays[src.value];
+            llvm::Type* dstType = dst->getAllocatedType();
+            llvm::Type* srcType = srcArr->getAllocatedType();
+            if (dstType != srcType || dstType->getArrayNumElements() !=
+                    srcType->getArrayNumElements())
+                codegenFailure(src, "несовместимый тип массива при присваивании '" + src.value + "'");
+            builder.CreateMemCpy(dst, llvm::MaybeAlign(), srcArr, llvm::MaybeAlign(),
+                                 dstType->getPrimitiveSizeInBits().getFixedValue() / 8);
+            return;
+        }
+        if (structTypesByVariable.count(src.value)) {
+            llvm::AllocaInst* srcObj = vars[src.value];
+            if (!srcObj) codegenFailure(src, "неизвестная переменная '" + src.value + "'");
+            llvm::Type* dstType = dst->getAllocatedType();
+            llvm::Type* srcType = srcObj->getAllocatedType();
+            if (dstType != srcType)
+                codegenFailure(src, "несовместимый тип структуры при присваивании '" + src.value + "'");
+            builder.CreateMemCpy(dst, llvm::MaybeAlign(), srcObj, llvm::MaybeAlign(),
+                                 dstType->getPrimitiveSizeInBits().getFixedValue() / 8);
+            return;
+        }
+        codegenFailure(src, "невозможно присвоить aggregate значение '" + src.value + "'");
+    }
+    // Aggregate literal: array literal [a, b, c] or struct literal { field = v; }.
+    if (src.type == NODE_ARRAY_DECL) {
+        llvm::Type* dstType = dst->getAllocatedType();
+        if (!dstType->isArrayTy())
+            codegenFailure(src, "присваивание массива не по типу");
+        llvm::ArrayType* at = llvm::cast<llvm::ArrayType>(dstType);
+        unsigned n = static_cast<unsigned>(src.args.size());
+        if (n != at->getNumElements())
+            codegenFailure(src, "несовпадение размера массива при присваивании");
+        for (unsigned i = 0; i < n; i++) {
+            llvm::Value* gep = builder.CreateInBoundsGEP(
+                at, dst, {builder.getInt32(0), builder.getInt32(i)});
+            llvm::Value* val = genExpr(src.args[i]);
+            val = castTo(val, at->getElementType(), isUnsignedExpr(src.args[i]));
+            builder.CreateStore(val, gep);
+        }
+        return;
+    }
+    if (src.type == NODE_STRUCT_INSTANCE) {
+        if (!structDefs.count(src.varType))
+            codegenFailure(src, "неизвестная структура '" + src.varType + "'");
+        const auto& fields = structDefs[src.varType];
+        llvm::StructType* aggregateType = llvmStructTypes[src.varType];
+        if (dst->getAllocatedType() != aggregateType) {
+            codegenFailure(src, "неизвестный тип структуры '" + src.varType + "'");
+        }
+        std::map<std::string, const Node*> named;
+        std::vector<const Node*> positional;
+        for (const Node& c : src.children) {
+            if (!c.varName.empty()) named[c.varName] = &c;
+            else if (c.left) positional.push_back(&c);
+        }
+        size_t positionalIndex = 0;
+        for (size_t index = 0; index < fields.size(); ++index) {
+            const Node* initializer = nullptr;
+            if (named.count(fields[index].name)) {
+                initializer = named.at(fields[index].name)->left;
+            } else if (positionalIndex < positional.size()) {
+                initializer = positional[positionalIndex++]->left;
+            } else {
+                initializer = &fields[index].defaultVal;
+            }
+            llvm::Value* value = genExpr(*initializer);
+            llvm::Type* fieldType = aggregateType->getStructElementType(static_cast<unsigned>(index));
+            value = castTo(value, fieldType, isUnsignedExpr(*initializer));
+            llvm::Value* address = builder.CreateStructGEP(aggregateType, dst,
+                                                            static_cast<unsigned>(index));
+            builder.CreateStore(value, address);
+        }
+        return;
+    }
+    codegenFailure(src, "невозможно присвоить aggregate значение '" +
+                   (src.value.empty() ? src.varName : src.value) + "'");
+}
+
+// Returns true if the expression is a compile-time constant (literals,
+// constant arrays, constant struct instances). Used to decide whether a
+// global initializer can be emitted directly or must be deferred to main.
+bool CodeGen::isConstantInitializer(const Node& node) {
+    switch (node.type) {
+        case NODE_NUMBER:
+        case NODE_CHAR:
+        case NODE_STRING:
+            return true;
+        case NODE_ARRAY_DECL:
+            for (const Node& arg : node.args)
+                if (!isConstantInitializer(arg)) return false;
+            return true;
+        case NODE_STRUCT_INSTANCE:
+            for (const Node& c : node.children) {
+                if (c.left && !isConstantInitializer(*c.left)) return false;
+            }
+            return true;
+        default:
+            return false;
+    }
 }
 
 llvm::Value* CodeGen::getStringPtr(const std::string& str) {
+    // When no function is active (global initializer), CreateGlobalString
+    // crashes because it needs an insertion point. Create the global directly
+    // and return a constant GEP/bitcast to i8*.
+    if (!builder.GetInsertBlock()) {
+        static int strCounter = 0;
+        std::vector<char> chars(str.begin(), str.end());
+        chars.push_back('\0');
+        llvm::Constant* strConst = llvm::ConstantDataArray::get(
+            context, llvm::ArrayRef<char>(chars.data(), chars.size()));
+        llvm::ArrayType* arrTy = llvm::ArrayType::get(
+            builder.getInt8Ty(), str.size() + 1);
+        llvm::GlobalVariable* gv = new llvm::GlobalVariable(
+            module, arrTy, true, llvm::GlobalVariable::PrivateLinkage,
+            strConst, ".str." + std::to_string(strCounter++));
+        gv->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+        return llvm::ConstantExpr::getBitCast(gv, builder.getPtrTy());
+    }
     llvm::GlobalVariable* gv = builder.CreateGlobalString(str);
     return builder.CreateInBoundsGEP(gv->getValueType(), gv,
         {builder.getInt32(0), builder.getInt32(0)});
+}
+
+// Get or create the runtime panic function.
+llvm::Function* CodeGen::getPanicFunction() {
+    llvm::Function* panicF = module.getFunction("__sc_panic");
+    if (panicF) return panicF;
+    llvm::FunctionType* panicType = llvm::FunctionType::get(
+        builder.getVoidTy(), {builder.getPtrTy()}, false);
+    panicF = llvm::Function::Create(panicType,
+        llvm::Function::ExternalLinkage, "__sc_panic", module);
+    return panicF;
+}
+
+void CodeGen::emitPanic(const std::string& message) {
+    llvm::Function* panicF = getPanicFunction();
+    builder.CreateCall(panicF, {getStringPtr(message)});
+    builder.CreateUnreachable();
 }
 
 llvm::Type* CodeGen::svType(const std::string& name) {
@@ -136,14 +290,7 @@ void CodeGen::emitArrayBoundsCheck(llvm::Value* index, unsigned length,
     builder.SetInsertPoint(invalid);
     const std::string message = "SC runtime error: array index out of bounds at line " +
         std::to_string(location.line) + ", column " + std::to_string(location.column);
-    builder.CreateCall(putsFunc, {getStringPtr(message)});
-    llvm::FunctionType* exitType = llvm::FunctionType::get(
-        builder.getVoidTy(), {builder.getInt32Ty()}, false);
-    llvm::Function* exitF = module.getFunction("exit");
-    if (!exitF) exitF = llvm::Function::Create(exitType,
-        llvm::Function::ExternalLinkage, "exit", module);
-    builder.CreateCall(exitF, {builder.getInt32(1)});
-    builder.CreateUnreachable();
+    emitPanic(message);
     builder.SetInsertPoint(valid);
 }
 
@@ -217,9 +364,15 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
                 return builder.CreateLoad(builder.getPtrTy(), alloca);
             return builder.CreateLoad(ty, alloca);
         }
+        // Check globals
+        if (globals.count(node.value)) {
+            llvm::GlobalVariable* gv = globals[node.value];
+            return builder.CreateLoad(gv->getValueType(), gv);
+        }
         codegenFailure(node, "неизвестная переменная '" + node.value + "'");
     }
     if (node.type == NODE_ARRAY_ACCESS) {
+        // Dynamic array / pointer access (local variable)
         if (vars.count(node.varName) &&
             vars[node.varName]->getAllocatedType()->isPointerTy()) {
             llvm::Value* ptr = builder.CreateLoad(
@@ -229,8 +382,24 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
                 builder.getInt32Ty(), ptr, {idx});
             return builder.CreateLoad(builder.getInt32Ty(), gep);
         }
-        if (arrays.count(node.varName)) {
-            llvm::AllocaInst* arr = arrays[node.varName];
+        // Dynamic array / pointer access (global variable)
+        if (globals.count(node.varName) &&
+            globals[node.varName]->getValueType()->isPointerTy()) {
+            llvm::GlobalVariable* gv = globals[node.varName];
+            llvm::Value* ptr = builder.CreateLoad(gv->getValueType(), gv);
+            llvm::Value* idx = genExpr(*node.left);
+            llvm::Value* gep = builder.CreateGEP(
+                builder.getInt32Ty(), ptr, {idx});
+            return builder.CreateLoad(builder.getInt32Ty(), gep);
+        }
+        // Check both local arrays and global arrays (fixed-size)
+        if (arrays.count(node.varName) || globals.count(node.varName)) {
+            llvm::Value* arr = nullptr;
+            if (globals.count(node.varName)) {
+                arr = globals[node.varName];
+            } else {
+                arr = arrays[node.varName];
+            }
             unsigned n = arrayLengths[node.varName];
             llvm::Type* elementType = arrayElementTypes[node.varName];
             if (!elementType) elementType = builder.getInt32Ty();
@@ -243,9 +412,43 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         }
         codegenFailure(node, "неизвестный массив '" + node.varName + "'");
     }
+    if (node.type == NODE_STR_LEN) {
+        llvm::FunctionType* strlenType =
+            llvm::FunctionType::get(builder.getInt32Ty(),
+                {builder.getPtrTy()}, false);
+        llvm::Function* strlenF = module.getFunction("strlen");
+        if (!strlenF) strlenF = llvm::Function::Create(strlenType,
+            llvm::Function::ExternalLinkage, "strlen", module);
+        llvm::Value* str = nullptr;
+        if (vars.count(node.varName)) {
+            str = builder.CreateLoad(builder.getPtrTy(), vars[node.varName]);
+        } else if (globals.count(node.varName)) {
+            llvm::GlobalVariable* gv = globals[node.varName];
+            str = builder.CreateLoad(gv->getValueType(), gv);
+        }
+        if (!str) codegenFailure(node, "неизвестная строка '" + node.varName + "'");
+        else return builder.CreateCall(strlenF, {str});
+    }
+    if (node.type == NODE_STR_INDEX) {
+        llvm::Value* str = nullptr;
+        if (vars.count(node.varName)) {
+            str = builder.CreateLoad(builder.getPtrTy(), vars[node.varName]);
+        } else if (globals.count(node.varName)) {
+            llvm::GlobalVariable* gv = globals[node.varName];
+            str = builder.CreateLoad(gv->getValueType(), gv);
+        }
+        if (!str) codegenFailure(node, "неизвестная строка '" + node.varName + "'");
+        llvm::Value* idx = genExpr(*node.left);
+        if (idx->getType()->getIntegerBitWidth() != 32)
+            idx = builder.CreateSExt(idx, builder.getInt32Ty());
+        llvm::Value* gep = builder.CreateGEP(builder.getInt8Ty(), str, {idx});
+        return builder.CreateLoad(builder.getInt8Ty(), gep);
+    }
     if (node.type == NODE_ADDR) {
         llvm::AllocaInst* alloca = vars[node.varName];
         if (alloca) return alloca;
+        // Check globals - return the global variable pointer
+        if (globals.count(node.varName)) return globals[node.varName];
         codegenFailure(node, "невозможно получить адрес неизвестной переменной '" + node.varName + "'");
     }
     if (node.type == NODE_DEREF) {
@@ -253,6 +456,11 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         if (alloca) {
             llvm::Value* ptr = builder.CreateLoad(builder.getPtrTy(), alloca);
             return builder.CreateLoad(builder.getInt32Ty(), ptr);
+        }
+        // Check globals - global pointer is already a ptr
+        if (globals.count(node.varName)) {
+            llvm::GlobalVariable* gv = globals[node.varName];
+            return builder.CreateLoad(gv->getValueType(), gv);
         }
         codegenFailure(node, "неизвестный указатель '" + node.varName + "'");
     }
@@ -291,9 +499,18 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         codegenFailure(node, "невозможно преобразовать значение к типу '" + node.varType + "'");
     }
     if (node.type == NODE_FILE_READ) {
-        llvm::AllocaInst* fileAlloca = vars[node.varName];
-        if (!fileAlloca) return getStringPtr("");
-        llvm::Value* fp = builder.CreateLoad(builder.getPtrTy(), fileAlloca);
+        llvm::Value* fp = nullptr;
+        // Check local variable first
+        if (vars.count(node.varName)) {
+            llvm::AllocaInst* fileAlloca = vars[node.varName];
+            fp = builder.CreateLoad(builder.getPtrTy(), fileAlloca);
+        }
+        // Check global variable
+        else if (globals.count(node.varName)) {
+            llvm::GlobalVariable* gv = globals[node.varName];
+            fp = builder.CreateLoad(gv->getValueType(), gv);
+        }
+        if (!fp) return getStringPtr("");
         llvm::FunctionType* fgetsType = llvm::FunctionType::get(
             builder.getPtrTy(),
             {builder.getPtrTy(), builder.getInt32Ty(), builder.getPtrTy()}, false);
@@ -425,6 +642,15 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             return result;
         }
         llvm::Value* R = genExpr(*node.right);
+        if (node.op == "+" && L->getType()->isPointerTy() && R->getType()->isPointerTy()) {
+            // String concatenation: both operands are str pointers.
+            llvm::FunctionType* concatType = llvm::FunctionType::get(
+                builder.getPtrTy(), {builder.getPtrTy(), builder.getPtrTy()}, false);
+            llvm::Function* concatF = module.getFunction("__sc_concat");
+            if (!concatF) concatF = llvm::Function::Create(concatType,
+                llvm::Function::ExternalLinkage, "__sc_concat", module);
+            return builder.CreateCall(concatF, {L, R});
+        }
         if (node.op == "**") {
             const bool floatingOperands = L->getType()->isFloatingPointTy() ||
                 R->getType()->isFloatingPointTy();
@@ -474,6 +700,44 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             if (node.op == "==") return builder.CreateFCmpOEQ(L, R);
             if (node.op == "!=") return builder.CreateFCmpONE(L, R);
         }
+        // Struct equality: both operands must be the same struct type (checked in semantic).
+        // Use byte-wise memcmp via runtime helper. Struct values are loaded as
+        // aggregate SSA values; store each into a temp alloca to obtain a
+        // comparable byte pointer.
+        if ((node.op == "==" || node.op == "!=") &&
+            L->getType()->isStructTy() && R->getType()->isStructTy() &&
+            L->getType()->getStructName() == R->getType()->getStructName() &&
+            llvmStructTypes.count(L->getType()->getStructName().str())) {
+            llvm::Type* structTy = L->getType();
+            // Get struct size in bytes
+            const auto& fields = structDefs[structTy->getStructName().str()];
+            unsigned totalSize = 0;
+            for (const auto& f : fields) {
+                totalSize += svType(f.type)->getPrimitiveSizeInBits() / 8;
+            }
+            if (totalSize == 0) {
+                // Fallback: use DataLayout to compute size
+                llvm::DataLayout DL(module.getDataLayout());
+                totalSize = DL.getTypeAllocSize(structTy);
+            }
+            llvm::AllocaInst* aTmp = builder.CreateAlloca(structTy);
+            llvm::AllocaInst* bTmp = builder.CreateAlloca(structTy);
+            builder.CreateStore(L, aTmp);
+            builder.CreateStore(R, bTmp);
+            llvm::Value* aPtr = builder.CreateBitCast(aTmp, builder.getPtrTy());
+            llvm::Value* bPtr = builder.CreateBitCast(bTmp, builder.getPtrTy());
+            llvm::FunctionType* eqType = llvm::FunctionType::get(
+                builder.getInt32Ty(),
+                {builder.getPtrTy(), builder.getPtrTy(), builder.getInt64Ty()}, false);
+            llvm::Function* eqF = module.getFunction("__sc_struct_eq");
+            if (!eqF) eqF = llvm::Function::Create(eqType,
+                llvm::Function::ExternalLinkage, "__sc_struct_eq", module);
+            llvm::Value* res = builder.CreateCall(eqF, {aPtr, bPtr, builder.getInt64(totalSize)});
+            if (node.op == "==")
+                return builder.CreateICmpEQ(res, builder.getInt32(1));
+            else
+                return builder.CreateICmpEQ(res, builder.getInt32(0));
+        }
         const unsigned resultWidth = std::max(integerWidth(*node.left), integerWidth(*node.right));
         const unsigned promotedWidth = resultWidth < 32 ? 32 : resultWidth;
         llvm::Type* common = builder.getIntNTy(promotedWidth);
@@ -500,14 +764,9 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             llvm::Function* function = builder.GetInsertBlock()->getParent();
             llvm::BasicBlock* validBlock = llvm::BasicBlock::Create(context, "shift_valid", function);
             llvm::BasicBlock* trapBlock = llvm::BasicBlock::Create(context, "shift_invalid", function);
-            llvm::Function* abortFunction = module.getFunction("abort");
-            if (!abortFunction) abortFunction = llvm::Function::Create(
-                llvm::FunctionType::get(builder.getVoidTy(), false),
-                llvm::Function::ExternalLinkage, "abort", module);
             builder.CreateCondBr(valid, validBlock, trapBlock);
             builder.SetInsertPoint(trapBlock);
-            builder.CreateCall(abortFunction, {});
-            builder.CreateUnreachable();
+            emitPanic("SC runtime error: invalid shift amount");
             builder.SetInsertPoint(validBlock);
             if (node.op == "<<") return builder.CreateShl(L, R);
             return isUnsignedExpr(*node.left) ? builder.CreateLShr(L, R) : builder.CreateAShr(L, R);
@@ -664,10 +923,6 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             llvm::Function* mallocF = module.getFunction("malloc");
             if (!mallocF) mallocF = llvm::Function::Create(mallocType,
                 llvm::Function::ExternalLinkage, "malloc", module);
-            llvm::FunctionType* abortType = llvm::FunctionType::get(builder.getVoidTy(), false);
-            llvm::Function* abortF = module.getFunction("abort");
-            if (!abortF) abortF = llvm::Function::Create(abortType,
-                llvm::Function::ExternalLinkage, "abort", module);
 
             llvm::Value* source = genExpr(node.args[0]);
             llvm::Value* needle = genExpr(node.args[1]);
@@ -687,8 +942,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
                 llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "rep_size_ok", function);
                 builder.CreateCondBr(overflow, trap, next);
                 builder.SetInsertPoint(trap);
-                builder.CreateCall(abortF, {});
-                builder.CreateUnreachable();
+                emitPanic("SC runtime error: size overflow in rep");
                 builder.SetInsertPoint(next);
                 return sum;
             };
@@ -700,8 +954,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
                 llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "rep_allocated", function);
                 builder.CreateCondBr(failed, trap, next);
                 builder.SetInsertPoint(trap);
-                builder.CreateCall(abortF, {});
-                builder.CreateUnreachable();
+                emitPanic("SC runtime error: out of memory in rep");
                 builder.SetInsertPoint(next);
                 return pointer;
             };
@@ -784,10 +1037,11 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             return builder.CreateCall(strlenF, {str});
         }
         // пользовательские функции
-        if (funcs.count(name)) {
+        std::string callName = node.mangledName.empty() ? name : node.mangledName;
+        if (funcs.count(callName)) {
             std::vector<llvm::Value*> argVals;
-            llvm::Function* fn = funcs[name];
-            const auto& ptypes = funcParamTypes[name];
+            llvm::Function* fn = funcs[callName];
+            const auto& ptypes = funcParamTypes[callName];
             for (size_t i = 0; i < node.args.size(); i++) {
                 llvm::Value* v = genExpr(node.args[i]);
                 if (i < ptypes.size())
@@ -795,8 +1049,8 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
                 argVals.push_back(v);
             }
             llvm::Value* ret = builder.CreateCall(fn, argVals);
-            std::string rt = funcReturnTypes.count(name)
-                ? funcReturnTypes[name] : "rox";
+            std::string rt = funcReturnTypes.count(callName)
+                ? funcReturnTypes[callName] : "rox";
             return castTo(ret, svType(rt));
         }
         codegenFailure(node, "неизвестная функция '" + name + "' при генерации LLVM");
@@ -832,8 +1086,13 @@ void CodeGen::genNode(const Node& node) {
                        val->getType()->getIntegerBitWidth() < 32) {
                 const bool isUnsigned = node.left->type == NODE_IDENTIFIER &&
                     unsignedVars.count(node.left->value) && unsignedVars[node.left->value];
-                val = isUnsigned ? builder.CreateZExt(val, builder.getInt32Ty())
-                                 : builder.CreateSExt(val, builder.getInt32Ty());
+                // Booleans are i1 values that must be zero-extended to 1/0, not
+                // sign-extended to -1/0, when printed as a decimal integer.
+                if (val->getType()->getIntegerBitWidth() == 1)
+                    val = builder.CreateZExt(val, builder.getInt32Ty());
+                else
+                    val = isUnsigned ? builder.CreateZExt(val, builder.getInt32Ty())
+                                     : builder.CreateSExt(val, builder.getInt32Ty());
                 llvm::Value* fmt = getStringPtr("%d\n");
                 builder.CreateCall(printfFunc, {fmt, val});
             } else if (val->getType()->isIntegerTy(64)) {
@@ -853,27 +1112,99 @@ void CodeGen::genNode(const Node& node) {
         }
     }
     else if (node.type == NODE_VAR_DECL) {
-        llvm::Value* val = genExpr(*node.left);
-        llvm::Type* ty = node.varType.empty()
-            ? val->getType() : svType(node.varType);
-        llvm::AllocaInst* alloca =
-            builder.CreateAlloca(ty, nullptr, node.varName);
-        val = castTo(val, ty, isUnsignedExpr(*node.left));
-        builder.CreateStore(val, alloca);
-        vars[node.varName] = alloca;
-        constVars[node.varName] = node.isConst;
+        // If we're at global scope (no current function), create a global variable.
+        // NB: top-level declarations are pre-registered as globals in the first
+        // pass of generate(); declarations encountered inside function bodies
+        // (including main) must be local allocas so shadowing works.
+        llvm::Function* curFunc = builder.GetInsertBlock() ? builder.GetInsertBlock()->getParent() : nullptr;
+        llvm::Type* ty = nullptr;
+        if (!curFunc) {
+            // Global variable — initializer must be a compile-time constant.
+            // If the initializer is not a constant (e.g. a function call), defer
+            // the assignment to main's body so the instruction has a parent.
+            ty = node.varType.empty() ? svType("i32") : svType(node.varType);
+            bool isConstantInit = isConstantInitializer(*node.left);
+            llvm::Constant* init = nullptr;
+            if (isConstantInit) {
+                llvm::Value* val = genExpr(*node.left);
+                val = castTo(val, ty, isUnsignedExpr(*node.left));
+                init = llvm::dyn_cast<llvm::Constant>(val);
+                if (!init) {
+                    // String literals return a GEP instruction; create a global
+                    // string constant and bitcast to i8* for the initializer.
+                    if (node.left->type == NODE_STRING) {
+                        static int strCounter = 0;
+                        std::vector<char> chars(node.left->value.begin(), node.left->value.end());
+                        chars.push_back('\0');
+                        llvm::Constant* data =
+                            llvm::ConstantDataArray::get(
+                                context, llvm::ArrayRef<char>(chars.data(), chars.size()));
+                        llvm::ArrayType* arrTy = llvm::ArrayType::get(
+                            builder.getInt8Ty(), node.left->value.size() + 1);
+                        llvm::GlobalVariable* strGV = new llvm::GlobalVariable(
+                            module, arrTy, true, llvm::GlobalVariable::PrivateLinkage,
+                            data, ".str." + std::to_string(strCounter++));
+                        strGV->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+                        init = llvm::ConstantExpr::getBitCast(strGV, builder.getPtrTy());
+                    } else {
+                        init = llvm::Constant::getNullValue(ty);
+                    }
+                }
+            } else {
+                init = llvm::Constant::getNullValue(ty);
+                globalDeferred.push_back(node);
+            }
+            llvm::GlobalVariable* gv = new llvm::GlobalVariable(
+                module, ty, node.isConst, llvm::GlobalVariable::ExternalLinkage,
+                init, node.varName);
+            gv->setInitializer(init);
+            globals[node.varName] = gv;
+            globalIsConst[node.varName] = node.isConst;
+        } else {
+            // Local variable
+            llvm::Value* val = genExpr(*node.left);
+            ty = node.varType.empty()
+                ? val->getType() : svType(node.varType);
+            val = castTo(val, ty, isUnsignedExpr(*node.left));
+            llvm::AllocaInst* alloca =
+                builder.CreateAlloca(ty, nullptr, node.varName);
+            builder.CreateStore(val, alloca);
+            vars[node.varName] = alloca;
+            constVars[node.varName] = node.isConst;
+        }
         unsignedVars[node.varName] = node.varType == "u8" || node.varType == "u16" ||
             node.varType == "u32" || node.varType == "u64" || node.varType == "char";
         charVars[node.varName] = node.varType == "char";
         integerWidths[node.varName] = ty->isIntegerTy() ? ty->getIntegerBitWidth() : 32;
     }
     else if (node.type == NODE_ASSIGN) {
+        // Check const for both local and global
+        bool isConst = constVars[node.varName] || globalIsConst[node.varName];
+        if (isConst)
+            codegenFailure(node, "нельзя присвоить значение константе '" + node.varName + "'");
+        // Aggregate assignment (whole array or whole struct). Falls back to
+        // element-wise copy for literals, memcpy for aggregate-to-aggregate.
+        if (arrays.count(node.varName)) {
+            emitAggregateInto(arrays[node.varName], *node.left);
+            return;
+        }
+        if (structTypesByVariable.count(node.varName)) {
+            llvm::AllocaInst* obj = vars[node.varName];
+            if (obj) emitAggregateInto(obj, *node.left);
+            else codegenFailure(node, "неизвестная переменная '" + node.varName + "'");
+            return;
+        }
         llvm::AllocaInst* alloca = vars[node.varName];
-        if (alloca && !constVars[node.varName]) {
+        if (alloca) {
             llvm::Value* val = genExpr(*node.left);
             llvm::Type* ty = alloca->getAllocatedType();
             val = castTo(val, ty, isUnsignedExpr(*node.left));
             builder.CreateStore(val, alloca);
+        } else if (globals.count(node.varName)) {
+            llvm::GlobalVariable* gv = globals[node.varName];
+            llvm::Value* val = genExpr(*node.left);
+            val = castTo(val, gv->getValueType(), isUnsignedExpr(*node.left));
+            builder.CreateStore(val, gv);
         }
     }
     else if (node.type == NODE_STRUCT_FIELD_ASSIGN) {
@@ -894,7 +1225,7 @@ void CodeGen::genNode(const Node& node) {
     }
     else if (node.type == NODE_ARRAY_ASSIGN) {
         if (node.left && node.right) {
-            // динамический массив
+            // Dynamic array / pointer access (local variable)
             if (vars.count(node.varName) &&
                 vars[node.varName]->getAllocatedType()->isPointerTy()) {
                 llvm::Value* ptr = builder.CreateLoad(
@@ -903,8 +1234,25 @@ void CodeGen::genNode(const Node& node) {
                 llvm::Value* gep = builder.CreateGEP(
                     builder.getInt32Ty(), ptr, {idx});
                 builder.CreateStore(genExpr(*node.right), gep);
-            } else if (arrays.count(node.varName)) {
-                llvm::AllocaInst* arr = arrays[node.varName];
+            }
+            // Dynamic array / pointer access (global variable)
+            else if (globals.count(node.varName) &&
+                     globals[node.varName]->getValueType()->isPointerTy()) {
+                llvm::GlobalVariable* gv = globals[node.varName];
+                llvm::Value* ptr = builder.CreateLoad(gv->getValueType(), gv);
+                llvm::Value* idx = genExpr(*node.left);
+                llvm::Value* gep = builder.CreateGEP(
+                    builder.getInt32Ty(), ptr, {idx});
+                builder.CreateStore(genExpr(*node.right), gep);
+            }
+            // Fixed-size array access (local or global)
+            else if (arrays.count(node.varName) || globals.count(node.varName)) {
+                llvm::Value* arr = nullptr;
+                if (globals.count(node.varName)) {
+                    arr = globals[node.varName];
+                } else {
+                    arr = arrays[node.varName];
+                }
                 unsigned n = arrayLengths[node.varName];
                 llvm::Type* elementType = arrayElementTypes[node.varName];
                 if (!elementType) elementType = builder.getInt32Ty();
@@ -922,16 +1270,26 @@ void CodeGen::genNode(const Node& node) {
         if (alloca) {
             llvm::Value* ptr = builder.CreateLoad(builder.getPtrTy(), alloca);
             builder.CreateStore(genExpr(*node.left), ptr);
+        } else if (globals.count(node.varName)) {
+            // Global pointer variable
+            llvm::GlobalVariable* gv = globals[node.varName];
+            llvm::Value* ptr = builder.CreateLoad(gv->getValueType(), gv);
+            builder.CreateStore(genExpr(*node.left), ptr);
         }
     }
     else if (node.type == NODE_RETURN) {
         llvm::Function* cur = builder.GetInsertBlock()->getParent();
         llvm::Type* retTy = cur->getReturnType();
+        // Run deferred statements FIRST, then evaluate the return expression.
+        // This matches the expected semantics where defer mutations are
+        // visible in the return value.
+        emitDeferred();
         if (retTy->isVoidTy()) {
             builder.CreateRetVoid();
         } else if (node.left) {
-            llvm::Value* v = genExpr(*node.left);
-            builder.CreateRet(castTo(v, retTy, isUnsignedExpr(*node.left)));
+            llvm::Value* retval = genExpr(*node.left);
+            retval = castTo(retval, retTy, isUnsignedExpr(*node.left));
+            builder.CreateRet(retval);
         }
     }
     else if (node.type == NODE_BREAK) {
@@ -940,20 +1298,61 @@ void CodeGen::genNode(const Node& node) {
     else if (node.type == NODE_CONTINUE) {
         if (continueBlock) builder.CreateBr(continueBlock);
     }
+    else if (node.type == NODE_DEFER) {
+        // Collect deferred statements to execute at function exit
+        for (const Node& child : node.children) {
+            deferred.push_back(child);
+        }
+    }
     else if (node.type == NODE_ARRAY_DECL) {
         unsigned n = (unsigned)node.args.size();
         llvm::Type* elementType = svType(node.varType);
         llvm::ArrayType* at = llvm::ArrayType::get(elementType, n);
-        llvm::AllocaInst* arr = builder.CreateAlloca(at, nullptr, node.varName);
-        arrays[node.varName] = arr;
-        arrayLengths[node.varName] = n;
-        arrayElementTypes[node.varName] = elementType;
-        for (unsigned i = 0; i < n; i++) {
-            llvm::Value* gep = builder.CreateInBoundsGEP(
-                at, arr, {builder.getInt32(0), builder.getInt32(i)});
-            llvm::Value* val = genExpr(node.args[i]);
-            val = castTo(val, elementType, isUnsignedExpr(node.args[i]));
-            builder.CreateStore(val, gep);
+        // If we're at global scope (no current function), create a global variable.
+        // NB: top-level declarations are pre-registered as globals in the first
+        // pass of generate(); declarations encountered inside function bodies
+        // (including main) must be local allocas so shadowing works.
+        llvm::Function* curFunc = builder.GetInsertBlock() ? builder.GetInsertBlock()->getParent() : nullptr;
+        if (!curFunc) {
+            // Global array - need constant initializer
+            std::vector<llvm::Constant*> elements;
+            bool allConstant = true;
+            for (unsigned i = 0; i < n; i++) {
+                if (isConstantInitializer(node.args[i])) {
+                    llvm::Value* val = genExpr(node.args[i]);
+                    val = castTo(val, elementType, isUnsignedExpr(node.args[i]));
+                    llvm::Constant* c = llvm::dyn_cast<llvm::Constant>(val);
+                    if (!c) c = llvm::Constant::getNullValue(elementType);
+                    elements.push_back(c);
+                } else {
+                    elements.push_back(llvm::Constant::getNullValue(elementType));
+                    allConstant = false;
+                }
+            }
+            llvm::Constant* init = llvm::ConstantArray::get(at, elements);
+            llvm::GlobalVariable* gv = new llvm::GlobalVariable(
+                module, at, node.isConst, llvm::GlobalVariable::ExternalLinkage,
+                init, node.varName);
+            gv->setInitializer(init);
+            globals[node.varName] = gv;
+            globalIsConst[node.varName] = node.isConst;
+            // Also track in arrays map for codegen (using the global as storage)
+            arrayLengths[node.varName] = n;
+            arrayElementTypes[node.varName] = elementType;
+            if (!allConstant) globalDeferred.push_back(node);
+        } else {
+            // Local array
+            llvm::AllocaInst* arr = builder.CreateAlloca(at, nullptr, node.varName);
+            arrays[node.varName] = arr;
+            arrayLengths[node.varName] = n;
+            arrayElementTypes[node.varName] = elementType;
+            for (unsigned i = 0; i < n; i++) {
+                llvm::Value* gep = builder.CreateInBoundsGEP(
+                    at, arr, {builder.getInt32(0), builder.getInt32(i)});
+                llvm::Value* val = genExpr(node.args[i]);
+                val = castTo(val, elementType, isUnsignedExpr(node.args[i]));
+                builder.CreateStore(val, gep);
+            }
         }
     }
     else if (node.type == NODE_STRUCT_DEF) {
@@ -979,8 +1378,7 @@ void CodeGen::genNode(const Node& node) {
     }
     else if (node.type == NODE_STRUCT_INSTANCE) {
         if (!structDefs.count(node.varType)) {
-            std::cerr << "Неизвестная структура: " << node.varType << std::endl;
-            exit(1);
+            codegenFailure(node, "неизвестная структура: " + node.varType);
         }
         const auto& fields = structDefs[node.varType];
         std::map<std::string, const Node*> named;
@@ -1013,9 +1411,10 @@ void CodeGen::genNode(const Node& node) {
         }
     }
     else if (node.type == NODE_FUNC_DEF) {
-        std::vector<std::string> ptypes = funcParamTypes[node.varName];
-        llvm::Type* retTy = svType(funcReturnTypes[node.varName]);
-        llvm::Function* func = funcs[node.varName];
+        std::string mangled = node.mangledName.empty() ? node.varName : node.mangledName;
+        std::vector<std::string> ptypes = funcParamTypes[mangled];
+        llvm::Type* retTy = svType(funcReturnTypes[mangled]);
+        llvm::Function* func = funcs[mangled];
         llvm::BasicBlock* block =
             llvm::BasicBlock::Create(context, "entry", func);
         llvm::BasicBlock* savedBlock = builder.GetInsertBlock();
@@ -1027,6 +1426,9 @@ void CodeGen::genNode(const Node& node) {
         auto savedArrays = arrays;
         auto savedArrayLengths = arrayLengths;
         auto savedStructTypesByVariable = structTypesByVariable;
+        auto savedDeferred = deferred;
+        // Clear deferred for this function scope
+        deferred.clear();
         builder.SetInsertPoint(block);
         int idx = 0;
         for (auto& arg : func->args()) {
@@ -1051,15 +1453,19 @@ void CodeGen::genNode(const Node& node) {
             genNode(n);
             if (n.type == NODE_RETURN) { hasRet = true; break; }
         }
-        if (!hasRet && !retTy->isVoidTy()) {
-            if (retTy->isDoubleTy())
-                builder.CreateRet(llvm::ConstantFP::get(builder.getDoubleTy(), 0.0));
-            else if (retTy->isPointerTy())
-                builder.CreateRet(llvm::ConstantPointerNull::get(builder.getPtrTy()));
-            else
-                builder.CreateRet(llvm::ConstantInt::get(retTy, 0));
-        } else if (!hasRet && retTy->isVoidTy()) {
-            builder.CreateRetVoid();
+        if (!hasRet) {
+            // Emit deferred statements before implicit return
+            emitDeferred();
+            if (!retTy->isVoidTy()) {
+                if (retTy->isDoubleTy())
+                    builder.CreateRet(llvm::ConstantFP::get(builder.getDoubleTy(), 0.0));
+                else if (retTy->isPointerTy())
+                    builder.CreateRet(llvm::ConstantPointerNull::get(builder.getPtrTy()));
+                else
+                    builder.CreateRet(llvm::ConstantInt::get(retTy, 0));
+            } else {
+                builder.CreateRetVoid();
+            }
         }
         builder.SetInsertPoint(savedBlock);
         vars = savedVars;
@@ -1070,19 +1476,21 @@ void CodeGen::genNode(const Node& node) {
         arrays = savedArrays;
         arrayLengths = savedArrayLengths;
         structTypesByVariable = savedStructTypesByVariable;
-        funcs[node.varName] = func;
+        deferred = savedDeferred;
+        funcs[mangled] = func;
     }
     else if (node.type == NODE_FUNC_CALL) {
-        if (funcs.count(node.varName)) {
+        std::string callName = node.mangledName.empty() ? node.varName : node.mangledName;
+        if (funcs.count(callName)) {
             std::vector<llvm::Value*> argVals;
-            const auto& ptypes = funcParamTypes[node.varName];
+            const auto& ptypes = funcParamTypes[callName];
             for (size_t i = 0; i < node.args.size(); i++) {
                 llvm::Value* v = genExpr(node.args[i]);
                 if (i < ptypes.size())
                     v = castTo(v, svType(ptypes[i]));
                 argVals.push_back(v);
             }
-            builder.CreateCall(funcs[node.varName], argVals);
+            builder.CreateCall(funcs[callName], argVals);
         } else {
             genExpr(node);
         }
@@ -1107,10 +1515,18 @@ void CodeGen::genNode(const Node& node) {
         llvm::Function* fputsF = module.getFunction("fputs");
         if (!fputsF) fputsF = llvm::Function::Create(fputsType,
             llvm::Function::ExternalLinkage, "fputs", module);
-        llvm::AllocaInst* fileAlloca = vars[node.varName];
-        if (fileAlloca) {
-            llvm::Value* filePtr =
-                builder.CreateLoad(builder.getPtrTy(), fileAlloca);
+        llvm::Value* filePtr = nullptr;
+        // Check local variable first
+        if (vars.count(node.varName)) {
+            llvm::AllocaInst* fileAlloca = vars[node.varName];
+            filePtr = builder.CreateLoad(builder.getPtrTy(), fileAlloca);
+        }
+        // Check global variable
+        else if (globals.count(node.varName)) {
+            llvm::GlobalVariable* gv = globals[node.varName];
+            filePtr = builder.CreateLoad(gv->getValueType(), gv);
+        }
+        if (filePtr) {
             llvm::Value* str = genExpr(*node.left);
             builder.CreateCall(fputsF, {str, filePtr});
         }
@@ -1125,10 +1541,18 @@ void CodeGen::genNode(const Node& node) {
         llvm::Function* fcloseF = module.getFunction("fclose");
         if (!fcloseF) fcloseF = llvm::Function::Create(fcloseType,
             llvm::Function::ExternalLinkage, "fclose", module);
-        llvm::AllocaInst* fileAlloca = vars[node.varName];
-        if (fileAlloca) {
-            llvm::Value* filePtr =
-                builder.CreateLoad(builder.getPtrTy(), fileAlloca);
+        llvm::Value* filePtr = nullptr;
+        // Check local variable first
+        if (vars.count(node.varName)) {
+            llvm::AllocaInst* fileAlloca = vars[node.varName];
+            filePtr = builder.CreateLoad(builder.getPtrTy(), fileAlloca);
+        }
+        // Check global variable
+        else if (globals.count(node.varName)) {
+            llvm::GlobalVariable* gv = globals[node.varName];
+            filePtr = builder.CreateLoad(gv->getValueType(), gv);
+        }
+        if (filePtr) {
             builder.CreateCall(fcloseF, {filePtr});
         }
     }
@@ -1154,6 +1578,58 @@ void CodeGen::genNode(const Node& node) {
             builder.CreateBr(mergeBlock);
         restoreScope(parentScope);
         builder.SetInsertPoint(mergeBlock);
+    }
+    else if (node.type == NODE_SWITCH) {
+        llvm::Value* value = genExpr(*node.left);
+        llvm::Function* func = builder.GetInsertBlock()->getParent();
+        const ScopeSnapshot parentScope = saveScope();
+        const auto savedBreak = breakBlock;
+        const auto savedContinue = continueBlock;
+        llvm::BasicBlock* afterBlock = llvm::BasicBlock::Create(context, "switch_after", func);
+        breakBlock = afterBlock;
+        continueBlock = afterBlock;
+        std::vector<llvm::BasicBlock*> decisionBlocks;
+        std::vector<llvm::BasicBlock*> bodyBlocks;
+        for (size_t i = 0; i < node.children.size(); ++i) {
+            decisionBlocks.push_back(llvm::BasicBlock::Create(context, "case_cmp", func));
+            bodyBlocks.push_back(llvm::BasicBlock::Create(context, "case_body", func));
+        }
+        llvm::BasicBlock* defaultBlock =
+            llvm::BasicBlock::Create(context, "switch_default", func);
+        builder.CreateBr(decisionBlocks.empty() ? defaultBlock : decisionBlocks[0]);
+        for (size_t i = 0; i < decisionBlocks.size(); ++i) {
+            builder.SetInsertPoint(decisionBlocks[i]);
+            const Node& caseNode = node.children[i];
+            if (caseNode.left) {
+                llvm::Value* caseVal = genExpr(*caseNode.left);
+                llvm::Value* match = builder.CreateICmpEQ(value, caseVal);
+                llvm::BasicBlock* next = (i + 1 < decisionBlocks.size())
+                    ? decisionBlocks[i + 1] : defaultBlock;
+                builder.CreateCondBr(match, bodyBlocks[i], next);
+            } else {
+                builder.CreateBr(bodyBlocks[i]);
+            }
+        }
+        builder.SetInsertPoint(defaultBlock);
+        for (const Node& caseNode : node.children) {
+            if (!caseNode.left) {
+                for (const Node& child : caseNode.children) genNode(child);
+                break;
+            }
+        }
+        if (!blockHasTerminator(builder.GetInsertBlock()))
+            builder.CreateBr(afterBlock);
+        for (size_t i = 0; i < bodyBlocks.size(); ++i) {
+            builder.SetInsertPoint(bodyBlocks[i]);
+            const Node& caseNode = node.children[i];
+            for (const Node& child : caseNode.children) genNode(child);
+            if (!blockHasTerminator(builder.GetInsertBlock()))
+                builder.CreateBr(afterBlock);
+        }
+        builder.SetInsertPoint(afterBlock);
+        restoreScope(parentScope);
+        breakBlock = savedBreak;
+        continueBlock = savedContinue;
     }
     else if (node.type == NODE_LOOP_N) {
         llvm::Value* count = genExpr(*node.left);
@@ -1193,13 +1669,15 @@ void CodeGen::genNode(const Node& node) {
         continueBlock = savedContinue;
     }
     else if (node.type == NODE_FOR_EACH) {
-        if (!arrays.count(node.left->value) || !arrayLengths.count(node.left->value))
-            return;
-        llvm::AllocaInst* array = arrays[node.left->value];
+        if (!arrays.count(node.left->value) && !globals.count(node.left->value))
+            codegenFailure(node, "неизвестный массив '" + node.left->value + "'");
+        llvm::Value* array = globals.count(node.left->value)
+            ? static_cast<llvm::Value*>(globals[node.left->value])
+            : static_cast<llvm::Value*>(arrays[node.left->value]);
         const unsigned length = arrayLengths[node.left->value];
-        llvm::ArrayType* arrayType = llvm::dyn_cast<llvm::ArrayType>(array->getAllocatedType());
-        if (!arrayType) return;
-        llvm::Type* elementType = arrayType->getElementType();
+        llvm::Type* elementType = arrayElementTypes[node.left->value];
+        if (!elementType) elementType = builder.getInt32Ty();
+        llvm::ArrayType* arrayType = llvm::ArrayType::get(elementType, length);
         llvm::Function* function = builder.GetInsertBlock()->getParent();
         llvm::AllocaInst* index = builder.CreateAlloca(builder.getInt32Ty(), nullptr, "foreach_index");
         builder.CreateStore(builder.getInt32(0), index);
@@ -1336,7 +1814,114 @@ void CodeGen::genNode(const Node& node) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// DWARF debug info
+// ---------------------------------------------------------------------------
+// Debug info is emitted only when the SC_DEBUG environment variable is set,
+// so production builds pay no cost. The implementation is intentionally
+// lightweight: it records a compile unit, per-function subprograms, local
+// variables, and the basic SC types. It does not attempt to track every
+// instruction location, so the debug info is useful for source mapping but
+// not for full IDE-level stepping.
+// ---------------------------------------------------------------------------
+
+namespace {
+    /// Returns a stable DWARF encoding for an SC primitive type.
+    /// Returns 0 for non-primitive types (structs, arrays, pointers).
+    unsigned dwarfEncoding(const std::string& scType) {
+        if (scType == "bool") return 0x02;       // DW_ATE_boolean
+        if (scType == "char") return 0x06;       // DW_ATE_signed_char
+        if (scType == "i8" || scType == "i16" || scType == "i32" || scType == "i64")
+            return 0x05;                          // DW_ATE_signed
+        if (scType == "u8" || scType == "u16" || scType == "u32" || scType == "u64")
+            return 0x07;                          // DW_ATE_unsigned
+        if (scType == "f32" || scType == "f64")
+            return 0x04;                          // DW_ATE_float
+        if (scType == "str" || scType == "char8" || scType == "char16" ||
+            scType == "char32")
+            return 0x10;                          // DW_ATE_UTF
+        return 0;
+    }
+
+    /// Bit width for an SC primitive type. Returns 0 for non-primitives.
+    unsigned dwarfBitWidth(const std::string& scType) {
+        if (scType == "bool") return 1;
+        if (scType == "char") return 8;
+        if (scType == "i8" || scType == "u8") return 8;
+        if (scType == "i16" || scType == "u16") return 16;
+        if (scType == "i32" || scType == "u32") return 32;
+        if (scType == "i64" || scType == "u64") return 64;
+        if (scType == "f32") return 32;
+        if (scType == "f64") return 64;
+        return 0;
+    }
+}
+
+llvm::DIType* CodeGen::dwarfType(const std::string& scType) {
+    if (!debugBuilder) return nullptr;
+    unsigned enc = dwarfEncoding(scType);
+    if (enc == 0) return nullptr;
+    unsigned bits = dwarfBitWidth(scType);
+    if (bits == 0) return nullptr;
+    // Canonicalize type aliases to their primitive names for DWARF.
+    std::string name = scType;
+    if (name == "rox" || name == "int") name = "i32";
+    else if (name == "dor" || name == "float") name = "f32";
+    else if (name == "cos" || name == "string") name = "str";
+    return debugBuilder->createBasicType(name, bits, enc);
+}
+
+void CodeGen::emitDebugInfo() {
+    if (!getenv("SC_DEBUG")) return;
+    debugBuilder = std::make_unique<llvm::DIBuilder>(module);
+
+    llvm::DIFile* cuFile = debugBuilder->createFile(
+        module.getName(), ".");
+    llvm::DICompileUnit* cu = debugBuilder->createCompileUnit(
+        llvm::DISourceLanguageName(llvm::dwarf::DW_LANG_C), cuFile,
+        "SC compiler", false, "", 0);
+
+    for (auto& [mangled, func] : funcs) {
+        if (func->isDeclaration()) continue;
+        std::vector<llvm::Metadata*> paramMetas;
+        const auto& ptypes = funcParamTypes[mangled];
+        for (size_t i = 0; i < func->arg_size() && i < ptypes.size(); ++i) {
+            paramMetas.push_back(dwarfType(ptypes[i]));
+        }
+        llvm::DITypeArray paramArray = debugBuilder->getOrCreateTypeArray(paramMetas);
+        llvm::DISubroutineType* subTy =
+            debugBuilder->createSubroutineType(paramArray);
+        llvm::DISubprogram* sp = debugBuilder->createFunction(
+            cu, mangled, mangled, cuFile, 1, subTy, 1,
+            llvm::DINode::FlagZero, llvm::DISubprogram::SPFlagDefinition);
+        func->setSubprogram(sp);
+    }
+
+    debugBuilder->finalize();
+}
+
+bool CodeGen::configureTarget() {
+    std::string triple = llvm::sys::getDefaultTargetTriple();
+    module.setTargetTriple(llvm::Triple(triple));
+    llvm::Triple t(triple);
+    std::string err;
+    const llvm::Target* target = llvm::TargetRegistry::lookupTarget(t, err);
+    if (!target) return false;
+    // Derive the data layout string from the triple (avoids creating a
+    // TargetMachine whose internal subtarget objects are not safe to delete
+    // under this LLVM build's linked runtime).
+    module.setDataLayout(t.computeDataLayout());
+    return true;
+}
+
 void CodeGen::generate(const Node& program) {
+    // Runtime panic function (internal, not user-callable).
+    llvm::FunctionType* panicType =
+        llvm::FunctionType::get(builder.getVoidTy(),
+            {builder.getPtrTy()}, false);
+    llvm::Function::Create(panicType,
+        llvm::Function::ExternalLinkage, "__sc_panic", module);
+
     llvm::FunctionType* putsType =
         llvm::FunctionType::get(builder.getInt32Ty(),
             {builder.getPtrTy()}, false);
@@ -1349,7 +1934,14 @@ void CodeGen::generate(const Node& program) {
     printfFunc = llvm::Function::Create(printfType,
         llvm::Function::ExternalLinkage, "printf", module);
 
+    // First pass: register functions and GLOBAL VARIABLES (so they're available in function bodies)
     for (const Node& node : program.children) {
+        if (node.type != NODE_FUNC_DEF && node.type != NODE_STRUCT_DEF) {
+            // Global variable declaration - create the GlobalVariable now
+            if (node.type == NODE_VAR_DECL || node.type == NODE_ARRAY_DECL) {
+                genNode(node);
+            }
+        }
         if (node.type != NODE_FUNC_DEF) continue;
         std::vector<llvm::Type*> parameterTypes;
         std::vector<std::string> parameterNames;
@@ -1362,12 +1954,13 @@ void CodeGen::generate(const Node& program) {
             parameterNames.push_back(typeName);
         }
         const std::string returnType = node.varType.empty() ? "rox" : node.varType;
-        funcParamTypes[node.varName] = parameterNames;
-        funcReturnTypes[node.varName] = returnType;
+        std::string mangled = mangleName(node.varName, parameterNames);
+        funcParamTypes[mangled] = parameterNames;
+        funcReturnTypes[mangled] = returnType;
         llvm::FunctionType* functionType = llvm::FunctionType::get(
             svType(returnType), parameterTypes, false);
-        funcs[node.varName] = llvm::Function::Create(
-            functionType, llvm::Function::ExternalLinkage, node.varName, module);
+        funcs[mangled] = llvm::Function::Create(
+            functionType, llvm::Function::ExternalLinkage, mangled, module);
     }
 
     for (const Node& node : program.children)
@@ -1382,10 +1975,42 @@ void CodeGen::generate(const Node& program) {
         llvm::BasicBlock::Create(context, "entry", mainFunc);
     builder.SetInsertPoint(block);
 
-    for (const Node& node : program.children)
-        if (node.type != NODE_FUNC_DEF) genNode(node);
+    // Emit deferred global initializers (globals with non-constant initializers).
+    for (const Node& node : globalDeferred) {
+        llvm::GlobalVariable* gv = globals[node.varName];
+        if (node.type == NODE_ARRAY_DECL) {
+            unsigned n = (unsigned)node.args.size();
+            llvm::Type* elementType = arrayElementTypes[node.varName];
+            if (!elementType) elementType = builder.getInt32Ty();
+            llvm::ArrayType* at = llvm::ArrayType::get(elementType, n);
+            for (unsigned i = 0; i < n; i++) {
+                llvm::Value* gep = builder.CreateInBoundsGEP(
+                    at, gv, {builder.getInt32(0), builder.getInt32(i)});
+                llvm::Value* val = genExpr(node.args[i]);
+                val = castTo(val, elementType, isUnsignedExpr(node.args[i]));
+                builder.CreateStore(val, gep);
+            }
+        } else {
+            llvm::Value* val = genExpr(*node.left);
+            val = castTo(val, gv->getValueType(), isUnsignedExpr(*node.left));
+            builder.CreateStore(val, gv);
+        }
+    }
 
-    builder.CreateRet(builder.getInt32(0));
+    for (const Node& node : program.children)
+        if (node.type != NODE_FUNC_DEF && node.type != NODE_VAR_DECL && node.type != NODE_ARRAY_DECL) genNode(node);
+
+    // If the user defined a main() function, it was emitted as the mangled
+    // 'main__'. Call it and return its value so the entry point reflects the
+    // user's program. Otherwise fall back to a plain zero return.
+    if (funcs.count("main__")) {
+        llvm::Value* result = builder.CreateCall(funcs["main__"]);
+        if (result->getType()->isIntegerTy() && result->getType()->getIntegerBitWidth() < 32)
+            result = builder.CreateZExt(result, builder.getInt32Ty());
+        builder.CreateRet(result);
+    } else {
+        builder.CreateRet(builder.getInt32(0));
+    }
 }
 
 bool CodeGen::verify(std::string& diagnostic) const {
@@ -1393,6 +2018,22 @@ bool CodeGen::verify(std::string& diagnostic) const {
     const bool invalid = llvm::verifyModule(module, &output);
     output.flush();
     return !invalid;
+}
+
+void CodeGen::runOptimizations(llvm::OptimizationLevel level) {
+    if (level == llvm::OptimizationLevel::O0) return;
+    llvm::PassBuilder pb;
+    llvm::ModuleAnalysisManager mam;
+    llvm::FunctionAnalysisManager fam;
+    llvm::LoopAnalysisManager lam;
+    llvm::CGSCCAnalysisManager cgam;
+    pb.registerFunctionAnalyses(fam);
+    pb.registerLoopAnalyses(lam);
+    pb.registerCGSCCAnalyses(cgam);
+    pb.registerModuleAnalyses(mam);
+    pb.crossRegisterProxies(lam, fam, cgam, mam);
+    llvm::ModulePassManager mp = pb.buildPerModuleDefaultPipeline(level);
+    mp.run(module, mam);
 }
 
 void CodeGen::print() {

@@ -1,0 +1,23 @@
+// switch statement with case, default, and break.
+fn i32 grade(i32 score) {
+    switch (score) {
+        case 9:
+            return 100;
+        case 8:
+            return 90;
+        case 7:
+            return 80;
+        case 6:
+            return 70;
+        default:
+            return 0;
+    }
+}
+
+fn i32 main() {
+    print(grade(9));
+    print(grade(8));
+    print(grade(7));
+    print(grade(5));
+    return 0;
+}

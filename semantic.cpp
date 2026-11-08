@@ -12,6 +12,36 @@
 #include <utility>
 #include <vector>
 
+static std::string normalizeTypeForMangle(const std::string& raw) {
+    if (raw == "int" || raw == "i32" || raw == "rox") return "i32";
+    if (raw == "uint" || raw == "u32") return "u32";
+    if (raw == "short" || raw == "i16") return "i16";
+    if (raw == "ushort" || raw == "u16") return "u16";
+    if (raw == "long" || raw == "i64" || raw == "rox64") return "i64";
+    if (raw == "ulong" || raw == "u64") return "u64";
+    if (raw == "byte" || raw == "u8") return "u8";
+    if (raw == "float" || raw == "f32" || raw == "dor") return "f32";
+    if (raw == "double" || raw == "f64") return "f64";
+    if (raw == "string" || raw == "str" || raw == "cos") return "str";
+    if (raw == "bool" || raw == "bue") return "bool";
+    if (raw == "chr") return "char";
+    if (raw == "ptr") return "ptr";
+    if (raw == "file") return "file";
+    if (raw.rfind("array<", 0) == 0) return "arr";
+    return raw.empty() ? "u" : raw;
+}
+
+std::string mangleName(const std::string& name,
+                       const std::vector<std::string>& parameters) {
+    std::string result = name + "__";
+    for (const std::string& p : parameters) {
+        std::string t = normalizeTypeForMangle(p);
+        if (!result.empty() && result.back() != '_') result += "_";
+        result += t;
+    }
+    return result;
+}
+
 namespace {
 
 struct Symbol {
@@ -24,6 +54,8 @@ struct Symbol {
 struct Function {
     std::string returnType;
     std::vector<std::string> parameters;
+    std::string mangledName;
+    std::string baseName;
     int line;
     int column;
 };
@@ -31,10 +63,11 @@ struct Function {
 class Checker {
 public:
     Checker(const std::string& filename) : filename_(filename) {
-        scopes_.emplace_back();
+        scopes_.emplace_back(); // Global scope at index 0
     }
 
     bool run(const Node& program) {
+        // First pass: collect structs and functions
         for (const Node& node : program.children) {
             if (node.type == NODE_STRUCT_DEF) {
                 if (structs_.count(node.varName))
@@ -51,19 +84,23 @@ public:
                     size_t separator = param.find(':');
                     fn.parameters.push_back(normalize(param.substr(0, separator)));
                 }
+                fn.mangledName = mangleName(node.varName, fn.parameters);
+                node.mangledName = fn.mangledName;
                 if (isBuiltinFunction(node.varName))
                     error(node, "имя функции '" + node.varName + "' зарезервировано встроенной функцией");
-                else if (functions_.count(node.varName))
+                else if (functions_.count(fn.mangledName))
                     error(node, "повторное объявление функции '" + node.varName + "'");
                 else
-                    functions_[node.varName] = fn;
+                    functions_[fn.mangledName] = fn;
             }
         }
 
+        // Second pass: check global variable declarations (non-function, non-struct)
         for (const Node& node : program.children) {
             if (node.type != NODE_FUNC_DEF && node.type != NODE_STRUCT_DEF)
                 checkNode(node);
         }
+        // Third pass: check functions and structs (they get their own scopes)
         for (const Node& node : program.children) {
             if (node.type == NODE_FUNC_DEF)
                 checkFunction(node);
@@ -81,6 +118,7 @@ private:
     std::map<std::string, const Node*> structs_;
     std::vector<std::string> returnTypes_;
     unsigned loopDepth_ = 0;
+    unsigned switchDepth_ = 0;
 
     static bool isBuiltinFunction(const std::string& name) {
         static const std::set<std::string> names = {
@@ -141,10 +179,15 @@ private:
         return false;
     }
 
-    void error(const Node& node, const std::string& message) {
+    void error(const Node& node, const std::string& message, const std::string& code = "") {
         ++errors_;
         sc::reportDiagnostic(node.file.empty() ? filename_ : node.file,
-                             node.line, node.column, "semantic", message);
+                             node.line, node.column, "semantic", message, code);
+    }
+
+    void warning(const Node& node, const std::string& message) {
+        sc::reportDiagnostic(node.file.empty() ? filename_ : node.file,
+                             node.line, node.column, "warning", message);
     }
 
     bool knownType(const std::string& raw) const {
@@ -210,11 +253,11 @@ private:
             }
             if ((literalType == "f32" || literalType == "f64" || isInteger(literalType)) &&
                 !literalFits(literalType, node.value)) {
-                error(node, "числовой литерал вне диапазона типа '" + typeName(literalType) + "'");
+                error(node, "числовой литерал вне диапазона типа '" + typeName(literalType) + "'", "E_SEMANTIC_INT_RANGE");
                 return "<error>";
             }
             if (floatingLiteral && isInteger(literalType)) {
-                error(node, "float literal нельзя неявно преобразовать в целый тип; используйте явный cast");
+                error(node, "float literal нельзя неявно преобразовать в целый тип; используйте явный cast", "E_SEMANTIC_FLOAT_TO_INT");
                 return "<error>";
             }
             return literalType;
@@ -253,14 +296,48 @@ private:
                 error(node, "неизвестный массив '" + node.varName + "'");
                 return "<error>";
             }
+            if (symbol->type == "str") {
+                const_cast<Node&>(node).type = NODE_STR_INDEX;
+                std::string indexType = expression(*node.left);
+                if (!isInteger(indexType) && indexType != "<error>")
+                    error(*node.left, "индекс строки должен иметь целочисленный тип", "E_SEMANTIC_TYPE_MISMATCH");
+                return "u8";
+            }
             std::string indexType = expression(*node.left);
             if (!isInteger(indexType) && indexType != "<error>")
-                error(*node.left, "индекс массива должен иметь целочисленный тип");
+                error(*node.left, "индекс массива должен иметь целочисленный тип", "E_SEMANTIC_TYPE_MISMATCH");
             if (symbol->type.rfind("array<", 0) == 0)
                 return symbol->type.substr(6, symbol->type.size() - 7);
             if (symbol->type == "ptr") return "i32";
             error(node, "значение '" + node.varName + "' не является массивом");
             return "<error>";
+        }
+        case NODE_STR_LEN: {
+            const Symbol* symbol = lookup(node.varName);
+            if (!symbol) {
+                error(node, "неизвестная строка '" + node.varName + "'");
+                return "<error>";
+            }
+            if (symbol->type != "str") {
+                error(node, "оператор .len доступен только для строк, получен '" + typeName(symbol->type) + "'");
+                return "<error>";
+            }
+            return "i32";
+        }
+        case NODE_STR_INDEX: {
+            const Symbol* symbol = lookup(node.varName);
+            if (!symbol) {
+                error(node, "неизвестная строка '" + node.varName + "'");
+                return "<error>";
+            }
+            if (symbol->type != "str") {
+                error(node, "индексация строки требует тип str, получен '" + typeName(symbol->type) + "'");
+                return "<error>";
+            }
+            std::string indexType = expression(*node.left);
+            if (!isInteger(indexType) && indexType != "<error>")
+                error(*node.left, "индекс строки должен иметь целочисленный тип", "E_SEMANTIC_TYPE_MISMATCH");
+            return "u8";
         }
         case NODE_CAST: {
             std::string target = normalize(node.varType);
@@ -274,7 +351,7 @@ private:
             else if (node.left->type == NODE_NUMBER &&
                      node.left->value.find_first_of(".eE") == std::string::npos &&
                      isInteger(target) && !literalFits(target, node.left->value))
-                error(node, "числовой литерал вне диапазона типа '" + typeName(target) + "'");
+                error(node, "числовой литерал вне диапазона типа '" + typeName(target) + "'", "E_SEMANTIC_INT_RANGE");
             return target;
         }
         case NODE_ADDR: {
@@ -302,7 +379,7 @@ private:
             if (!knownType(element)) error(node, "неизвестный тип элемента массива '" + node.varType + "'");
             std::string sizeType = expression(*node.left);
             if (!isInteger(sizeType) && sizeType != "<error>")
-                error(*node.left, "размер массива должен быть целым числом");
+                error(*node.left, "размер массива должен быть целым числом", "E_SEMANTIC_TYPE_MISMATCH");
             return "array<" + element + ">";
         }
         case NODE_INPUT:
@@ -310,11 +387,11 @@ private:
         case NODE_FILE_OPEN: {
             const std::string pathType = node.left ? expression(*node.left) : "<error>";
             if (pathType != "str" && pathType != "<error>")
-                error(node, "имя файла должно иметь тип str");
+                error(node, "имя файла должно иметь тип str", "E_SEMANTIC_TYPE_MISMATCH");
             if (node.right) {
                 const std::string modeType = expression(*node.right);
                 if (modeType != "str" && modeType != "<error>")
-                    error(*node.right, "режим открытия файла должен иметь тип str");
+                    error(*node.right, "режим открытия файла должен иметь тип str", "E_SEMANTIC_TYPE_MISMATCH");
             }
             return "file";
         }
@@ -324,7 +401,7 @@ private:
         case NODE_TERNARY: {
             const std::string conditionType = expression(*node.left);
             if (conditionType != "bool" && !isInteger(conditionType) && conditionType != "<error>")
-                error(*node.left, "условие тернарного оператора должно иметь тип bool или integer");
+                error(*node.left, "условие тернарного оператора должно иметь тип bool или integer", "E_SEMANTIC_TYPE_MISMATCH");
             const std::string trueType = expression(*node.right);
             const std::string falseType = expression(*node.extra);
             if (trueType == falseType) return trueType;
@@ -339,7 +416,7 @@ private:
         case NODE_FUNC_CALL:
             return call(node);
         default:
-            error(node, "внутренняя ошибка проверки типов: выражение не поддерживается");
+            error(node, "внутренняя ошибка проверки типов: выражение не поддерживается", "E_SEMANTIC_INTERNAL");
             return "<error>";
         }
     }
@@ -362,13 +439,13 @@ private:
         if (node.op == "!") {
             if (left == "<error>") return "<error>";
             if (left != "bool" && !isInteger(left))
-                error(node, "оператор ! ожидает bool или целое число");
+                error(node, "оператор ! ожидает bool или целое число", "E_SEMANTIC_TYPE_MISMATCH");
             return "bool";
         }
         if (node.op == "~") {
             if (left == "<error>") return "<error>";
             if (!isInteger(left)) {
-                error(node, "побитовая инверсия требует целочисленный операнд");
+                error(node, "побитовая инверсия требует целочисленный операнд", "E_SEMANTIC_TYPE_MISMATCH");
                 return "<error>";
             }
             return left;
@@ -383,11 +460,14 @@ private:
         else if (!narrowUnsignedPromotion && node.right && fitsNumericLiteral(*node.right, left))
             right = left;
         if (left == "<error>" || right == "<error>") return "<error>";
+        if (node.op == "+" && left == "str" && right == "str") return "str";
         if (node.op == "//") {
             if (!isInteger(left) || !isInteger(right)) {
-                error(node, "оператор // требует целочисленные операнды");
+                error(node, "оператор // требует целочисленные операнды", "E_SEMANTIC_TYPE_MISMATCH");
                 return "<error>";
             }
+            if (node.right->type == NODE_NUMBER && node.right->value == "0")
+                warning(*node.right, "целочисленное деление на ноль");
             if (left == "i64" || left == "u64" || right == "i64" || right == "u64")
                 return left[0] == 'u' && right[0] == 'u' ? "u64" : "i64";
             if (left == "u32" || right == "u32") return "u32";
@@ -395,11 +475,11 @@ private:
         }
         if (node.op == "**") {
             if (!isInteger(left) && left != "f32" && left != "f64") {
-                error(node, "оператор ** требует числовые операнды");
+                error(node, "оператор ** требует числовые операнды", "E_SEMANTIC_TYPE_MISMATCH");
                 return "<error>";
             }
             if (!isInteger(right) && right != "f32" && right != "f64") {
-                error(node, "оператор ** требует числовые операнды");
+                error(node, "оператор ** требует числовые операнды", "E_SEMANTIC_TYPE_MISMATCH");
                 return "<error>";
             }
             if (left == "f64" || right == "f64" || left == "f32" || right == "f32")
@@ -411,7 +491,7 @@ private:
         if (node.op == "&" || node.op == "|" || node.op == "^" ||
             node.op == "<<" || node.op == ">>") {
             if (!isInteger(left) || !isInteger(right)) {
-                error(node, "побитовые операторы требуют целочисленные операнды");
+                error(node, "побитовые операторы требуют целочисленные операнды", "E_SEMANTIC_TYPE_MISMATCH");
                 return "<error>";
             }
             if ((node.op == "<<" || node.op == ">>") && node.right->type == NODE_NUMBER) {
@@ -419,7 +499,7 @@ private:
                     const long long shift = std::stoll(node.right->value);
                     const unsigned width = static_cast<unsigned>(std::stoi(left.substr(1)));
                     if (shift < 0 || static_cast<unsigned long long>(shift) >= width) {
-                        error(*node.right, "счётчик сдвига должен быть меньше ширины левого операнда");
+                        error(*node.right, "счётчик сдвига должен быть меньше ширины левого операнда", "E_SEMANTIC_SHIFT_RANGE");
                         return "<error>";
                     }
                 } catch (...) {}
@@ -438,7 +518,7 @@ private:
             const bool leftUnsigned = left[0] == 'u';
             const bool rightUnsigned = right[0] == 'u';
             if (leftUnsigned != rightUnsigned) {
-                error(node, "нельзя сравнивать signed- и unsigned-типы без явного преобразования");
+                error(node, "нельзя сравнивать signed- и unsigned-типы без явного преобразования", "E_SEMANTIC_SIGNEDNESS");
                 return "<error>";
             }
         }
@@ -454,7 +534,7 @@ private:
                 const unsigned signedBits = static_cast<unsigned>(std::stoi(signedType.substr(1)));
                 if (std::max(unsignedBits, signedBits) < 32) return "i32";
                 if (signedBits > unsignedBits) return signedType;
-                error(node, "нельзя смешивать signed- и unsigned-типы этой ширины без явного преобразования");
+                error(node, "нельзя смешивать signed- и unsigned-типы этой ширины без явного преобразования", "E_SEMANTIC_SIGNEDNESS");
                 return "<error>";
             }
         }
@@ -462,12 +542,17 @@ private:
         const bool comparison = node.op == ">" || node.op == "<" || node.op == ">=" ||
             node.op == "<=" || node.op == "==" || node.op == "!=";
         if (comparison) {
+            if (left == right && structs_.count(left) &&
+                (node.op == "==" || node.op == "!=")) {
+                // Struct equality: same struct type, byte-wise comparison.
+                return "bool";
+            }
             if (!numeric.count(left) || !numeric.count(right)) {
-                error(node, "оператор сравнения принимает только числа");
+                error(node, "оператор сравнения принимает только числа", "E_SEMANTIC_TYPE_MISMATCH");
                 return "<error>";
             }
             if (isInteger(left) && isInteger(right) && left[0] != right[0]) {
-                error(node, "нельзя сравнивать signed- и unsigned-типы без явного преобразования");
+                error(node, "нельзя сравнивать signed- и unsigned-типы без явного преобразования", "E_SEMANTIC_SIGNEDNESS");
                 return "<error>";
             }
             return "bool";
@@ -476,6 +561,9 @@ private:
             error(node, "арифметический оператор '" + node.op + "' требует числовые операнды");
             return "<error>";
         }
+        if ((node.op == "/" || node.op == "%") &&
+            node.right->type == NODE_NUMBER && node.right->value == "0")
+            warning(*node.right, "целочисленное деление на ноль");
         if (left == "f64" || right == "f64") return "f64";
         if (left == "f32" || right == "f32") return "f32";
         if (left == "u64" || right == "u64") return "u64";
@@ -542,32 +630,69 @@ private:
             if (!argumentTypes.empty()) return argumentTypes[0];
             return "i32";
         }
-        auto function = functions_.find(node.varName);
-        if (function == functions_.end()) {
+        std::vector<std::string> callArgTypes;
+        for (const Node& arg : node.args) callArgTypes.push_back(expression(arg));
+
+        // Find matching overload by checking compatibility of declared parameter types
+        // with argument expression types (allowing implicit conversions). Prefer
+        // the overload with the most exact parameter matches (fewest conversions).
+        std::string bestMangled;
+        const Function* bestFn = nullptr;
+        int bestScore = -1;
+        for (const auto& [mangled, fn] : functions_) {
+            if (fn.parameters.size() != callArgTypes.size()) continue;
+            // Check if base name matches (handle overloads with different parameter counts)
+            if (mangled.rfind(node.varName + "__", 0) != 0) continue;
+
+            bool match = true;
+            int score = 0;
+            for (size_t i = 0; i < callArgTypes.size(); ++i) {
+                const std::string& paramType = fn.parameters[i];
+                const std::string& argType = callArgTypes[i];
+                if (argType == "<error>") continue;
+                if (paramType == argType) { score += 2; continue; }
+                // Allow numeric promotion or literal fitting
+                if (compatible(paramType, argType) ||
+                    (node.args[i].type == NODE_NUMBER && literalFits(paramType, node.args[i].value))) {
+                    score += 1;
+                    continue;
+                }
+                match = false;
+                break;
+            }
+            if (match && score > bestScore) {
+                bestScore = score;
+                bestMangled = mangled;
+                bestFn = &fn;
+            }
+        }
+
+        if (!bestFn) {
             error(node, "неизвестная функция '" + node.varName + "'");
-            for (const Node& arg : node.args) expression(arg);
             return "<error>";
         }
-        if (node.args.size() != function->second.parameters.size()) {
+        node.mangledName = bestMangled;
+        const Function& function = *bestFn;
+        if (node.args.size() != function.parameters.size()) {
             error(node, "функция '" + node.varName + "' ожидает " +
-                  std::to_string(function->second.parameters.size()) + " аргументов, получено " +
+                  std::to_string(function.parameters.size()) + " аргументов, получено " +
                   std::to_string(node.args.size()));
         }
-        size_t count = std::min(node.args.size(), function->second.parameters.size());
+        size_t count = std::min(node.args.size(), function.parameters.size());
         for (size_t i = 0; i < node.args.size(); ++i) {
-            std::string actual = expression(node.args[i]);
+            const std::string& actual = callArgTypes[i];
             const std::string expectedType = i < count
-                ? normalize(function->second.parameters[i]) : std::string();
+                ? normalize(function.parameters[i]) : std::string();
             const bool fittingLiteral = i < count && node.args[i].type == NODE_NUMBER &&
                 literalFits(expectedType, node.args[i].value);
             if (i < count && actual != "<error>" &&
-                !compatible(function->second.parameters[i], actual) && !fittingLiteral) {
+                !compatible(function.parameters[i], actual) && !fittingLiteral) {
                 error(node.args[i], "аргумент " + std::to_string(i + 1) + " функции '" +
-                      node.varName + "': ожидался '" + typeName(function->second.parameters[i]) +
-                      "', получен '" + typeName(actual) + "'");
+                      node.varName + "': ожидается '" + typeName(function.parameters[i]) +
+                      "', получено '" + typeName(actual) + "'");
             }
         }
-        return function->second.returnType;
+        return function.returnType;
     }
 
     void checkStruct(const Node& node) {
@@ -586,7 +711,7 @@ private:
             }
             if (field.left->type == NODE_NUMBER &&
                 !literalFits(normalize(field.varType), field.left->value))
-                error(field, "литерал поля вне диапазона типа '" + typeName(normalize(field.varType)) + "'");
+                error(field, "литерал поля вне диапазона типа '" + typeName(normalize(field.varType)) + "'", "E_SEMANTIC_INT_RANGE");
         }
     }
 
@@ -596,6 +721,15 @@ private:
         if (last.type == NODE_RETURN) return true;
         if (last.type == NODE_IF && !last.elseChildren.empty())
             return alwaysReturns(last.children) && alwaysReturns(last.elseChildren);
+        if (last.type == NODE_SWITCH) {
+            bool hasDefault = false;
+            bool allReturn = true;
+            for (const Node& c : last.children) {
+                if (!c.left) hasDefault = true;
+                if (!alwaysReturns(c.children)) allReturn = false;
+            }
+            return hasDefault && allReturn;
+        }
         return false;
     }
 
@@ -604,6 +738,15 @@ private:
             node.type == NODE_CONTINUE) return true;
         if (node.type == NODE_IF && !node.elseChildren.empty())
             return alwaysTerminates(node.children) && alwaysTerminates(node.elseChildren);
+        if (node.type == NODE_SWITCH) {
+            bool hasDefault = false;
+            bool allTerm = true;
+            for (const Node& c : node.children) {
+                if (!c.left) hasDefault = true;
+                if (!alwaysTerminates(c.children)) allTerm = false;
+            }
+            return hasDefault && allTerm;
+        }
         return false;
     }
 
@@ -615,7 +758,7 @@ private:
         bool terminated = false;
         for (const Node& statement : statements) {
             if (terminated)
-                error(statement, "недостижимый код после return/break/continue");
+                error(statement, "недостижимый код после return/break/continue", "E_SEMANTIC_UNREACHABLE");
             checkNode(statement);
             terminated = terminated || alwaysTerminates(statement);
         }
@@ -633,7 +776,7 @@ private:
         }
         checkStatements(node.children);
         if (normalize(node.varType) != "void" && !alwaysReturns(node.children))
-            error(node, "функция должна возвращать значение на всех путях выполнения");
+            error(node, "функция должна возвращать значение на всех путях выполнения", "E_SEMANTIC_MISSING_RETURN");
         returnTypes_.pop_back();
         scopes_.pop_back();
     }
@@ -655,7 +798,7 @@ private:
                 (isInteger(effectiveType) || effectiveType == "f32" || effectiveType == "f64");
             const bool literalInRange = numericLiteral && literalFits(effectiveType, node.left->value);
             if (numericLiteral && !literalInRange) {
-                error(*node.left, "числовой литерал вне диапазона типа '" + typeName(effectiveType) + "'");
+                error(*node.left, "числовой литерал вне диапазона типа '" + typeName(effectiveType) + "'", "E_SEMANTIC_INT_RANGE");
             } else if (!inferType && actual != "<error>" && !compatible(node.varType, actual) && !literalInRange) {
                 error(node, "переменная '" + node.varName + "' имеет тип '" +
                       typeName(effectiveType) + "', но инициализируется значением типа '"+
@@ -707,7 +850,7 @@ private:
                               typeName(normalize(field.varType)) + "', получен '" + typeName(actual) + "'");
                     if (value->left->type == NODE_NUMBER &&
                         !literalFits(normalize(field.varType), value->left->value))
-                        error(*value, "литерал поля вне диапазона типа '" + typeName(normalize(field.varType)) + "'");
+                        error(*value, "литерал поля вне диапазона типа '" + typeName(normalize(field.varType)) + "'", "E_SEMANTIC_INT_RANGE");
                 }
                 if (!value && named.count(field.varName)) named.erase(field.varName);
             }
@@ -835,7 +978,7 @@ private:
                 isInteger(expectedReturnType) &&
                 literalFits(expectedReturnType, node.left->value);
             if (node.left->type == NODE_NUMBER && isInteger(expectedReturnType) && !fittingLiteral)
-                error(node, "числовой литерал возврата вне диапазона типа '" + typeName(expectedReturnType) + "'");
+                error(node, "числовой литерал возврата вне диапазона типа '" + typeName(expectedReturnType) + "'", "E_SEMANTIC_INT_RANGE");
             else if (actual != "<error>" && !compatible(expectedReturnType, actual) && !fittingLiteral)
                 error(node, "функция должна вернуть '" + typeName(returnTypes_.back()) +
                       "', получено '" + typeName(actual) + "'");
@@ -920,8 +1063,33 @@ private:
         }
         case NODE_BREAK:
         case NODE_CONTINUE:
-            if (loopDepth_ == 0) error(node, "оператор цикла находится вне цикла");
+            if (loopDepth_ == 0 && switchDepth_ == 0)
+                error(node, "оператор цикла находится вне цикла");
             break;
+        case NODE_SWITCH: {
+            std::string exprType = expression(*node.left);
+            if (!isInteger(exprType) && exprType != "char" && exprType != "<error>")
+                error(*node.left, "выражение switch должно быть целочисленным или char");
+            ++switchDepth_;
+            scopes_.emplace_back();
+            for (const Node& caseNode : node.children) {
+                if (caseNode.left) {
+                    std::string caseType = expression(*caseNode.left);
+                    if (caseType != "<error>" && caseType != exprType)
+                        error(*caseNode.left, "тип case не соответствует типу switch");
+                }
+                checkStatements(caseNode.children);
+            }
+            scopes_.pop_back();
+            --switchDepth_;
+            break;
+        }
+        case NODE_DEFER: {
+            scopes_.emplace_back();
+            checkStatements(node.children);
+            scopes_.pop_back();
+            break;
+        }
         case NODE_FUNC_DEF:
             error(node, "вложенные определения функций пока не поддерживаются");
             break;

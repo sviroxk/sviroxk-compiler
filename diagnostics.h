@@ -24,10 +24,13 @@ inline void registerSource(const std::string& filename, const std::string& text)
 }
 
 inline void reportDiagnostic(const std::string& filename, int line, int column,
-                             const std::string& category, const std::string& message) {
+                             const std::string& category, const std::string& message,
+                             const std::string& code = "") {
     const std::string displayName = filename.empty() ? "<source>" : filename;
+    std::string level = (category == "warning") ? "warning" : "error";
+    std::string codePart = code.empty() ? "" : ("[" + code + "]");
     std::cerr << displayName << ':' << line << ':' << column
-              << ": error[" << category << "]: " << message << '\n';
+              << ": " << level << "[" << category << "]" << codePart << ": " << message << '\n';
 
     auto source = sourceFiles().find(filename);
     if (source == sourceFiles().end() || line < 1 ||

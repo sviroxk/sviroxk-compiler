@@ -40,6 +40,8 @@ enum NodeType {
     NODE_INPUT,
     NODE_STRLEN,
     NODE_STRCAT,
+    NODE_STR_INDEX,
+    NODE_STR_LEN,
     NODE_FILE_WRITE,
     NODE_FILE_READ,
     NODE_FILE_CLOSE,
@@ -50,6 +52,9 @@ enum NodeType {
     NODE_TERNARY,
     NODE_FOR_EACH,
     NODE_STRUCT_FIELD_ASSIGN,
+    NODE_SWITCH,
+    NODE_SWITCH_CASE,
+    NODE_DEFER,
 };
 
 struct Node {
@@ -57,6 +62,7 @@ struct Node {
     std::string value;
     mutable std::string varType;
     std::string varName;
+    mutable std::string mangledName;
     bool isConst = false;
     bool inclusiveRange = false;
     std::string op;
@@ -76,5 +82,11 @@ struct Node {
 Node parse(const std::vector<Token>& tokens);
 bool parseHadErrors();
 bool checkSemantics(const Node& program, const std::string& filename);
+
+// Mangle a function name from its parameter types. Used by both the semantic
+// checker (to detect duplicate overloads) and codegen (to emit the correct
+// LLVM symbol). Defined in semantic.cpp.
+std::string mangleName(const std::string& name,
+                       const std::vector<std::string>& parameters);
 
 #endif
