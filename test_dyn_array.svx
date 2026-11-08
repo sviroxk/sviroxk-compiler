@@ -1,0 +1,14 @@
+// Test dynamic array with length/capacity
+ptr values = nw rox[5];
+values[0] = 10;
+values[1] = 20;
+values[2] = 30;
+print(values[0]);  // 10
+print(values[1]);  // 20
+print(values[2]);  // 30
+
+// Test bounds checking - should fail at runtime
+// values[5] = 40;  // out of bounds
+// print(values[5]);
+
+del values;

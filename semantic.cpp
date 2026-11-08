@@ -19,6 +19,12 @@ struct Symbol {
     int line;
     int column;
     bool isConst = false;
+    bool isInitialized = false;  // definite assignment tracking
+    // For dynamic arrays: track length and capacity
+    bool isDynArray = false;
+    std::string dynArrayElementType;
+    int dynArrayLength = 0;   // current length (for bounds checking)
+    int dynArrayCapacity = 0; // allocated capacity
 };
 
 struct Function {
@@ -75,7 +81,7 @@ public:
 
 private:
     std::string filename_;
-    unsigned errors_ = 0;
+    mutable unsigned errors_ = 0;
     std::vector<std::map<std::string, Symbol>> scopes_;
     std::map<std::string, Function> functions_;
     std::map<std::string, const Node*> structs_;
@@ -141,7 +147,7 @@ private:
         return false;
     }
 
-    void error(const Node& node, const std::string& message) {
+    void error(const Node& node, const std::string& message) const {
         ++errors_;
         sc::reportDiagnostic(node.file.empty() ? filename_ : node.file,
                              node.line, node.column, "semantic", message);
@@ -179,13 +185,16 @@ private:
     }
 
     bool declare(const std::string& name, const std::string& type,
-                 const Node& node, bool isConst = false) {
+                 const Node& node, bool isConst = false, bool isInitialized = false,
+                 bool isDynArray = false, const std::string& dynArrayElementType = "") {
         auto& scope = scopes_.back();
+        // Allow shadowing (variable in inner scope with same name as outer scope)
+        // This is a common pattern and not an error
         if (scope.count(name)) {
             error(node, "повторное объявление '" + name + "' в этой области видимости");
             return false;
         }
-        scope[name] = {normalize(type), node.line, node.column, isConst};
+        scope[name] = {normalize(type), node.line, node.column, isConst, isInitialized, isDynArray, dynArrayElementType};
         return true;
     }
 
@@ -195,6 +204,25 @@ private:
             if (found != it->end()) return &found->second;
         }
         return nullptr;
+    }
+
+    // Check definite assignment - error if variable used before initialization
+    void checkInitialized(const Node& node, const std::string& name) const {
+        const Symbol* symbol = lookup(name);
+        if (symbol && !symbol->isInitialized) {
+            error(node, "переменная '" + name + "' используется до инициализации");
+        }
+    }
+
+    // Mark variable as initialized (after successful assignment/declaration with initializer)
+    void markInitialized(const std::string& name) {
+        for (auto& scope : scopes_) {
+            auto it = scope.find(name);
+            if (it != scope.end()) {
+                it->second.isInitialized = true;
+                break;
+            }
+        }
     }
 
     std::string expression(const Node& node) {
@@ -229,6 +257,7 @@ private:
                 error(node, "неизвестное имя '" + node.value + "'");
                 return "<error>";
             }
+            checkInitialized(node, node.value);
             return symbol->type;
         }
         case NODE_STRUCT_FIELD: {
@@ -258,6 +287,8 @@ private:
                 error(*node.left, "индекс массива должен иметь целочисленный тип");
             if (symbol->type.rfind("array<", 0) == 0)
                 return symbol->type.substr(6, symbol->type.size() - 7);
+            if (symbol->isDynArray)
+                return symbol->dynArrayElementType.empty() ? "i32" : symbol->dynArrayElementType;
             if (symbol->type == "ptr") return "i32";
             error(node, "значение '" + node.varName + "' не является массивом");
             return "<error>";
@@ -303,7 +334,9 @@ private:
             std::string sizeType = expression(*node.left);
             if (!isInteger(sizeType) && sizeType != "<error>")
                 error(*node.left, "размер массива должен быть целым числом");
-            return "array<" + element + ">";
+            // Dynamic arrays are represented at runtime as a heap data pointer (ptr).
+            // Length/capacity metadata is tracked on the owning Symbol.
+            return "ptr";
         }
         case NODE_INPUT:
             return normalize(node.varType) == "str" ? "str" : "i32";
@@ -629,7 +662,7 @@ private:
             std::string type = param.substr(0, separator);
             std::string name = separator == std::string::npos ? "" : param.substr(separator + 1);
             if (!knownType(type)) error(node, "неизвестный тип параметра '" + type + "'");
-            declare(name, type, node);
+            declare(name, type, node, false, true);
         }
         checkStatements(node.children);
         if (normalize(node.varType) != "void" && !alwaysReturns(node.children))
@@ -661,7 +694,22 @@ private:
                       typeName(effectiveType) + "', но инициализируется значением типа '"+
                       typeName(actual) + "'");
             }
-            declare(node.varName, node.varType, node, node.isConst);
+            // Variable with initializer is considered initialized
+            bool dynArrayInit = false;
+            std::string dynElementType;
+            int dynCapacity = 0;
+            if (node.left->type == NODE_DYN_ARRAY) {
+                dynArrayInit = true;
+                dynElementType = normalize(node.left->varType);
+                if (node.left->left && node.left->left->type == NODE_NUMBER) {
+                    try { dynCapacity = static_cast<int>(std::stoll(node.left->left->value)); }
+                    catch (...) {}
+                }
+            }
+            declare(node.varName, node.varType, node, node.isConst, actual != "<error>",
+                    dynArrayInit, dynElementType);
+            if (dynArrayInit && scopes_.back().count(node.varName))
+                scopes_.back()[node.varName].dynArrayCapacity = dynCapacity;
             break;
         }
         case NODE_ARRAY_DECL: {
@@ -678,7 +726,7 @@ private:
                 if (actual != "<error>" && !compatible(element, actual))
                     error(value, "элемент массива должен иметь тип '" + typeName(element) + "'");
             }
-            declare(node.varName, "array<" + element + ">", node);
+            declare(node.varName, "array<" + element + ">", node, false, true);
             break;
         }
         case NODE_STRUCT_INSTANCE: {
@@ -759,6 +807,8 @@ private:
             }
             if (actual != "<error>" && !compatible(expected, actual) && !literalArithmeticFits)
                 error(node, "нельзя присвоить '" + typeName(actual) + "' значению типа '" + typeName(expected) + "'");
+            else
+                markInitialized(node.varName);
             break;
         }
         case NODE_STRUCT_FIELD_ASSIGN: {
@@ -802,6 +852,10 @@ private:
             if (array && array->type.rfind("array<", 0) == 0) {
                 std::string element = array->type.substr(6, array->type.size() - 7);
                 if (value != "<error>" && !compatible(element, value)) error(node, "элемент массива ожидает тип '" + typeName(element) + "'");
+            } else if (array && array->isDynArray) {
+                const std::string& element = array->dynArrayElementType;
+                if (value != "<error>" && !element.empty() && !compatible(element, value))
+                    error(node, "элемент массива ожидает тип '" + typeName(element) + "'");
             } else if (array && array->type != "ptr") error(node, "значение не является массивом");
             break;
         }
@@ -888,7 +942,7 @@ private:
             }
             const std::string elementType = collectionType.substr(6, collectionType.size() - 7);
             scopes_.emplace_back();
-            declare(node.varName, elementType, node);
+            declare(node.varName, elementType, node, false, true);
             ++loopDepth_;
             checkStatements(node.children);
             --loopDepth_;
@@ -903,7 +957,7 @@ private:
             if (!isInteger(endType) && endType != "<error>")
                 error(*node.right, "граница for должна иметь целочисленный тип");
             scopes_.emplace_back();
-            declare(node.varName, startType == "<error>" ? "i32" : startType, node);
+            declare(node.varName, startType == "<error>" ? "i32" : startType, node, false, true);
             ++loopDepth_;
             checkStatements(node.children);
             --loopDepth_;
@@ -931,7 +985,8 @@ private:
         case NODE_DELETE: {
             const Symbol* symbol = lookup(node.varName);
             if (!symbol) error(node, "неизвестное имя '" + node.varName + "'");
-            else if (symbol->type.rfind("array<", 0) != 0 && symbol->type != "ptr") error(node, "освободить можно только динамический массив или ptr");
+            else if (!symbol->isDynArray && symbol->type.rfind("array<", 0) != 0 && symbol->type != "ptr")
+                error(node, "освободить можно только динамический массив или ptr");
             break;
         }
         case NODE_FILE_WRITE:

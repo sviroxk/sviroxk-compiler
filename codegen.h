@@ -36,6 +36,8 @@ public:
     std::map<std::string, llvm::AllocaInst*> arrays;
     std::map<std::string, unsigned> arrayLengths;
     std::map<std::string, llvm::Type*> arrayElementTypes;
+    std::map<std::string, llvm::AllocaInst*> dynArrays;
+    std::map<std::string, llvm::Type*> dynArrayElementTypes;
     std::map<std::string, llvm::Function*> funcs;
     std::map<std::string, std::vector<std::string>> funcParamTypes;
     std::map<std::string, std::string> funcReturnTypes;
@@ -52,6 +54,7 @@ public:
     llvm::BasicBlock* continueBlock = nullptr;
     llvm::Function* putsFunc = nullptr;
     llvm::Function* printfFunc = nullptr;
+    llvm::Function* abortFunc = nullptr;
 
     CodeGen() : builder(context), module("SC", context) {}
 
@@ -60,7 +63,8 @@ public:
     llvm::Type* svType(const std::string& name);
     llvm::Value* castTo(llvm::Value* val, llvm::Type* ty, bool sourceUnsigned = false);
     llvm::Value* toBool(llvm::Value* val);
-    void emitArrayBoundsCheck(llvm::Value* index, unsigned length, const Node& location);
+    void emitArrayBoundsCheck(llvm::Value* index, llvm::Value* length, const Node& location);
+    llvm::StructType* dynArrayType();
     bool isUnsignedExpr(const Node& node) const;
     unsigned integerWidth(const Node& node) const;
     llvm::Value* genExpr(const Node& node);

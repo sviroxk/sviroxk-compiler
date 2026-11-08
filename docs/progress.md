@@ -69,3 +69,24 @@
 - При очередной сборке выяснилось, что `build.sh` создаёт `sc` без executable permission; sanitizer runner спотыкался на status 126. Исправлено добавлением chmod на бинарник.
 - Подтверждены обычная и ASan/UBSan/LeakSanitizer сборки и тесты после исправления тестовой длины expected string.
 - Дальше: зафиксировать исправленный rep и build script; затем продолжить P0 audit, не теряя пользовательские изменения.
+
+## Цикл 8 — control-flow анализ: definite assignment и shadowing
+- В `semantic.cpp::declare()` добавлен флаг `isInitialized` (по умолчанию false).
+- `checkFunction()` помечает параметры `isInitialized = true` — параметры всегда инициализированы при входе.
+- `NODE_FOR_EACH` и `NODE_FOR_RANGE` помечают итерационные переменные как инициализированные.
+- `NODE_ARRAY_DECL` помечает массив как инициализированный (элементы заданы при создании).
+- Удалена ошибка на затенение — перенесена в policy: inner scope может затенять outer scope без ошибки (только дубликат в том же scope остаётся ошибкой).
+- `checkInitialized()` вызывается в `NODE_IDENTIFIER` при чтении переменной.
+- `markInitialized()` вызывается при успешном присваивании.
+- `./test.sh`: все 68 примеров + CLI + 28 негативных fixture + импорт/циклы — зелёно.
+- Коммит `9302a23`, ветка `fix/definite-assignment` (main защищён, push идёт в ветку).
+
+## Цикл 9 — динамические массивы: length/capacity и runtime bounds check
+- Добавлен в `Symbol` учёт `isDynArray`, `dynArrayElementType`, `dynArrayLength`, `dynArrayCapacity`.
+- `NODE_DYN_ARRAY` (`nw T[n]`) в семантике возвращает `ptr`; дескриптор `{ptr data; i64 length; i64 capacity}` выделяется через `malloc` в codegen.
+- `emitArrayBoundsCheck` переписан на динамическую длину (i64), статические массивы передают `getInt64(n)`.
+- Добавлены runtime bounds checks для динамического array access/assign (negative и `>= length` → diagnostic + exit).
+- OOM при `malloc` ведёт к `abort()` (допуск: не Result/diagnostic).
+- `del` освобождает data pointer через `free`.
+- `./test.sh`: все 68 примеров + CLI + 28 негативных fixture + импорт/циклы — зелёно. `examples/b2_dynamic_array.svx` → `15`, `test_dyn_array.svx` → `10 20 30`.
+- Коммит в ветку `fix/dynamic-array-semantics`.

@@ -115,7 +115,7 @@ unsigned CodeGen::integerWidth(const Node& node) const {
     return 32;
 }
 
-void CodeGen::emitArrayBoundsCheck(llvm::Value* index, unsigned length,
+void CodeGen::emitArrayBoundsCheck(llvm::Value* index, llvm::Value* length,
                                    const Node& location) {
     if (index->getType()->isIntegerTy(1))
         index = builder.CreateZExt(index, builder.getInt32Ty());
@@ -123,10 +123,14 @@ void CodeGen::emitArrayBoundsCheck(llvm::Value* index, unsigned length,
         index = isUnsignedExpr(location) ? builder.CreateZExt(index, builder.getInt64Ty())
                                          : builder.CreateSExt(index, builder.getInt64Ty());
     }
+    if (length->getType()->getIntegerBitWidth() < 64) {
+        length = isUnsignedExpr(location) ? builder.CreateZExt(length, builder.getInt64Ty())
+                                           : builder.CreateSExt(length, builder.getInt64Ty());
+    }
     llvm::Value* nonNegative = isUnsignedExpr(location)
         ? builder.getTrue()
         : builder.CreateICmpSGE(index, builder.getInt64(0));
-    llvm::Value* belowLength = builder.CreateICmpULT(index, builder.getInt64(length));
+    llvm::Value* belowLength = builder.CreateICmpULT(index, length);
     llvm::Value* inBounds = builder.CreateAnd(nonNegative, belowLength);
     llvm::Function* function = builder.GetInsertBlock()->getParent();
     llvm::BasicBlock* valid = llvm::BasicBlock::Create(context, "index_valid", function);
@@ -145,6 +149,18 @@ void CodeGen::emitArrayBoundsCheck(llvm::Value* index, unsigned length,
     builder.CreateCall(exitF, {builder.getInt32(1)});
     builder.CreateUnreachable();
     builder.SetInsertPoint(valid);
+}
+
+llvm::StructType* CodeGen::dynArrayType() {
+    llvm::StructType* existing = llvm::StructType::getTypeByName(context, "sc.dyn_array");
+    if (existing) return existing;
+    llvm::StructType* type = llvm::StructType::create(context, "sc.dyn_array");
+    type->setBody({
+        builder.getPtrTy(),        // data pointer
+        builder.getInt64Ty(),      // length
+        builder.getInt64Ty(),      // capacity
+    }, false);
+    return type;
 }
 
 bool CodeGen::isUnsignedExpr(const Node& node) const {
@@ -220,6 +236,20 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         codegenFailure(node, "неизвестная переменная '" + node.value + "'");
     }
     if (node.type == NODE_ARRAY_ACCESS) {
+        if (dynArrays.count(node.varName)) {
+            llvm::AllocaInst* desc = dynArrays[node.varName];
+            llvm::StructType* descType = dynArrayType();
+            llvm::Value* dataPtr = builder.CreateLoad(builder.getPtrTy(),
+                builder.CreateStructGEP(descType, desc, 0));
+            llvm::Value* length = builder.CreateLoad(builder.getInt64Ty(),
+                builder.CreateStructGEP(descType, desc, 1));
+            llvm::Value* idx = genExpr(*node.left);
+            emitArrayBoundsCheck(idx, length, node);
+            llvm::Type* elementType = dynArrayElementTypes[node.varName];
+            if (!elementType) elementType = builder.getInt32Ty();
+            llvm::Value* gep = builder.CreateGEP(elementType, dataPtr, {idx});
+            return builder.CreateLoad(elementType, gep);
+        }
         if (vars.count(node.varName) &&
             vars[node.varName]->getAllocatedType()->isPointerTy()) {
             llvm::Value* ptr = builder.CreateLoad(
@@ -236,7 +266,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             if (!elementType) elementType = builder.getInt32Ty();
             llvm::ArrayType* at = llvm::ArrayType::get(elementType, n);
             llvm::Value* idx = genExpr(*node.left);
-            emitArrayBoundsCheck(idx, n, node);
+            emitArrayBoundsCheck(idx, builder.getInt64(n), node);
             llvm::Value* gep = builder.CreateInBoundsGEP(
                 at, arr, {builder.getInt32(0), idx});
             return builder.CreateLoad(elementType, gep);
@@ -853,6 +883,44 @@ void CodeGen::genNode(const Node& node) {
         }
     }
     else if (node.type == NODE_VAR_DECL) {
+        // Dynamic array: allocate a descriptor {ptr data; i64 length; i64 capacity}
+        if (node.left->type == NODE_DYN_ARRAY) {
+            const Node& alloc = *node.left;
+            llvm::Type* elementType = svType(alloc.varType);
+            llvm::Value* size = genExpr(*alloc.left);
+            size = builder.CreateSExt(size, builder.getInt64Ty());
+            llvm::Value* bytes = builder.CreateMul(size,
+                builder.getInt64(elementType->getPrimitiveSizeInBits() / 8));
+            llvm::FunctionType* mallocType =
+                llvm::FunctionType::get(builder.getPtrTy(),
+                    {builder.getInt64Ty()}, false);
+            llvm::Function* mallocF = module.getFunction("malloc");
+            if (!mallocF) mallocF = llvm::Function::Create(mallocType,
+                llvm::Function::ExternalLinkage, "malloc", module);
+            llvm::Value* data = builder.CreateCall(mallocF, {bytes});
+            llvm::Function* function = builder.GetInsertBlock()->getParent();
+            llvm::BasicBlock* trap = llvm::BasicBlock::Create(context, "dyn_oom", function);
+            llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "dyn_alloc", function);
+            builder.CreateCondBr(builder.CreateICmpEQ(
+                data, llvm::ConstantPointerNull::get(builder.getPtrTy())), trap, next);
+            builder.SetInsertPoint(trap);
+            builder.CreateCall(abortFunc, {});
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(next);
+            llvm::StructType* descType = dynArrayType();
+            llvm::AllocaInst* desc = builder.CreateAlloca(descType, nullptr, node.varName);
+            builder.CreateStore(data,
+                builder.CreateStructGEP(descType, desc, 0));
+            builder.CreateStore(size,
+                builder.CreateStructGEP(descType, desc, 1));
+            builder.CreateStore(size,
+                builder.CreateStructGEP(descType, desc, 2));
+            dynArrays[node.varName] = desc;
+            dynArrayElementTypes[node.varName] = elementType;
+            vars[node.varName] = desc;
+            constVars[node.varName] = node.isConst;
+            return;
+        }
         llvm::Value* val = genExpr(*node.left);
         llvm::Type* ty = node.varType.empty()
             ? val->getType() : svType(node.varType);
@@ -894,8 +962,23 @@ void CodeGen::genNode(const Node& node) {
     }
     else if (node.type == NODE_ARRAY_ASSIGN) {
         if (node.left && node.right) {
-            // динамический массив
-            if (vars.count(node.varName) &&
+            // динамический массив с описателем
+            if (dynArrays.count(node.varName)) {
+                llvm::AllocaInst* desc = dynArrays[node.varName];
+                llvm::StructType* descType = dynArrayType();
+                llvm::Value* dataPtr = builder.CreateLoad(builder.getPtrTy(),
+                    builder.CreateStructGEP(descType, desc, 0));
+                llvm::Value* length = builder.CreateLoad(builder.getInt64Ty(),
+                    builder.CreateStructGEP(descType, desc, 1));
+                llvm::Value* idx = genExpr(*node.left);
+                emitArrayBoundsCheck(idx, length, node);
+                llvm::Type* elementType = dynArrayElementTypes[node.varName];
+                if (!elementType) elementType = builder.getInt32Ty();
+                llvm::Value* gep = builder.CreateGEP(elementType, dataPtr, {idx});
+                builder.CreateStore(genExpr(*node.right), gep);
+            }
+            // raw dynamic array (ptr variable)
+            else if (vars.count(node.varName) &&
                 vars[node.varName]->getAllocatedType()->isPointerTy()) {
                 llvm::Value* ptr = builder.CreateLoad(
                     builder.getPtrTy(), vars[node.varName]);
@@ -910,7 +993,7 @@ void CodeGen::genNode(const Node& node) {
                 if (!elementType) elementType = builder.getInt32Ty();
                 llvm::ArrayType* at = llvm::ArrayType::get(elementType, n);
                 llvm::Value* idx = genExpr(*node.left);
-                emitArrayBoundsCheck(idx, n, node);
+                emitArrayBoundsCheck(idx, builder.getInt64(n), node);
                 llvm::Value* gep = builder.CreateInBoundsGEP(
                     at, arr, {builder.getInt32(0), idx});
                 builder.CreateStore(genExpr(*node.right), gep);
@@ -1342,6 +1425,11 @@ void CodeGen::generate(const Node& program) {
             {builder.getPtrTy()}, false);
     putsFunc = llvm::Function::Create(putsType,
         llvm::Function::ExternalLinkage, "puts", module);
+
+    llvm::FunctionType* abortType =
+        llvm::FunctionType::get(builder.getVoidTy(), false);
+    abortFunc = llvm::Function::Create(abortType,
+        llvm::Function::ExternalLinkage, "abort", module);
 
     llvm::FunctionType* printfType =
         llvm::FunctionType::get(builder.getInt32Ty(),
