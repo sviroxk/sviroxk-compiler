@@ -108,3 +108,13 @@
 108	- Исправлено предупреждение `-Wlogical-op-parentheses` в `semantic.cpp::knownType()` — добавлены скобки вокруг `&&`.
 109	- `./test.sh`: все тесты проходят; `CXXFLAGS='-Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer' ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./test.sh`: прошёл (exit=0).
 110	- Stage 2 (единая типовая система) подтверждена как завершённая: 100%.
+
+## Stage 3 — definite assignment для полей структур и элементов массивов
+- `semantic.cpp::NODE_STRUCT_FIELD` и `NODE_STRUCT_FIELD_ASSIGN`: добавлен `checkInitialized()` — доступ/присвоение к полю структуры требует, чтобы сам объект был инициализирован.
+- `semantic.cpp::NODE_ARRAY_ACCESS` и `NODE_ARRAY_ASSIGN`: добавлен `checkInitialized()` для массива + compile-time bounds check для статических массивов с константным целочисленным индексом (`NODE_NUMBER` без varType) — отрицательный и `>= length` → semantic diagnostic.
+- `NODE_ARRAY_DECL`: исправлено — тип символа теперь `sc::Type::arrayTy(element, length)` с реальной длиной (раньше длина не сохранялась, `normalizeName` возвращал length=0).
+- `NODE_STRUCT_INSTANCE`: экземпляры структуры помечаются `isInitialized=true` (поля имеют значения по умолчанию из определения).
+- `test.sh`: runtime-проверки `array-negative-index`/`array-upper-index` заменены на `expect_compile_error` с ожидаемым сообщением "индекс массива выходит за границы"; `missing-expression` — добавлен expected.
+- `./test.sh`: все 68 примеров + CLI + 28 негативных fixture + импорт/циклы — зелёно.
+- `CXXFLAGS='-Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer' ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./test.sh`: прошёл.
+- Коммит `171c14d`. Stage 3 (переменные, константы, выражения, definite assignment) — 100%.
