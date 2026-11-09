@@ -126,9 +126,30 @@ static std::string canonicalType(const std::string& type) {
 Node parseExpr();
 Node parsePrimary();
 Node parseUnary();
+Node parseStructLiteral();
 Node parseMul();
 Node parseAdd();
 std::vector<Node> parseBlock();
+
+Node parseStructLiteral() {
+    Node node; node.type = NODE_STRUCT_LITERAL;
+    expect(LBRACE);
+    while (peek().type != RBRACE && peek().type != END) {
+        Node init;
+        if (isNameToken(peek().type) && peek(1).type == EQUALS) {
+            init.varName = consume().value;
+            consume(); // =
+            init.left = makeNode(parseExpr());
+        } else {
+            init.left = makeNode(parseExpr());
+        }
+        node.children.push_back(init);
+        if (peek().type == COMMA || peek().type == SEMICOLON)
+            consume();
+    }
+    expect(RBRACE);
+    return node;
+}
 
 Node parsePrimary() {
     Node left;
@@ -181,6 +202,10 @@ Node parsePrimary() {
         }
         expect(RPAREN);
         return left;
+    }
+    // Struct literal: { field = value, ... } or { value, ... }
+    if (peek().type == LBRACE) {
+        return parseStructLiteral();
     }
     // vd — ввод с клавиатуры
     if (peek().type == VD) {
@@ -332,6 +357,14 @@ Node parsePrimary() {
                 left.type = NODE_STRUCT_FIELD;
                 left.varName = t.value;
                 left.op = field.value;
+                // Support chained access: a.b.c.d
+                while (peek().type == DOT) {
+                    consume();
+                    Token nextField = consume();
+                    if (nextField.type != IDENTIFIER && !isBuiltinToken(nextField.type))
+                        failAt(nextField, "ожидалось имя поля после '.'");
+                    left.op += "." + nextField.value;
+                }
             }
         } else if (peek().type == LBRACKET) {
             consume();
@@ -1145,7 +1178,7 @@ Node parseOne() {
         while (peek().type != RBRACE && peek().type != END) {
             Node field; field.type = NODE_VAR_DECL;
             Token fieldType = consume();
-            if (!isTypeName(fieldType.value))
+            if (!isTypeName(fieldType.value) && fieldType.type != IDENTIFIER)
                 failAt(fieldType, "неизвестный тип поля '" + fieldType.value + "'");
             field.varType = canonicalType(fieldType.value);
             field.varName = consume().value;

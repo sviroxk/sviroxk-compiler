@@ -253,15 +253,69 @@ private:
                 error(node, "неизвестное имя '" + node.varName + "'");
                 return "<error>";
             }
-            auto structure = structs_.find(object->ty.structName);
-            if (structure == structs_.end()) {
-                error(node, "тип '" + typeName(object->ty.structName) + "' не имеет полей");
-                return "<error>";
+            std::string currentStruct = object->ty.structName;
+            // Split field path on dots and traverse nested structs
+            size_t pos = 0;
+            std::string path = node.op;
+            while (pos < path.size()) {
+                size_t dotPos = path.find('.', pos);
+                std::string fieldName = path.substr(pos, dotPos == std::string::npos ? std::string::npos : dotPos - pos);
+                auto structure = structs_.find(currentStruct);
+                if (structure == structs_.end()) {
+                    error(node, "тип '" + typeName(currentStruct) + "' не имеет полей");
+                    return "<error>";
+                }
+                const Node* fieldNode = nullptr;
+                for (const Node& field : structure->second->children) {
+                    if (field.varName == fieldName) { fieldNode = &field; break; }
+                }
+                if (!fieldNode) {
+                    error(node, "у структуры '" + currentStruct + "' нет поля '" + fieldName + "'");
+                    return "<error>";
+                }
+                std::string fieldType = normalize(fieldNode->varType);
+                if (dotPos == std::string::npos) return fieldType;
+                currentStruct = fieldType;
+                pos = dotPos + 1;
             }
-            for (const Node& field : structure->second->children)
-                if (field.varName == node.op) return normalize(field.varType);
-            error(node, "у структуры '" + object->ty.structName + "' нет поля '" + node.op + "'");
             return "<error>";
+        }
+        case NODE_STRUCT_LITERAL: {
+            if (node.varType.empty()) return "<error>";
+            auto structure = structs_.find(node.varType);
+            if (structure == structs_.end()) return "<error>";
+            std::map<std::string, const Node*> named;
+            std::vector<const Node*> positional;
+            for (const Node& init : node.children) {
+                if (init.varName.empty()) positional.push_back(&init);
+                else if (!named.emplace(init.varName, &init).second)
+                    error(init, "поле '" + init.varName + "' инициализировано дважды");
+            }
+            size_t position = 0;
+            for (const Node& field : structure->second->children) {
+                const Node* value = nullptr;
+                auto it = named.find(field.varName);
+                if (it != named.end()) value = it->second;
+                else if (position < positional.size()) value = positional[position++];
+                if (value) {
+                    std::string actual = expression(*value->left);
+                    if (actual != "<error>" && !compatible(field.varType, actual))
+                        error(*value, "поле '" + field.varName + "' ожидает тип '" +
+                              typeName(normalize(field.varType)) + "', получен '" + typeName(actual) + "'");
+                    if (value->left->type == NODE_NUMBER &&
+                        !literalFits(normalize(field.varType), value->left->value))
+                        error(*value, "литерал поля вне диапазона типа '" + typeName(normalize(field.varType)) + "'");
+                }
+                if (!value && named.count(field.varName)) named.erase(field.varName);
+            }
+            for (const auto& item : named) {
+                bool exists = false;
+                for (const Node& field : structure->second->children)
+                    if (field.varName == item.first) exists = true;
+                if (!exists) error(*item.second, "у структуры нет поля '" + item.first + "'");
+            }
+            if (position < positional.size()) error(node, "слишком много позиционных значений структуры");
+            return node.varType;
         }
         case NODE_ARRAY_ACCESS: {
             const Symbol* symbol = lookup(node.varName);

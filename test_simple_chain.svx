@@ -1,0 +1,8 @@
+tip Point {
+    i32 x = 0;
+    i32 y = 0;
+}
+
+svi tip Point lor p = { x = 5; y = 10; };
+slov(p.x);
+slov(p.y);

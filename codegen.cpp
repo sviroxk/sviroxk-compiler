@@ -55,7 +55,7 @@ llvm::Type* sc::Type::llvmType(llvm::LLVMContext& ctx) const {
     case TypeKind::Ptr:     return llvm::PointerType::get(ctx, 0);
     case TypeKind::Void:    return llvm::Type::getVoidTy(ctx);
     case TypeKind::File:    return llvm::PointerType::get(ctx, 0);
-    case TypeKind::Struct:  return llvm::PointerType::get(ctx, 0);
+    case TypeKind::Struct:  return llvm::StructType::getTypeByName(ctx, structName);
     case TypeKind::Array:   return llvm::PointerType::get(ctx, 0);
     case TypeKind::DynArray: return llvm::PointerType::get(ctx, 0);
     default: break;
@@ -225,6 +225,48 @@ bool CodeGen::isUnsignedExpr(const Node& node) const {
     return false;
 }
 
+void CodeGen::initStructLiteral(llvm::Value* storage, llvm::StructType* aggregateType,
+                                const std::string& structName, const Node& literal) {
+    if (!structDefs.count(structName)) {
+        codegenFailure(literal, "неизвестная структура: " + structName);
+        return;
+    }
+    const auto& fields = structDefs[structName];
+    std::map<std::string, const Node*> named;
+    std::vector<const Node*> positional;
+    for (const Node& c : literal.children) {
+        if (!c.varName.empty()) named[c.varName] = &c;
+        else if (c.left) positional.push_back(&c);
+    }
+    size_t positionalIndex = 0;
+    for (size_t index = 0; index < fields.size(); ++index) {
+        const StructField& field = fields[index];
+        const Node* initializer;
+        if (named.count(field.name)) {
+            initializer = named.at(field.name)->left;
+        } else if (positionalIndex < positional.size()) {
+            initializer = positional[positionalIndex++]->left;
+        } else {
+            initializer = &field.defaultVal;
+        }
+        llvm::Type* fieldType = aggregateType->getStructElementType(static_cast<unsigned>(index));
+        llvm::Value* address = builder.CreateStructGEP(aggregateType, storage,
+                                                        static_cast<unsigned>(index));
+        if (initializer->type == NODE_STRUCT_LITERAL) {
+            // Nested struct field: allocate a temp, initialize it, store the pointer
+            llvm::AllocaInst* temp = builder.CreateAlloca(fieldType, nullptr, field.name);
+            llvm::StructType* nestedType = llvmStructTypes[field.type];
+            initStructLiteral(temp, nestedType, field.type, *initializer);
+            llvm::Value* loaded = builder.CreateLoad(fieldType, temp);
+            builder.CreateStore(loaded, address);
+        } else {
+            llvm::Value* value = genExpr(*initializer);
+            value = castTo(value, fieldType, isUnsignedExpr(*initializer));
+            builder.CreateStore(value, address);
+        }
+    }
+}
+
 llvm::Value* CodeGen::genExpr(const Node& node) {
     if (node.type == NODE_CHAR) {
         return builder.getInt8(static_cast<uint8_t>(std::stoul(node.value)));
@@ -259,19 +301,70 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
     }
     if (node.type == NODE_STRING)
         return getStringPtr(node.value);
+    if (node.type == NODE_STRUCT_LITERAL) {
+        // Struct literals are only valid as initializers, not as standalone expressions.
+        // They are handled in genNode for NODE_STRUCT_INSTANCE and NODE_VAR_DECL with struct type.
+        return nullptr;
+    }
     if (node.type == NODE_STRUCT_FIELD) {
-        const std::string key = node.varName + "." + node.op;
-        auto object = vars.find(node.varName);
-        auto structName = structTypesByVariable.find(node.varName);
-        if (object == vars.end() || structName == structTypesByVariable.end() ||
-            !structFieldIndices[structName->second].count(node.op))
-            codegenFailure(node, "неизвестное поле структуры '" + key + "'");
-        const unsigned fieldIndex = structFieldIndices[structName->second].at(node.op);
-        llvm::Type* aggregateType = object->second->getAllocatedType();
-        if (!aggregateType->isStructTy())
-            codegenFailure(node, "storage структуры '" + node.varName + "' не является aggregate");
-        llvm::Value* address = builder.CreateStructGEP(aggregateType, object->second, fieldIndex);
-        return builder.CreateLoad(aggregateType->getStructElementType(fieldIndex), address);
+    // Handle nested struct access by following the field path chain.
+    // Maintain a pointer through the chain; only load the final value.
+    std::string currentVar = node.varName;
+    std::string fieldPath = node.op;
+    auto objectIt = vars.find(currentVar);
+    if (objectIt == vars.end()) {
+        codegenFailure(node, "неизвестная переменная '" + currentVar + "'");
+        return nullptr;
+    }
+    llvm::Value* currentPtr = objectIt->second;
+    auto structNameIt = structTypesByVariable.find(currentVar);
+    if (structNameIt == structTypesByVariable.end()) {
+        codegenFailure(node, "неизвестная структура '" + currentVar + "'");
+        return nullptr;
+    }
+    std::string structName = structNameIt->second;
+    auto llvmTypeIt = llvmStructTypes.find(structName);
+    if (llvmTypeIt == llvmStructTypes.end()) {
+        codegenFailure(node, "неизвестная структура '" + structName + "'");
+        return nullptr;
+    }
+    llvm::Type* currentType = llvmTypeIt->second;
+    // Split field path by dots and traverse nested structs
+    size_t pos = 0;
+    while (pos < fieldPath.size()) {
+        size_t dotPos = fieldPath.find('.', pos);
+        std::string fieldName = fieldPath.substr(pos, dotPos == std::string::npos ? std::string::npos : dotPos - pos);
+        auto fieldIndicesIt = structFieldIndices[structName].find(fieldName);
+        if (fieldIndicesIt == structFieldIndices[structName].end()) {
+            codegenFailure(node, "неизвестное поле '" + fieldName + "' в структуре '" + structName + "'");
+            return nullptr;
+        }
+        unsigned fieldIndex = fieldIndicesIt->second;
+        if (!currentType->isStructTy()) {
+            codegenFailure(node, "storage '" + currentVar + "' не является структурой для доступа к полю '" + fieldName + "'");
+            return nullptr;
+        }
+        currentPtr = builder.CreateStructGEP(currentType, currentPtr, fieldIndex);
+        llvm::Type* fieldType = currentType->getStructElementType(fieldIndex);
+        // Look up the declared type name of this field for the next hop
+        auto defIt = structDefs.find(structName);
+        if (defIt != structDefs.end()) {
+            for (const auto& sf : defIt->second) {
+                if (sf.name == fieldName) {
+                    structName = sf.type;
+                    break;
+                }
+            }
+        }
+        currentType = fieldType;
+        currentVar = fieldName;
+        if (dotPos == std::string::npos) {
+            // Final field: load and return the value
+            return builder.CreateLoad(fieldType, currentPtr);
+        }
+        pos = dotPos + 1;
+    }
+    return nullptr;
     }
     if (node.type == NODE_IDENTIFIER) {
         llvm::AllocaInst* alloca = vars[node.value];
@@ -1029,6 +1122,22 @@ void CodeGen::genNode(const Node& node) {
         charVars[node.varName] = node.varType == "char";
         integerWidths[node.varName] = ty->isIntegerTy() ? ty->getIntegerBitWidth() : 32;
     }
+    else if (node.type == NODE_VAR_DECL && node.left && node.left->type == NODE_STRUCT_LITERAL) {
+        // Handle struct literal initialization for typed variable declarations
+        if (!structDefs.count(node.varType)) {
+            codegenFailure(node, "неизвестная структура: " + node.varType);
+            return;
+        }
+        llvm::StructType* aggregateType = llvmStructTypes[node.varType];
+        llvm::AllocaInst* object = builder.CreateAlloca(aggregateType, nullptr, node.varName);
+        vars[node.varName] = object;
+        structTypesByVariable[node.varName] = node.varType;
+        initStructLiteral(object, aggregateType, node.varType, *node.left);
+        constVars[node.varName] = node.isConst;
+        unsignedVars[node.varName] = false;
+        charVars[node.varName] = false;
+        integerWidths[node.varName] = 0;
+    }
     else if (node.type == NODE_ASSIGN) {
         llvm::AllocaInst* alloca = vars[node.varName];
         if (alloca && !constVars[node.varName]) {
@@ -1159,35 +1268,11 @@ void CodeGen::genNode(const Node& node) {
             std::cerr << "Неизвестная структура: " << node.varType << std::endl;
             exit(1);
         }
-        const auto& fields = structDefs[node.varType];
-        std::map<std::string, const Node*> named;
-        std::vector<const Node*> positional;
-        for (const Node& c : node.children) {
-            if (!c.varName.empty()) named[c.varName] = &c;
-            else if (c.left) positional.push_back(&c);
-        }
         llvm::StructType* aggregateType = llvmStructTypes[node.varType];
         llvm::AllocaInst* object = builder.CreateAlloca(aggregateType, nullptr, node.varName);
         vars[node.varName] = object;
         structTypesByVariable[node.varName] = node.varType;
-        size_t positionalIndex = 0;
-        for (size_t index = 0; index < fields.size(); ++index) {
-            const StructField& field = fields[index];
-            const Node* initializer;
-            if (named.count(field.name)) {
-                initializer = named.at(field.name)->left;
-            } else if (positionalIndex < positional.size()) {
-                initializer = positional[positionalIndex++]->left;
-            } else {
-                initializer = &field.defaultVal;
-            }
-            llvm::Value* value = genExpr(*initializer);
-            llvm::Type* fieldType = aggregateType->getStructElementType(static_cast<unsigned>(index));
-            value = castTo(value, fieldType, isUnsignedExpr(*initializer));
-            llvm::Value* address = builder.CreateStructGEP(aggregateType, object,
-                                                            static_cast<unsigned>(index));
-            builder.CreateStore(value, address);
-        }
+        initStructLiteral(object, aggregateType, node.varType, node);
     }
     else if (node.type == NODE_FUNC_DEF) {
         std::vector<std::string> ptypes = funcParamTypes[node.varName];
