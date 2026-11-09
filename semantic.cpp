@@ -134,7 +134,7 @@ private:
         const sc::Type t = sc::Type::from(raw);
         if (!t.isKnown()) return false;
         return t.isScalar() || t.isStr() || t.isPtr() || t.isVoid() || t.isFile() ||
-               t.isStruct() && structs_.count(t.structName);
+               (t.isStruct() && structs_.count(t.structName));
     }
 
     static bool isInteger(const std::string& type) {
@@ -246,6 +246,8 @@ private:
                 error(node, "неизвестное имя '" + node.varName + "'");
                 return "<error>";
             }
+            // Definite assignment: object must be initialized before field access
+            checkInitialized(node, node.varName);
             std::string currentStruct = object->ty.structName;
             // Split field path on dots and traverse nested structs
             size_t pos = 0;
@@ -316,9 +318,21 @@ private:
                 error(node, "неизвестный массив '" + node.varName + "'");
                 return "<error>";
             }
+            // Definite assignment: array must be initialized before element access
+            checkInitialized(node, node.varName);
             std::string indexType = expression(*node.left);
             if (!isInteger(indexType) && indexType != "<error>")
                 error(*node.left, "индекс массива должен иметь целочисленный тип");
+            // Compile-time bounds check for static arrays with constant integer index
+            if (symbol->ty.isArray() && node.left->type == NODE_NUMBER && node.left->varType.empty()) {
+                try {
+                    long long idx = std::stoll(node.left->value);
+                    unsigned len = symbol->ty.arrayLength;
+                    if (idx < 0 || static_cast<unsigned long long>(idx) >= len) {
+                        error(*node.left, "индекс массива выходит за границы [" + std::to_string(len) + "]");
+                    }
+                } catch (...) {}
+            }
             if (symbol->ty.isArray())
                 return symbol->ty.element->toString();
             if (symbol->isDynArray)
@@ -797,7 +811,22 @@ private:
                 if (actual != "<error>" && !compatible(element, actual))
                     error(value, "элемент массива должен иметь тип '" + typeName(element) + "'");
             }
-            declare(node.varName, "array<" + element + ">", node, false, true);
+            unsigned length = node.args.size();
+            sc::Type arrayType = sc::Type::arrayTy(sc::Type::from(element), length);
+            auto& scope = scopes_.back();
+            if (scope.count(node.varName)) {
+                error(node, "повторное объявление '" + node.varName + "' в этой области видимости");
+                break;
+            }
+            Symbol sym;
+            sym.type = arrayType.toString();
+            sym.ty = arrayType;
+            sym.line = node.line;
+            sym.column = node.column;
+            sym.isConst = false;
+            sym.isInitialized = true;
+            sym.isDynArray = false;
+            scope[node.varName] = sym;
             break;
         }
         case NODE_STRUCT_INSTANCE: {
@@ -837,9 +866,11 @@ private:
                 if (!exists) error(*item.second, "у структуры нет поля '" + item.first + "'");
             }
             if (position < positional.size()) error(node, "слишком много позиционных значений структуры");
-            declare(node.varName, node.varType, node);
+            // Struct instances are considered initialized since all fields have
+            // default values from the struct definition
+            declare(node.varName, node.varType, node, false, true);
             for (const Node& field : structure->second->children)
-                declare(node.varName + "." + field.varName, field.varType, node);
+                declare(node.varName + "." + field.varName, field.varType, node, false, true);
             break;
         }
         case NODE_ASSIGN: {
@@ -889,6 +920,8 @@ private:
                 expression(*node.left);
                 break;
             }
+            // Definite assignment: object must be initialized before field assignment
+            checkInitialized(node, node.varName);
             auto structure = structs_.find(object->ty.structName);
             if (structure == structs_.end()) {
                 error(node, "тип '" + typeName(object->ty.structName) + "' не имеет полей");
@@ -921,8 +954,20 @@ private:
         case NODE_ARRAY_ASSIGN: {
             const Symbol* array = lookup(node.varName);
             if (!array) error(node, "неизвестный массив '" + node.varName + "'");
+            // Definite assignment: array must be initialized before element assignment
+            if (array) checkInitialized(node, node.varName);
             std::string index = expression(*node.left);
             if (!isInteger(index) && index != "<error>") error(*node.left, "индекс массива должен быть целым числом");
+            // Compile-time bounds check for static arrays with constant integer index
+            if (array && array->ty.isArray() && node.left->type == NODE_NUMBER && node.left->varType.empty()) {
+                try {
+                    long long idx = std::stoll(node.left->value);
+                    unsigned len = array->ty.arrayLength;
+                    if (idx < 0 || static_cast<unsigned long long>(idx) >= len) {
+                        error(*node.left, "индекс массива выходит за границы [" + std::to_string(len) + "]");
+                    }
+                } catch (...) {}
+            }
             std::string value = expression(*node.right);
             if (array && array->ty.isArray()) {
                 std::string element = array->ty.element->toString();

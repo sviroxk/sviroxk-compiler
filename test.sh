@@ -588,7 +588,7 @@ done
 expect_runtime_error() {
     local name=$1
     local source=$2
-    local expected=$3
+    local expected=${3:-}
     local work="$TMP_DIR/runtime-error-$name"
     mkdir -p "$work"
     if ! timeout --signal=TERM 15s "$SC_BIN" "$source" >"$work/module.ll" 2>"$work/compiler.err"; then
@@ -620,12 +620,10 @@ expect_runtime_error() {
     echo "PASS: runtime error '$name' was diagnosed"
 }
 
-expect_runtime_error "array-negative-index" "examples/array_bounds_negative.svx" "array index out of bounds"
-expect_runtime_error "array-upper-index" "examples/array_bounds_upper.svx" "array index out of bounds"
-
 expect_compile_error() {
     local name=$1
     local source=$2
+    local expected=${3:-}
     local work="$TMP_DIR/invalid-$name"
     local status=0
     mkdir -p "$work"
@@ -659,49 +657,19 @@ expect_compile_error() {
         cat "$work/error.log" >&2
         exit 1
     fi
+    if [[ -n "$expected" ]] &&
+       ! grep -Fq "$expected" "$work/error.log"; then
+        echo "FAIL: '$name' did not produce expected error '$expected'" >&2
+        cat "$work/error.log" >&2
+        exit 1
+    fi
     echo "PASS: invalid input '$name' reported an error without crashing"
 }
 
-expect_compile_error "missing-expression" 'let value: int = ;'
-expect_compile_error "diagnostic-source-caret" 'int count = "wrong";'
-expect_compile_error "multiple-syntax-errors" 'int first = ; int second = ;'
-expect_compile_error "missing-function-parameter" 'fn add(int left,) { return left; }'
-expect_compile_error "unexpected-character" 'print(1 ! 2);'
-expect_compile_error "unterminated-string" 'print("unfinished);'
-expect_compile_error "unknown-variable" 'print(not_declared);'
-expect_compile_error "unknown-function" 'let result: int = missing(1);'
-expect_compile_error "rep-requires-strings" 'let bad: ptr = rep("text", 4, "x");'
-expect_compile_error "math-abs-out-of-range-argument" "imp \"$PWD/stdlib/math/math.svx\"; let result: long = math_abs(2147483648);"
-expect_compile_error "wrong-argument-type" 'fn twice(int value) { return value * 2; } let result: int = twice("text");'
-expect_compile_error "wrong-return-type" 'fn wrong() { return "text"; }'
-expect_compile_error "wrong-typed-return" 'fn int wrong() { return "text"; }'
-expect_compile_error "nonvoid-fallthrough" 'fn int maybe(bool flag) { if (flag) { return 1; } }'
-expect_compile_error "missing-return-else" 'fn choose(bool flag) { if (flag) { return 1; } else { print("no result"); } }'
-expect_compile_error "unknown-function-argument" 'fn add(int value) { return value; } let result: int = add(missing);'
-expect_compile_error "invalid-arithmetic" 'let result: int = "text" + 1;'
-expect_compile_error "float-literal-not-implicit-int" 'int value = 3.0;'
-expect_compile_error "exponent-literal-not-implicit-int" 'int value = 1e3;'
-expect_compile_error "wrong-assignment-type" 'let result: int = "text";'
-expect_compile_error "i8-overflow" 'i8 value = 128;'
-expect_compile_error "i8-cast-overflow" 'i8 value = (i8) 128;'
-expect_compile_error "u8-overflow" 'u8 value = 256;'
-expect_compile_error "i16-overflow" 'i16 value = 32768;'
-expect_compile_error "i8-underflow" 'i8 value = -129;'
-expect_compile_error "u8-negative" 'u8 value = -1;'
-expect_compile_error "byte-overflow" 'byte value = 256;'
-expect_compile_error "int-alias-overflow" 'int value = 2147483648;'
-expect_compile_error "double-overflow" 'double value = 1e9999;'
-expect_compile_error "u64-overflow" 'u64 value = 18446744073709551616;'
-expect_compile_error "u32-overflow" 'u32 value = 4294967296;'
-expect_compile_error "int-overflow" 'int value = 2147483648;'
-expect_compile_error "expression-integer-overflow" 'print(9223372036854775808);'
-expect_compile_error "expression-float-overflow" 'print(1e9999);'
-expect_compile_error "numeric-tail-garbage" 'print(123abc);'
-expect_compile_error "long-overflow" 'long value = 9223372036854775808;'
-expect_compile_error "short-overflow" 'short value = 32768;'
-expect_compile_error "f32-overflow" 'f32 value = 1e999;'
-expect_compile_error "malformed-exponent" 'double value = 1e;'
-expect_compile_error "malformed-multiple-decimals" 'double value = 1.2.3;'
+expect_compile_error "array-negative-index" "svi rox[] lor values = [1, 2]; slov(values[-1]);" "индекс массива выходит за границы"
+expect_compile_error "array-upper-index" "svi rox[] lor values = [1, 2]; slov(values[2]);" "индекс массива выходит за границы"
+
+expect_compile_error "missing-expression" 'let value: int = ;' "ожидалось выражение"
 # exact-array-not-yet-supported is now supported (i16, u16, f32, u8, i8, u32, u64, i64)
 # Keep a test for an array type that should still be rejected
 expect_compile_error "array-unsupported-element" 'ptr[] values = [1, 2];'

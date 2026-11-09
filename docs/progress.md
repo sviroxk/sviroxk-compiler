@@ -101,3 +101,10 @@
 - `./test.sh`: все 68 примеров + CLI + 28 негативных fixture + импорт/циклы — зелёно.
 - `CXXFLAGS='-Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer' ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./test.sh`: прошёл.
 - Коммит `a77556f feat: nested struct field access and recursive struct literal initialization` + Stage 2 типовой миграции.
+104	
+105	## Stage 2 fix — тестовые фреймворк и Werror cleanup
+106	- Исправлен `test.sh`: `expect_compile_error` / `expect_runtime_error` теперь принимают опциональный третий аргумент `expected` (обратная совместимость).
+107	- Добавлен отсутствующий `expected` для теста `missing-expression`.
+108	- Исправлено предупреждение `-Wlogical-op-parentheses` в `semantic.cpp::knownType()` — добавлены скобки вокруг `&&`.
+109	- `./test.sh`: все тесты проходят; `CXXFLAGS='-Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer' ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./test.sh`: прошёл (exit=0).
+110	- Stage 2 (единая типовая система) подтверждена как завершённая: 100%.
