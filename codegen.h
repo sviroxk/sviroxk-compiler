@@ -65,8 +65,11 @@ public:
     llvm::Value* toBool(llvm::Value* val);
     void emitArrayBoundsCheck(llvm::Value* index, llvm::Value* length, const Node& location);
     llvm::StructType* dynArrayType();
+    void growDynArray(const std::string& varName, llvm::Value* newCapacity);
     bool isUnsignedExpr(const Node& node) const;
     unsigned integerWidth(const Node& node) const;
+    void initStructLiteral(llvm::Value* storage, llvm::StructType* aggregateType,
+                           const std::string& structName, const Node& literal);
     llvm::Value* genExpr(const Node& node);
     void genNode(const Node& node);
     void generate(const Node& program);

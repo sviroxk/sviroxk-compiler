@@ -1,0 +1,19 @@
+tip Point {
+    i32 x = 0;
+    i32 y = 0;
+}
+
+tip Rect {
+    Point top_left = { x = 1; y = 2; };
+    Point bottom_right = { x = 3; y = 4; };
+}
+
+svi tip Rect lor rect = {
+    top_left = { x = 1; y = 2; },
+    bottom_right = { x = 3; y = 4; }
+};
+
+slov(rect.top_left.x);
+slov(rect.top_left.y);
+slov(rect.bottom_right.x);
+slov(rect.bottom_right.y);

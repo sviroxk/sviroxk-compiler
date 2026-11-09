@@ -1,5 +1,6 @@
 #include "semantic.h"
 #include "diagnostics.h"
+#include "type.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -15,7 +16,8 @@
 namespace {
 
 struct Symbol {
-    std::string type;
+    std::string type;            // нормализованное имя (канонический ключ)
+    sc::Type ty;                 // единое внутреннее представление типа
     int line;
     int column;
     bool isConst = false;
@@ -30,6 +32,7 @@ struct Symbol {
 struct Function {
     std::string returnType;
     std::vector<std::string> parameters;
+    sc::Type returnTy;
     int line;
     int column;
 };
@@ -51,6 +54,7 @@ public:
             if (node.type == NODE_FUNC_DEF) {
                 Function fn;
                 fn.returnType = normalize(node.varType);
+                fn.returnTy = sc::Type::from(node.varType);
                 fn.line = node.line;
                 fn.column = node.column;
                 for (const std::string& param : node.params) {
@@ -97,54 +101,27 @@ private:
     }
 
     static std::string normalize(const std::string& type) {
-        if (type == "int" || type == "i32" || type == "rox") return "i32";
-        if (type == "uint" || type == "u32") return "u32";
-        if (type == "short" || type == "i16") return "i16";
-        if (type == "ushort" || type == "u16") return "u16";
-        if (type == "long" || type == "i64" || type == "rox64") return "i64";
-        if (type == "ulong" || type == "u64") return "u64";
-        if (type == "byte" || type == "u8") return "u8";
-        if (type == "float" || type == "f32" || type == "dor") return "f32";
-        if (type == "double" || type == "f64") return "f64";
-        if (type == "string" || type == "str" || type == "cos") return "str";
-        if (type == "bool" || type == "bue") return "bool";
-        if (type == "chr") return "char";
-        return type;
+        return sc::Type::from(type).toString();
     }
 
     static std::string typeName(const std::string& type) {
-        if (type == "i32") return "int/i32";
-        if (type == "u32") return "uint/u32";
-        if (type == "i16") return "short/i16";
-        if (type == "u16") return "ushort/u16";
-        if (type == "i64") return "long/i64";
-        if (type == "u64") return "ulong/u64";
-        if (type == "u8") return "byte/u8";
-        if (type == "f32") return "float/f32";
-        if (type == "f64") return "double/f64";
-        if (type == "str") return "str";
-        if (type.empty()) return "unknown";
-        return type;
+        const std::string n = normalize(type);
+        if (n == "i32") return "int/i32";
+        if (n == "u32") return "uint/u32";
+        if (n == "i16") return "short/i16";
+        if (n == "u16") return "ushort/u16";
+        if (n == "i64") return "long/i64";
+        if (n == "u64") return "ulong/u64";
+        if (n == "u8") return "byte/u8";
+        if (n == "f32") return "float/f32";
+        if (n == "f64") return "double/f64";
+        if (n == "str") return "str";
+        if (n.empty()) return "unknown";
+        return n;
     }
 
     static bool literalFits(const std::string& type, const std::string& text) {
-        try {
-            if (type == "f32" || type == "f64") {
-                size_t parsed = 0;
-                double value = std::stod(text, &parsed);
-                if (parsed != text.size() || !std::isfinite(value)) return false;
-                return type != "f32" || std::fabs(value) <= std::numeric_limits<float>::max();
-            }
-            if (type == "i8") { size_t n = 0; auto v = std::stoll(text, &n); return n == text.size() && v >= -128 && v <= 127; }
-            if (type == "i16") { size_t n = 0; auto v = std::stoll(text, &n); return n == text.size() && v >= -32768 && v <= 32767; }
-            if (type == "i32") { size_t n = 0; auto v = std::stoll(text, &n); return n == text.size() && v >= INT32_MIN && v <= INT32_MAX; }
-            if (type == "i64") { size_t n = 0; std::stoll(text, &n); return n == text.size(); }
-            if (type == "u8") { size_t n = 0; auto v = std::stoull(text, &n); return n == text.size() && text[0] != '-' && v <= 255; }
-            if (type == "u16") { size_t n = 0; auto v = std::stoull(text, &n); return n == text.size() && text[0] != '-' && v <= 65535; }
-            if (type == "u32") { size_t n = 0; auto v = std::stoull(text, &n); return n == text.size() && text[0] != '-' && v <= UINT32_MAX; }
-            if (type == "u64") { size_t n = 0; std::stoull(text, &n); return n == text.size() && !text.empty() && text[0] != '-'; }
-        } catch (...) { return false; }
-        return false;
+        return sc::Type::from(type).fitsLiteral(text);
     }
 
     void error(const Node& node, const std::string& message) const {
@@ -154,34 +131,24 @@ private:
     }
 
     bool knownType(const std::string& raw) const {
-        std::string type = normalize(raw);
-        return type == "i8" || type == "i16" || type == "i32" || type == "i64" ||
-               type == "u8" || type == "u16" || type == "u32" || type == "u64" ||
-               type == "f32" || type == "f64" || type == "str" || type == "bool" ||
-               type == "char" || type == "ptr" || type == "file" || structs_.count(type);
+        const sc::Type t = sc::Type::from(raw);
+        if (!t.isKnown()) return false;
+        return t.isScalar() || t.isStr() || t.isPtr() || t.isVoid() || t.isFile() ||
+               (t.isStruct() && structs_.count(t.structName));
     }
 
     static bool isInteger(const std::string& type) {
-        return type == "i8" || type == "i16" || type == "i32" || type == "i64" ||
-               type == "u8" || type == "u16" || type == "u32" || type == "u64";
+        return sc::Type::from(type).isInteger();
+    }
+
+    static sc::Type ty(const std::string& type) {
+        return sc::Type::from(type);
     }
 
     bool compatible(const std::string& expectedRaw, const std::string& actualRaw) const {
-        std::string expected = normalize(expectedRaw);
-        std::string actual = normalize(actualRaw);
-        if (expected == actual || (expected == "char" && actual == "u8") ||
-            (expected == "ptr" && actual.rfind("array<", 0) == 0)) return true;
-        if (expected == "f64" && actual == "f32") return true;
-        if (isInteger(expected) && isInteger(actual)) {
-            const unsigned expectedBits = static_cast<unsigned>(std::stoi(expected.substr(1)));
-            const unsigned actualBits = static_cast<unsigned>(std::stoi(actual.substr(1)));
-            const bool expectedUnsigned = expected[0] == 'u';
-            const bool actualUnsigned = actual[0] == 'u';
-            if (expectedBits > actualBits && expectedUnsigned == actualUnsigned) return true;
-            if (!expectedUnsigned && actualUnsigned && expectedBits > actualBits) return true;
-        }
-        if ((expected == "f32" || expected == "f64") && isInteger(actual)) return true;
-        return false;
+        const sc::Type expected = sc::Type::from(expectedRaw);
+        const sc::Type actual = sc::Type::from(actualRaw);
+        return expected.compatible(actual);
     }
 
     bool declare(const std::string& name, const std::string& type,
@@ -194,7 +161,17 @@ private:
             error(node, "повторное объявление '" + name + "' в этой области видимости");
             return false;
         }
-        scope[name] = {normalize(type), node.line, node.column, isConst, isInitialized, isDynArray, dynArrayElementType};
+        const std::string normalized = normalize(type);
+        Symbol sym;
+        sym.type = normalized;
+        sym.ty = sc::Type::from(normalized);
+        sym.line = node.line;
+        sym.column = node.column;
+        sym.isConst = isConst;
+        sym.isInitialized = isInitialized;
+        sym.isDynArray = isDynArray;
+        sym.dynArrayElementType = dynArrayElementType;
+        scope[name] = sym;
         return true;
     }
 
@@ -234,7 +211,10 @@ private:
                 : floatingLiteral ? "f64" : "i32";
             if (node.varType.empty() && !floatingLiteral) {
                 if (literalFits("i32", node.value)) literalType = "i32";
-                else literalType = "i64";
+                else {
+                    error(node, "числовой литерал " + node.value + " не помещается в тип i64 (long)");
+                    return "<error>";
+                }
             }
             if ((literalType == "f32" || literalType == "f64" || isInteger(literalType)) &&
                 !literalFits(literalType, node.value)) {
@@ -266,15 +246,71 @@ private:
                 error(node, "неизвестное имя '" + node.varName + "'");
                 return "<error>";
             }
-            auto structure = structs_.find(object->type);
-            if (structure == structs_.end()) {
-                error(node, "тип '" + typeName(object->type) + "' не имеет полей");
-                return "<error>";
+            // Definite assignment: object must be initialized before field access
+            checkInitialized(node, node.varName);
+            std::string currentStruct = object->ty.structName;
+            // Split field path on dots and traverse nested structs
+            size_t pos = 0;
+            std::string path = node.op;
+            while (pos < path.size()) {
+                size_t dotPos = path.find('.', pos);
+                std::string fieldName = path.substr(pos, dotPos == std::string::npos ? std::string::npos : dotPos - pos);
+                auto structure = structs_.find(currentStruct);
+                if (structure == structs_.end()) {
+                    error(node, "тип '" + typeName(currentStruct) + "' не имеет полей");
+                    return "<error>";
+                }
+                const Node* fieldNode = nullptr;
+                for (const Node& field : structure->second->children) {
+                    if (field.varName == fieldName) { fieldNode = &field; break; }
+                }
+                if (!fieldNode) {
+                    error(node, "у структуры '" + currentStruct + "' нет поля '" + fieldName + "'");
+                    return "<error>";
+                }
+                std::string fieldType = normalize(fieldNode->varType);
+                if (dotPos == std::string::npos) return fieldType;
+                currentStruct = fieldType;
+                pos = dotPos + 1;
             }
-            for (const Node& field : structure->second->children)
-                if (field.varName == node.op) return normalize(field.varType);
-            error(node, "у структуры '" + object->type + "' нет поля '" + node.op + "'");
             return "<error>";
+        }
+        case NODE_STRUCT_LITERAL: {
+            if (node.varType.empty()) return "<error>";
+            auto structure = structs_.find(node.varType);
+            if (structure == structs_.end()) return "<error>";
+            std::map<std::string, const Node*> named;
+            std::vector<const Node*> positional;
+            for (const Node& init : node.children) {
+                if (init.varName.empty()) positional.push_back(&init);
+                else if (!named.emplace(init.varName, &init).second)
+                    error(init, "поле '" + init.varName + "' инициализировано дважды");
+            }
+            size_t position = 0;
+            for (const Node& field : structure->second->children) {
+                const Node* value = nullptr;
+                auto it = named.find(field.varName);
+                if (it != named.end()) value = it->second;
+                else if (position < positional.size()) value = positional[position++];
+                if (value) {
+                    std::string actual = expression(*value->left);
+                    if (actual != "<error>" && !compatible(field.varType, actual))
+                        error(*value, "поле '" + field.varName + "' ожидает тип '" +
+                              typeName(normalize(field.varType)) + "', получен '" + typeName(actual) + "'");
+                    if (value->left->type == NODE_NUMBER &&
+                        !literalFits(normalize(field.varType), value->left->value))
+                        error(*value, "литерал поля вне диапазона типа '" + typeName(normalize(field.varType)) + "'");
+                }
+                if (!value && named.count(field.varName)) named.erase(field.varName);
+            }
+            for (const auto& item : named) {
+                bool exists = false;
+                for (const Node& field : structure->second->children)
+                    if (field.varName == item.first) exists = true;
+                if (!exists) error(*item.second, "у структуры нет поля '" + item.first + "'");
+            }
+            if (position < positional.size()) error(node, "слишком много позиционных значений структуры");
+            return node.varType;
         }
         case NODE_ARRAY_ACCESS: {
             const Symbol* symbol = lookup(node.varName);
@@ -282,19 +318,34 @@ private:
                 error(node, "неизвестный массив '" + node.varName + "'");
                 return "<error>";
             }
+            // Definite assignment: array must be initialized before element access
+            checkInitialized(node, node.varName);
             std::string indexType = expression(*node.left);
             if (!isInteger(indexType) && indexType != "<error>")
                 error(*node.left, "индекс массива должен иметь целочисленный тип");
-            if (symbol->type.rfind("array<", 0) == 0)
-                return symbol->type.substr(6, symbol->type.size() - 7);
+            // Compile-time bounds check for static arrays with constant integer index
+            if (symbol->ty.isArray() && node.left->type == NODE_NUMBER && node.left->varType.empty()) {
+                try {
+                    long long idx = std::stoll(node.left->value);
+                    unsigned len = symbol->ty.arrayLength;
+                    if (idx < 0 || static_cast<unsigned long long>(idx) >= len) {
+                        error(*node.left, "индекс массива выходит за границы [" + std::to_string(len) + "]");
+                    }
+                } catch (...) {}
+            }
+            if (symbol->ty.isArray())
+                return symbol->ty.element->toString();
             if (symbol->isDynArray)
                 return symbol->dynArrayElementType.empty() ? "i32" : symbol->dynArrayElementType;
-            if (symbol->type == "ptr") return "i32";
+            if (symbol->ty.isPtr()) return "i32";
             error(node, "значение '" + node.varName + "' не является массивом");
             return "<error>";
         }
         case NODE_CAST: {
             std::string target = normalize(node.varType);
+            if (node.left->type == NODE_NUMBER && node.left->varType.empty() &&
+                !node.left->value.empty() && node.left->value.find_first_of(".eE") == std::string::npos)
+                node.left->varType = target;
             std::string source = expression(*node.left);
             const std::set<std::string> numeric = {"i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "char"};
             if (!knownType(target))
@@ -322,8 +373,8 @@ private:
                 error(node, "неизвестный указатель '" + node.varName + "'");
                 return "<error>";
             }
-            if (symbol->type != "ptr") {
-                error(node, "разыменование требует тип ptr, получен '" + typeName(symbol->type) + "'");
+            if (!symbol->ty.isPtr()) {
+                error(node, "разыменование требует тип ptr, получен '" + typeName(symbol->ty.toString()) + "'");
                 return "<error>";
             }
             return "i32";
@@ -371,6 +422,70 @@ private:
             return binary(node);
         case NODE_FUNC_CALL:
             return call(node);
+        case NODE_ARRAY_PUSH: {
+            const Symbol* array = lookup(node.varName);
+            if (!array) {
+                error(node, "неизвестный массив '" + node.varName + "'");
+                for (const Node& arg : node.args) expression(arg);
+                return "void";
+            }
+            if (!array->isDynArray && !array->ty.isArray()) {
+                error(node, "'push' доступен только для массивов");
+                return "void";
+            }
+            const std::string element = array->isDynArray
+                ? array->dynArrayElementType : array->ty.element->toString();
+            if (!node.args.empty()) {
+                std::string value = expression(node.args[0]);
+                if (value != "<error>" && !element.empty() && !compatible(element, value))
+                    error(node.args[0], "элемент массива ожидает тип '" + typeName(element) + "'");
+            }
+            return "void";
+        }
+        case NODE_ARRAY_POP: {
+            const Symbol* array = lookup(node.varName);
+            if (!array) {
+                error(node, "неизвестный массив '" + node.varName + "'");
+                return "void";
+            }
+            if (!array->isDynArray && !array->ty.isArray()) {
+                error(node, "'pop' доступен только для массивов");
+                return "void";
+            }
+            return array->isDynArray ? array->dynArrayElementType : array->ty.element->toString();
+        }
+        case NODE_ARRAY_RESIZE: {
+            const Symbol* array = lookup(node.varName);
+            if (!array) {
+                error(node, "неизвестный массив '" + node.varName + "'");
+                for (const Node& arg : node.args) expression(arg);
+                return "void";
+            }
+            if (!array->isDynArray) {
+                error(node, "'resize' доступен только для динамических массивов");
+                return "void";
+            }
+            for (const Node& arg : node.args) {
+                std::string size = expression(arg);
+                if (size != "<error>" && !ty(size).isInteger())
+                    error(arg, "размер массива должен быть целым числом");
+            }
+            return "void";
+        }
+        case NODE_ARRAY_LEN:
+        case NODE_ARRAY_CAP: {
+            const Symbol* array = lookup(node.varName);
+            if (!array) {
+                error(node, "неизвестный массив '" + node.varName + "'");
+                return "i32";
+            }
+            if (!array->isDynArray && !array->ty.isArray()) {
+                error(node, "'" + std::string(node.type == NODE_ARRAY_LEN ? "len" : "cap") +
+                      "' доступен только для массивов");
+                return "i32";
+            }
+            return "i64";
+        }
         default:
             error(node, "внутренняя ошибка проверки типов: выражение не поддерживается");
             return "<error>";
@@ -383,74 +498,70 @@ private:
 
     bool fitsNumericLiteral(const Node& node, const std::string& target) const {
         if (!isNumericLiteral(node)) return false;
+        const sc::Type targetTy = sc::Type::from(target);
+        if (targetTy.isError()) return false;
         const bool floatingLiteral = node.value.find_first_of(".eE") != std::string::npos;
-        if (floatingLiteral && isInteger(target)) return false;
-        if (target == "i8" || target == "i16" || target == "u8" || target == "u16")
-            return false;
-        return literalFits(target, node.value);
+        if (floatingLiteral && targetTy.isInteger()) return false;
+        if (targetTy.isInteger() && targetTy.width < 32) return false;
+        return targetTy.fitsLiteral(node.value);
     }
 
     std::string binary(const Node& node) {
         std::string left = expression(*node.left);
         if (node.op == "!") {
             if (left == "<error>") return "<error>";
-            if (left != "bool" && !isInteger(left))
+            if (left != "bool" && !ty(left).isInteger())
                 error(node, "оператор ! ожидает bool или целое число");
             return "bool";
         }
         if (node.op == "~") {
             if (left == "<error>") return "<error>";
-            if (!isInteger(left)) {
+            if (!ty(left).isInteger()) {
                 error(node, "побитовая инверсия требует целочисленный операнд");
                 return "<error>";
             }
             return left;
         }
         std::string right = node.right ? expression(*node.right) : std::string("<error>");
-        const bool narrowUnsignedPromotion = isInteger(left) && isInteger(right) &&
-            left[0] != right[0] &&
-            static_cast<unsigned>(std::stoi(left.substr(1))) < 32 &&
-            static_cast<unsigned>(std::stoi(right.substr(1))) < 32;
-        if (!narrowUnsignedPromotion && node.right && fitsNumericLiteral(*node.left, right))
+        if (node.right && fitsNumericLiteral(*node.left, right))
             left = right;
-        else if (!narrowUnsignedPromotion && node.right && fitsNumericLiteral(*node.right, left))
+        else if (node.right && fitsNumericLiteral(*node.right, left))
             right = left;
         if (left == "<error>" || right == "<error>") return "<error>";
         if (node.op == "//") {
-            if (!isInteger(left) || !isInteger(right)) {
+            if (!ty(left).isInteger() || !ty(right).isInteger()) {
                 error(node, "оператор // требует целочисленные операнды");
                 return "<error>";
             }
-            if (left == "i64" || left == "u64" || right == "i64" || right == "u64")
-                return left[0] == 'u' && right[0] == 'u' ? "u64" : "i64";
-            if (left == "u32" || right == "u32") return "u32";
+            if (ty(left).width == 64 || ty(right).width == 64)
+                return (ty(left).isUnsigned() && ty(right).isUnsigned()) ? "u64" : "i64";
+            if (ty(left).isUnsigned() || ty(right).isUnsigned()) return "u32";
             return "i32";
         }
         if (node.op == "**") {
-            if (!isInteger(left) && left != "f32" && left != "f64") {
+            if (!ty(left).isNumeric() || !ty(right).isNumeric()) {
                 error(node, "оператор ** требует числовые операнды");
                 return "<error>";
             }
-            if (!isInteger(right) && right != "f32" && right != "f64") {
-                error(node, "оператор ** требует числовые операнды");
-                return "<error>";
+            const sc::Type lTy = ty(left);
+            const sc::Type rTy = ty(right);
+            if (lTy.isFloat() || rTy.isFloat()) {
+                const sc::Type result = lTy.commonType(rTy);
+                return result.isError() ? "<error>" : result.toString();
             }
-            if (left == "f64" || right == "f64" || left == "f32" || right == "f32")
-                return left == "f64" || right == "f64" ? "f64" : "f32";
-            if (left == "i64" || left == "u64" || right == "i64" || right == "u64")
-                return left[0] == 'u' && right[0] == 'u' ? "u64" : "i64";
-            return left[0] == 'u' && right[0] == 'u' ? "u32" : "i32";
+            const sc::Type result = lTy.commonType(rTy);
+            return result.isError() ? "<error>" : result.toString();
         }
         if (node.op == "&" || node.op == "|" || node.op == "^" ||
             node.op == "<<" || node.op == ">>") {
-            if (!isInteger(left) || !isInteger(right)) {
+            if (!ty(left).isInteger() || !ty(right).isInteger()) {
                 error(node, "побитовые операторы требуют целочисленные операнды");
                 return "<error>";
             }
             if ((node.op == "<<" || node.op == ">>") && node.right->type == NODE_NUMBER) {
                 try {
                     const long long shift = std::stoll(node.right->value);
-                    const unsigned width = static_cast<unsigned>(std::stoi(left.substr(1)));
+                    const unsigned width = ty(left).width;
                     if (shift < 0 || static_cast<unsigned long long>(shift) >= width) {
                         error(*node.right, "счётчик сдвига должен быть меньше ширины левого операнда");
                         return "<error>";
@@ -460,63 +571,36 @@ private:
             return left;
         }
         if (node.op == "&&" || node.op == "||") {
-            if ((left != "bool" && !isInteger(left)) ||
-                (right != "bool" && !isInteger(right)))
+            if ((left != "bool" && !ty(left).isInteger()) ||
+                (right != "bool" && !ty(right).isInteger()))
                 error(node, "логические операторы ожидают bool или целые числа");
             return "bool";
         }
-        if (isInteger(left) && isInteger(right) &&
-            (node.op == ">" || node.op == "<" || node.op == ">=" || node.op == "<=" ||
-             node.op == "==" || node.op == "!=")) {
-            const bool leftUnsigned = left[0] == 'u';
-            const bool rightUnsigned = right[0] == 'u';
-            if (leftUnsigned != rightUnsigned) {
-                error(node, "нельзя сравнивать signed- и unsigned-типы без явного преобразования");
-                return "<error>";
-            }
-        }
-        if (isInteger(left) && isInteger(right) &&
-            node.op != ">" && node.op != "<" && node.op != ">=" && node.op != "<=" &&
-            node.op != "==" && node.op != "!=") {
-            const bool leftUnsigned = left[0] == 'u';
-            const bool rightUnsigned = right[0] == 'u';
-            if (leftUnsigned != rightUnsigned) {
-                const std::string unsignedType = leftUnsigned ? left : right;
-                const std::string signedType = leftUnsigned ? right : left;
-                const unsigned unsignedBits = static_cast<unsigned>(std::stoi(unsignedType.substr(1)));
-                const unsigned signedBits = static_cast<unsigned>(std::stoi(signedType.substr(1)));
-                if (std::max(unsignedBits, signedBits) < 32) return "i32";
-                if (signedBits > unsignedBits) return signedType;
-                error(node, "нельзя смешивать signed- и unsigned-типы этой ширины без явного преобразования");
-                return "<error>";
-            }
-        }
-        const std::set<std::string> numeric = {"i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64"};
+        const sc::Type leftTy = ty(left);
+        const sc::Type rightTy = ty(right);
         const bool comparison = node.op == ">" || node.op == "<" || node.op == ">=" ||
             node.op == "<=" || node.op == "==" || node.op == "!=";
         if (comparison) {
-            if (!numeric.count(left) || !numeric.count(right)) {
+            if (!leftTy.isNumeric() || !rightTy.isNumeric()) {
                 error(node, "оператор сравнения принимает только числа");
                 return "<error>";
             }
-            if (isInteger(left) && isInteger(right) && left[0] != right[0]) {
+            if (leftTy.isInteger() && rightTy.isInteger() && leftTy.isUnsigned() != rightTy.isUnsigned()) {
                 error(node, "нельзя сравнивать signed- и unsigned-типы без явного преобразования");
                 return "<error>";
             }
             return "bool";
         }
-        if (!numeric.count(left) || !numeric.count(right)) {
+        if (!leftTy.isNumeric() || !rightTy.isNumeric()) {
             error(node, "арифметический оператор '" + node.op + "' требует числовые операнды");
             return "<error>";
         }
-        if (left == "f64" || right == "f64") return "f64";
-        if (left == "f32" || right == "f32") return "f32";
-        if (left == "u64" || right == "u64") return "u64";
-        if (left == "i64" || right == "i64") return "i64";
-        if (left == "u32" || right == "u32") return "u32";
-        if (left == "i32" || right == "i32") return "i32";
-        if (left[0] == 'u') return "u32";
-        return "i32";
+        // Arithmetic promotion: delegate to the unified commonType().
+        const sc::Type result = leftTy.commonType(rightTy);
+        if (!result.isError()) return result.toString();
+        error(node, "нельзя смешивать типы '" + typeName(leftTy.toString()) +
+              "' и '" + typeName(rightTy.toString()) + "' без явного преобразования");
+        return "<error>";
     }
 
     std::string call(const Node& node) {
@@ -554,23 +638,24 @@ private:
             if (node.varName == "rep") return "ptr";
             if (node.varName == "sqrt" || node.varName == "pow" ||
                 node.varName == "flo" || node.varName == "cel" || node.varName == "ron") {
-                for (const std::string& type : argumentTypes)
-                    if (type == "f32" || type == "f64") return "f64";
-                for (const std::string& type : argumentTypes)
-                    if (type == "i64" || type == "u64") return "i64";
-                return "i32";
+                sc::Type resultTy = sc::Type::from(argumentTypes.empty() ? "i32" : argumentTypes.front());
+                for (size_t index = 1; index < argumentTypes.size(); ++index) {
+                    const sc::Type argTy = sc::Type::from(argumentTypes[index]);
+                    if (!argTy.isError() && !resultTy.isError()) {
+                        resultTy = resultTy.commonType(argTy);
+                    }
+                }
+                return resultTy.toString();
             }
             if (node.varName == "abs" || node.varName == "max" || node.varName == "min") {
-                std::string result = argumentTypes.empty() ? "i32" : argumentTypes.front();
+                sc::Type resultTy = sc::Type::from(argumentTypes.empty() ? "i32" : argumentTypes.front());
                 for (size_t index = 1; index < argumentTypes.size(); ++index) {
-                    const std::string& type = argumentTypes[index];
-                    if (type == "f64" || result == "f64") result = "f64";
-                    else if (type == "f32" || result == "f32") result = "f32";
-                    else if (type == "i64" || type == "u64") result = type;
-                    else if ((type == "i32" || type == "u32") &&
-                             result != "i64" && result != "u64") result = type;
+                    const sc::Type argTy = sc::Type::from(argumentTypes[index]);
+                    if (!argTy.isError() && !resultTy.isError()) {
+                        resultTy = resultTy.commonType(argTy);
+                    }
                 }
-                return result;
+                return resultTy.toString();
             }
             if (!argumentTypes.empty()) return argumentTypes[0];
             return "i32";
@@ -726,7 +811,22 @@ private:
                 if (actual != "<error>" && !compatible(element, actual))
                     error(value, "элемент массива должен иметь тип '" + typeName(element) + "'");
             }
-            declare(node.varName, "array<" + element + ">", node, false, true);
+            unsigned length = node.args.size();
+            sc::Type arrayType = sc::Type::arrayTy(sc::Type::from(element), length);
+            auto& scope = scopes_.back();
+            if (scope.count(node.varName)) {
+                error(node, "повторное объявление '" + node.varName + "' в этой области видимости");
+                break;
+            }
+            Symbol sym;
+            sym.type = arrayType.toString();
+            sym.ty = arrayType;
+            sym.line = node.line;
+            sym.column = node.column;
+            sym.isConst = false;
+            sym.isInitialized = true;
+            sym.isDynArray = false;
+            scope[node.varName] = sym;
             break;
         }
         case NODE_STRUCT_INSTANCE: {
@@ -766,9 +866,11 @@ private:
                 if (!exists) error(*item.second, "у структуры нет поля '" + item.first + "'");
             }
             if (position < positional.size()) error(node, "слишком много позиционных значений структуры");
-            declare(node.varName, node.varType, node);
+            // Struct instances are considered initialized since all fields have
+            // default values from the struct definition
+            declare(node.varName, node.varType, node, false, true);
             for (const Node& field : structure->second->children)
-                declare(node.varName + "." + field.varName, field.varType, node);
+                declare(node.varName + "." + field.varName, field.varType, node, false, true);
             break;
         }
         case NODE_ASSIGN: {
@@ -783,7 +885,7 @@ private:
                 expression(*node.left);
                 break;
             }
-            std::string expected = symbol->type;
+            std::string expected = symbol->ty.toString();
             std::string actual = expression(*node.left);
             bool literalArithmeticFits = false;
             if (symbol && node.left->type == NODE_BINOP &&
@@ -818,9 +920,11 @@ private:
                 expression(*node.left);
                 break;
             }
-            auto structure = structs_.find(object->type);
+            // Definite assignment: object must be initialized before field assignment
+            checkInitialized(node, node.varName);
+            auto structure = structs_.find(object->ty.structName);
             if (structure == structs_.end()) {
-                error(node, "тип '" + typeName(object->type) + "' не имеет полей");
+                error(node, "тип '" + typeName(object->ty.structName) + "' не имеет полей");
                 expression(*node.left);
                 break;
             }
@@ -837,32 +941,48 @@ private:
                 expression(*node.left);
                 break;
             }
+            const std::string fieldType = normalize(field->varType);
+            if (node.left->type == NODE_NUMBER && node.left->varType.empty() &&
+                !node.left->value.empty() && node.left->value.find_first_of(".eE") == std::string::npos)
+                node.left->varType = fieldType;
             const std::string actual = expression(*node.left);
-            if (actual != "<error>" && !compatible(field->varType, actual))
-                error(*node.left, "поле ожидает тип '" + typeName(normalize(field->varType)) +
+            if (actual != "<error>" && !compatible(fieldType, actual))
+                error(*node.left, "поле ожидает тип '" + typeName(fieldType) +
                       "', получен '" + typeName(actual) + "'");
             break;
         }
         case NODE_ARRAY_ASSIGN: {
             const Symbol* array = lookup(node.varName);
             if (!array) error(node, "неизвестный массив '" + node.varName + "'");
+            // Definite assignment: array must be initialized before element assignment
+            if (array) checkInitialized(node, node.varName);
             std::string index = expression(*node.left);
             if (!isInteger(index) && index != "<error>") error(*node.left, "индекс массива должен быть целым числом");
+            // Compile-time bounds check for static arrays with constant integer index
+            if (array && array->ty.isArray() && node.left->type == NODE_NUMBER && node.left->varType.empty()) {
+                try {
+                    long long idx = std::stoll(node.left->value);
+                    unsigned len = array->ty.arrayLength;
+                    if (idx < 0 || static_cast<unsigned long long>(idx) >= len) {
+                        error(*node.left, "индекс массива выходит за границы [" + std::to_string(len) + "]");
+                    }
+                } catch (...) {}
+            }
             std::string value = expression(*node.right);
-            if (array && array->type.rfind("array<", 0) == 0) {
-                std::string element = array->type.substr(6, array->type.size() - 7);
+            if (array && array->ty.isArray()) {
+                std::string element = array->ty.element->toString();
                 if (value != "<error>" && !compatible(element, value)) error(node, "элемент массива ожидает тип '" + typeName(element) + "'");
             } else if (array && array->isDynArray) {
                 const std::string& element = array->dynArrayElementType;
                 if (value != "<error>" && !element.empty() && !compatible(element, value))
                     error(node, "элемент массива ожидает тип '" + typeName(element) + "'");
-            } else if (array && array->type != "ptr") error(node, "значение не является массивом");
+            } else if (array && !array->ty.isPtr()) error(node, "значение не является массивом");
             break;
         }
         case NODE_DEREF_ASSIGN: {
             const Symbol* pointer = lookup(node.varName);
             if (!pointer) error(node, "неизвестный указатель '" + node.varName + "'");
-            else if (pointer->type != "ptr") error(node, "запись через разыменование требует тип ptr");
+            else if (!pointer->ty.isPtr()) error(node, "запись через разыменование требует тип ptr");
             expression(*node.left);
             break;
         }
@@ -985,15 +1105,70 @@ private:
         case NODE_DELETE: {
             const Symbol* symbol = lookup(node.varName);
             if (!symbol) error(node, "неизвестное имя '" + node.varName + "'");
-            else if (!symbol->isDynArray && symbol->type.rfind("array<", 0) != 0 && symbol->type != "ptr")
+            else if (!symbol->isDynArray && !symbol->ty.isArray() && !symbol->ty.isPtr())
                 error(node, "освободить можно только динамический массив или ptr");
+            break;
+        }
+        case NODE_ARRAY_PUSH: {
+            const Symbol* array = lookup(node.varName);
+            if (!array) {
+                error(node, "неизвестный массив '" + node.varName + "'");
+                if (!node.args.empty()) expression(node.args[0]);
+                break;
+            }
+            if (!array->isDynArray) {
+                error(node, "push поддерживается только для динамических массивов");
+                if (!node.args.empty()) expression(node.args[0]);
+                break;
+            }
+            if (!node.args.empty()) {
+                std::string value = expression(node.args[0]);
+                if (value != "<error>" && !array->dynArrayElementType.empty() &&
+                    !compatible(array->dynArrayElementType, value))
+                    error(node.args[0], "элемент массива ожидает тип '" +
+                          typeName(array->dynArrayElementType) + "'");
+            }
+            break;
+        }
+        case NODE_ARRAY_POP: {
+            const Symbol* array = lookup(node.varName);
+            if (!array) error(node, "неизвестный массив '" + node.varName + "'");
+            else if (!array->isDynArray) error(node, "pop поддерживается только для динамических массивов");
+            break;
+        }
+        case NODE_ARRAY_RESIZE: {
+            const Symbol* array = lookup(node.varName);
+            if (!array) {
+                error(node, "неизвестный массив '" + node.varName + "'");
+                if (!node.args.empty()) expression(node.args[0]);
+                break;
+            }
+            if (!array->isDynArray) {
+                error(node, "resize поддерживается только для динамических массивов");
+                if (!node.args.empty()) expression(node.args[0]);
+                break;
+            }
+            if (!node.args.empty()) {
+                std::string size = expression(node.args[0]);
+                if (size != "<error>" && !ty(size).isInteger())
+                    error(node.args[0], "размер массива должен быть целым числом");
+            }
+            break;
+        }
+        case NODE_ARRAY_LEN:
+        case NODE_ARRAY_CAP: {
+            const Symbol* array = lookup(node.varName);
+            if (!array) error(node, "неизвестный массив '" + node.varName + "'");
+            else if (!array->isDynArray && !array->ty.isArray())
+                error(node, "'" + std::string(node.type == NODE_ARRAY_LEN ? "len" : "cap") +
+                      "' доступен только для массивов");
             break;
         }
         case NODE_FILE_WRITE:
         case NODE_FILE_CLOSE: {
             const Symbol* symbol = lookup(node.varName);
             if (!symbol) error(node, "неизвестный файл '" + node.varName + "'");
-            else if (symbol->type != "file") error(node, "ожидался file, получен '" + typeName(symbol->type) + "'");
+            else if (!symbol->ty.isFile()) error(node, "ожидался file, получен '" + typeName(symbol->ty.toString()) + "'");
             if (node.left) {
                 std::string value = expression(*node.left);
                 if (node.type == NODE_FILE_WRITE && value != "str" && value != "<error>") error(node, "запись в файл принимает string");
