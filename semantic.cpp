@@ -9,6 +9,7 @@
 #include <limits>
 #include <map>
 #include <set>
+#include <unordered_set>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -694,18 +695,39 @@ private:
             if (!knownType(field.varType)) error(field, "неизвестный тип поля '" + field.varType + "'");
             if (!fields.insert(field.varName).second)
                 error(field, "повторное объявление поля '" + field.varName + "'");
-            std::string actual = expression(*field.left);
-            if (actual != "<error>" && !compatible(field.varType, actual)) {
-                bool fittingLiteral = field.left->type == NODE_NUMBER &&
-                    literalFits(normalize(field.varType), field.left->value);
-                if (!fittingLiteral)
-                    error(field, "значение по умолчанию поля '" + field.varName + "' имеет тип '" +
-                          typeName(actual) + "', ожидался '" + typeName(normalize(field.varType)) + "'");
+            if (field.left) {
+                std::string actual = expression(*field.left);
+                if (actual != "<error>" && !compatible(field.varType, actual)) {
+                    bool fittingLiteral = field.left->type == NODE_NUMBER &&
+                        literalFits(normalize(field.varType), field.left->value);
+                    if (!fittingLiteral)
+                        error(field, "значение по умолчанию поля '" + field.varName + "' имеет тип '" +
+                              typeName(actual) + "', awaited '" + typeName(normalize(field.varType)) + "'");
+                }
+                if (field.left->type == NODE_NUMBER &&
+                    !literalFits(normalize(field.varType), field.left->value))
+                    error(field, "литерал поля вне диапазона типа '" + typeName(normalize(field.varType)) + "'");
             }
-            if (field.left->type == NODE_NUMBER &&
-                !literalFits(normalize(field.varType), field.left->value))
-                error(field, "литерал поля вне диапазона типа '" + typeName(normalize(field.varType)) + "'");
+            }
+        // Check for recursive struct definitions (infinite size)
+        std::unordered_set<std::string> visited;
+        checkStructRecursion(node, visited);
+    }
+
+    void checkStructRecursion(const Node& node, std::unordered_set<std::string>& visited) {
+        if (visited.count(node.varName)) {
+            error(node, "рекурсивное определение структуры '" + node.varName + "' приводит к бесконечному размеру");
+            return;
         }
+        visited.insert(node.varName);
+        for (const Node& field : node.children) {
+            // Check if field type is a struct that could create a cycle
+            sc::Type fieldTy = sc::Type::from(normalize(field.varType));
+            if (fieldTy.isStruct() && structs_.count(fieldTy.structName)) {
+                checkStructRecursion(*structs_.at(fieldTy.structName), visited);
+            }
+        }
+        visited.erase(node.varName);
     }
 
     bool alwaysReturns(const std::vector<Node>& statements) const {
@@ -857,6 +879,12 @@ private:
                         !literalFits(normalize(field.varType), value->left->value))
                         error(*value, "литерал поля вне диапазона типа '" + typeName(normalize(field.varType)) + "'");
                 }
+                // Check for mandatory fields (no default value and not provided)
+                // Only enforce when a struct literal is provided (instance has children)
+                bool hasDefault = field.left != nullptr;
+                if (!value && !hasDefault && !node.children.empty()) {
+                    error(node, "поле '" + field.varName + "' не имеет значения по умолчанию и должно быть инициализировано");
+                }
                 if (!value && named.count(field.varName)) named.erase(field.varName);
             }
             for (const auto& item : named) {
@@ -867,7 +895,7 @@ private:
             }
             if (position < positional.size()) error(node, "слишком много позиционных значений структуры");
             // Struct instances are considered initialized since all fields have
-            // default values from the struct definition
+            // default values from the struct definition or were explicitly provided
             declare(node.varName, node.varType, node, false, true);
             for (const Node& field : structure->second->children)
                 declare(node.varName + "." + field.varName, field.varType, node, false, true);
@@ -884,6 +912,19 @@ private:
                 error(node, "нельзя присвоить значение константе '" + node.varName + "'");
                 expression(*node.left);
                 break;
+            }
+            // Check for struct assignment with owning fields (dyn array, ptr, etc.)
+            sc::Type destTy = symbol->ty;
+            if (destTy.isStruct() && structs_.count(destTy.structName)) {
+                const Node* structDef = structs_.at(destTy.structName);
+                for (const Node& field : structDef->children) {
+                    sc::Type fieldTy = sc::Type::from(normalize(field.varType));
+                    if (fieldTy.isDynArray() || fieldTy.isPtr() || fieldTy.isStr()) {
+                        error(node, "неявное копирование структуры '" + destTy.structName + "' запрещено: поле '" +
+                              field.varName + "' имеет владеющий тип (требуется явное клонирование/перемещение)");
+                        break;
+                    }
+                }
             }
             std::string expected = symbol->ty.toString();
             std::string actual = expression(*node.left);

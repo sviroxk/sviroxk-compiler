@@ -94,6 +94,8 @@ sources=(
     "examples/a14_shadowing.svx"
     "examples/a16_builtin_types.svx"
     "examples/a18_struct_field_collision.svx"
+    "examples/struct_copy_value.svx"
+    "examples/p0_struct_mandatory_field.svx"
     "examples/a2_cast_precedence.svx"
     "examples/a3_void_return.svx"
     "examples/a4_else_if.svx"
@@ -699,6 +701,9 @@ expect_compile_error "int-overflow-negative" 'int overflow = -2147483649;'
 expect_compile_error "array-index-float" 'svi rox[] values = [1, 2]; svi dor index = 0.5; slov(values[index]);'
 expect_compile_error "builtin-no-args" 'sqrt();'
 expect_compile_error "type-mismatch-initializer" 'int count = "wrong";'
+expect_compile_error "recursive-struct-definition" 'tip BadRecursive { rox value; BadRecursive next; }' "рекурсивное определение структуры"
+expect_compile_error "struct-copy-ownership" 'tip Container { rox id; ptr data; } svi tip Container lor a; a.id = 1; a.data = null; svi tip Container lor b; b = a;' "неявное копирование структуры"
+expect_compile_error "struct-ptr-field-access" 'tip Node { rox value; ptr next; } svi tip Node lor n1; svi tip Node lor n2; n1.value = 10; n1.next = &n2; n2.value = 20; n2.next = null; print(n1.next.value);' "не имеет полей"
 
 IMPORT_DIR="$TMP_DIR/imports"
 mkdir -p "$IMPORT_DIR/lib"

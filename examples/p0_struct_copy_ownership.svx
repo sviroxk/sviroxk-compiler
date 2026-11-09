@@ -1,0 +1,12 @@
+tip Container {
+    rox id;
+    ptr data;
+}
+
+svi tip Container lor a;
+a.id = 1;
+a.data = null;
+svi tip Container lor b;
+b = a;
+print(a.id);
+print(b.id);

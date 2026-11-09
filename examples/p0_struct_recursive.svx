@@ -1,0 +1,4 @@
+tip BadRecursive {
+    rox value;
+    BadRecursive next;
+}

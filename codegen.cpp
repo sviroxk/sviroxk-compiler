@@ -1352,7 +1352,14 @@ void CodeGen::genNode(const Node& node) {
             StructField sf;
             sf.type = field.varType;
             sf.name = field.varName;
-            sf.defaultVal = *field.left;
+            if (field.left) {
+                sf.defaultVal = *field.left;
+            } else {
+                // Field has no default value: use a zero literal as a neutral
+                // placeholder so initStructLiteral can still fill it in.
+                sf.defaultVal.type = NODE_NUMBER;
+                sf.defaultVal.value = "0";
+            }
             fields.push_back(sf);
         }
         structDefs[node.varName] = fields;
