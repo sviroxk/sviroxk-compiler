@@ -70,6 +70,18 @@
 - Подтверждены обычная и ASan/UBSan/LeakSanitizer сборки и тесты после исправления тестовой длины expected string.
 - Дальше: зафиксировать исправленный rep и build script; затем продолжить P0 audit, не теряя пользовательские изменения.
 
+## Цикл 10 — семантика структур: рекурсия, mandatory fields, copy ownership
+- Исправлен segfault при объявления структур с полями без значения по умолчанию: `codegen.cpp::NODE_STRUCT_DEF` делал `sf.defaultVal = *field.left` при `field.left == nullptr`. Добавлен нейтральный нулевой литерал для полей без дефолта.
+- Исправлена опечатка в сообщении об ошибке `expects` → `awaited` в `semantic.cpp::checkStruct`.
+- Добавлено обнаружение рекурсивных определений структур (`checkStructRecursion`) — циклы по значению отклоняются с диагнозом "бесконечный размер".
+- Добавлена проверка mandatory fields: поле без значения по умолчанию должно быть указано в struct literal.
+- Добавлена защита от неявного копирования структур с владеющими полями (`ptr`, динамический массив) — требует явного клонирования/перемещения.
+- Добавлены examples: `struct_copy_value.svx`, `p0_struct_mandatory_field.svx`, `p0_struct_copy_ownership.svx`, `p0_struct_recursive.svx`, `struct_recursive.svx`.
+- Добавлены conformance-fixtures: `recursive-struct-definition`, `struct-copy-ownership`, `struct-ptr-field-access`.
+- `./test.sh`: все positive/negative cases + CLI + импорт/циклы — зелёно.
+- `CXXFLAGS='-fsanitize=address,undefined -g' ./build.sh && ./test.sh`: прошёл без ASAN/UBSAN сбоев.
+- Покрытие кода (gcov, 6 source files): lines 71.6% / branches 46.0% / calls 69.1%.
+
 ## Цикл 8 — control-flow анализ: definite assignment и shadowing
 - В `semantic.cpp::declare()` добавлен флаг `isInitialized` (по умолчанию false).
 - `checkFunction()` помечает параметры `isInitialized = true` — параметры всегда инициализированы при входе.

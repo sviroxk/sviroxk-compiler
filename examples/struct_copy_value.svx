@@ -1,0 +1,12 @@
+tip Point {
+    rox x = 0;
+    rox y = 0;
+}
+
+svi tip Point lor a;
+a.x = 10;
+a.y = 20;
+svi tip Point lor b;
+b = a;
+print(b.x);
+print(b.y);

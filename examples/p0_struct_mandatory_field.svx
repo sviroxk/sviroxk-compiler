@@ -1,0 +1,6 @@
+tip Player {
+    rox health = 100;
+    rox speed;
+}
+
+svi tip Player lor hero;

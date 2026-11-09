@@ -1244,8 +1244,10 @@ Node parseOne() {
                 failAt(fieldType, "неизвестный тип поля '" + fieldType.value + "'");
             field.varType = canonicalType(fieldType.value);
             field.varName = consume().value;
-            expect(EQUALS);
-            field.left = makeNode(parseExpr());
+            if (peek().type == EQUALS) {
+                consume(); // =
+                field.left = makeNode(parseExpr());
+            }
             expect(SEMICOLON);
             node.children.push_back(field);
         }
