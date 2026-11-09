@@ -83,6 +83,7 @@ sources=(
     "examples/b2_string_input.svx"
     "examples/b2_pointer.svx"
     "examples/b2_dynamic_array.svx"
+    "examples/dyn_array_methods.svx"
     "examples/b2_file_read.svx"
     "examples/p0_array_types.svx"
     "examples/a11_file_write.svx"
@@ -426,6 +427,13 @@ for source in "${sources[@]}"; do
         expected=$'15'
         if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
             echo "FAIL: dynamic array result mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "examples/dyn_array_methods.svx" ]]; then
+        expected=$'3\n10\n20\n30\n2\n20\n1\n5'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: dynamic array methods result mismatch" >&2
             cat "$work/output.txt" >&2
             exit 1
         fi

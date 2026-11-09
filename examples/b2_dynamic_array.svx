@@ -1,5 +1,5 @@
 ptr values = nw rox[2];
-values[0] = 7;
-values[1] = 8;
+values.push(7);
+values.push(8);
 print(values[0] + values[1]);
 del values;

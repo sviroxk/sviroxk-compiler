@@ -1024,6 +1024,11 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
 void CodeGen::genNode(const Node& node) {
     if (blockHasTerminator(builder.GetInsertBlock()))
         return;
+    if (node.type == NODE_IMPORT) {
+        // Imports are handled during tokenization (main.cpp::appendModuleTokens)
+        // No codegen needed - they were expanded into the token stream
+        return;
+    }
     if (node.type == NODE_SLOV) {
         if (node.left && node.left->type == NODE_STRING) {
             llvm::Value* str = getStringPtr(node.left->value);
@@ -1098,10 +1103,10 @@ void CodeGen::genNode(const Node& node) {
             llvm::AllocaInst* desc = builder.CreateAlloca(descType, nullptr, node.varName);
             builder.CreateStore(data,
                 builder.CreateStructGEP(descType, desc, 0));
+            builder.CreateStore(builder.getInt64(0),
+                builder.CreateStructGEP(descType, desc, 1)); // length = 0
             builder.CreateStore(size,
-                builder.CreateStructGEP(descType, desc, 1));
-            builder.CreateStore(size,
-                builder.CreateStructGEP(descType, desc, 2));
+                builder.CreateStructGEP(descType, desc, 2)); // capacity = size
             dynArrays[node.varName] = desc;
             dynArrayElementTypes[node.varName] = elementType;
             vars[node.varName] = desc;
@@ -1241,6 +1246,105 @@ void CodeGen::genNode(const Node& node) {
             val = castTo(val, elementType, isUnsignedExpr(node.args[i]));
             builder.CreateStore(val, gep);
         }
+    }
+    else if (node.type == NODE_ARRAY_POP) {
+        auto found = dynArrays.find(node.varName);
+        if (found == dynArrays.end())
+            codegenFailure(node, "неизвестный динамический массив '" + node.varName + "'");
+        llvm::StructType* descType = dynArrayType();
+        llvm::AllocaInst* desc = found->second;
+        llvm::Value* length = builder.CreateLoad(builder.getInt64Ty(),
+            builder.CreateStructGEP(descType, desc, 1));
+        llvm::Value* isNonEmpty = builder.CreateICmpNE(length, builder.getInt64(0));
+        llvm::Function* function = builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* hasElem = llvm::BasicBlock::Create(context, "pop_has", function);
+        llvm::BasicBlock* done = llvm::BasicBlock::Create(context, "pop_done", function);
+        builder.CreateCondBr(isNonEmpty, hasElem, done);
+        builder.SetInsertPoint(hasElem);
+        llvm::Value* lastIdx = builder.CreateSub(length, builder.getInt64(1));
+        builder.CreateStore(lastIdx,
+            builder.CreateStructGEP(descType, desc, 1));
+        builder.CreateBr(done);
+        builder.SetInsertPoint(done);
+    }
+    else if (node.type == NODE_ARRAY_PUSH) {
+        auto found = dynArrays.find(node.varName);
+        if (found == dynArrays.end())
+            codegenFailure(node, "неизвестный динамический массив '" + node.varName + "'");
+        llvm::StructType* descType = dynArrayType();
+        llvm::AllocaInst* desc = found->second;
+        llvm::Type* elementType = dynArrayElementTypes[node.varName];
+        if (!elementType) elementType = builder.getInt32Ty();
+
+        llvm::Value* length = builder.CreateLoad(builder.getInt64Ty(),
+            builder.CreateStructGEP(descType, desc, 1));
+        llvm::Value* capacity = builder.CreateLoad(builder.getInt64Ty(),
+            builder.CreateStructGEP(descType, desc, 2));
+
+        // Grow if length == capacity (double capacity, minimum 1)
+        llvm::Function* function = builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* growBlock = llvm::BasicBlock::Create(context, "push_grow", function);
+        llvm::BasicBlock* noGrowBlock = llvm::BasicBlock::Create(context, "push_nogrow", function);
+        llvm::BasicBlock* afterGrowBlock = llvm::BasicBlock::Create(context, "push_after_grow", function);
+
+        llvm::Value* needsGrow = builder.CreateICmpEQ(length, capacity);
+        builder.CreateCondBr(needsGrow, growBlock, noGrowBlock);
+
+        // Grow path
+        builder.SetInsertPoint(growBlock);
+        llvm::Value* newCapacity = builder.CreateSelect(
+            builder.CreateICmpEQ(capacity, builder.getInt64(0)),
+            builder.getInt64(1),
+            builder.CreateMul(capacity, builder.getInt64(2))
+        );
+        growDynArray(node.varName, newCapacity);
+        builder.CreateBr(afterGrowBlock);
+
+        // No grow path
+        builder.SetInsertPoint(noGrowBlock);
+        builder.CreateBr(afterGrowBlock);
+
+        // After grow - store element and increment length
+        builder.SetInsertPoint(afterGrowBlock);
+        llvm::Value* currentLength = builder.CreateLoad(builder.getInt64Ty(),
+            builder.CreateStructGEP(descType, desc, 1));
+        llvm::Value* currentData = builder.CreateLoad(builder.getPtrTy(),
+            builder.CreateStructGEP(descType, desc, 0));
+        llvm::Value* value = genExpr(*node.left);
+        value = castTo(value, elementType, isUnsignedExpr(*node.left));
+        llvm::Value* gep = builder.CreateGEP(elementType, currentData, {currentLength});
+        builder.CreateStore(value, gep);
+        llvm::Value* newLength = builder.CreateAdd(currentLength, builder.getInt64(1));
+        builder.CreateStore(newLength, builder.CreateStructGEP(descType, desc, 1));
+    }
+    else if (node.type == NODE_ARRAY_RESIZE) {
+        auto found = dynArrays.find(node.varName);
+        if (found == dynArrays.end())
+            codegenFailure(node, "неизвестный динамический массив '" + node.varName + "'");
+        llvm::StructType* descType = dynArrayType();
+        llvm::AllocaInst* desc = found->second;
+
+        llvm::Value* newSize = genExpr(*node.left);
+        newSize = builder.CreateSExt(newSize, builder.getInt64Ty());
+
+        llvm::Value* capacity = builder.CreateLoad(builder.getInt64Ty(),
+            builder.CreateStructGEP(descType, desc, 2));
+
+        // Grow if newSize > capacity
+        llvm::Function* function = builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* growBlock = llvm::BasicBlock::Create(context, "resize_grow", function);
+        llvm::BasicBlock* noGrowBlock = llvm::BasicBlock::Create(context, "resize_nogrow", function);
+
+        llvm::Value* needsGrow = builder.CreateICmpUGT(newSize, capacity);
+        builder.CreateCondBr(needsGrow, growBlock, noGrowBlock);
+
+        builder.SetInsertPoint(growBlock);
+        // Grow to at least newSize (round up to next power of 2 for efficiency)
+        growDynArray(node.varName, newSize);
+        builder.CreateBr(noGrowBlock);
+
+        builder.SetInsertPoint(noGrowBlock);
+        builder.CreateStore(newSize, builder.CreateStructGEP(descType, desc, 1));
     }
     else if (node.type == NODE_STRUCT_DEF) {
         std::vector<StructField> fields;

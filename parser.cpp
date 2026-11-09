@@ -318,7 +318,7 @@ Node parsePrimary() {
                 left.column = field.column;
                 left.file = field.file;
                 expect(LPAREN);
-                left.args.push_back(parseExpr());
+                left.left = makeNode(parseExpr());
                 expect(RPAREN);
             } else if (field.type == IDENTIFIER && field.value == "pop") {
                 left.type = NODE_ARRAY_POP;
@@ -335,7 +335,7 @@ Node parsePrimary() {
                 left.column = field.column;
                 left.file = field.file;
                 expect(LPAREN);
-                left.args.push_back(parseExpr());
+                left.left = makeNode(parseExpr());
                 expect(RPAREN);
             } else if (field.type == IDENTIFIER && field.value == "len") {
                 left.type = NODE_ARRAY_LEN;
@@ -977,6 +977,68 @@ Node parseOne() {
                 failAt(peek(), "ожидалась ',' или ')' в списке аргументов");
         }
         expect(RPAREN);
+        expect(SEMICOLON);
+        return node;
+    }
+    // Array method calls as statements: arr.push(x), arr.pop(), arr.resize(n), arr.len(), arr.cap()
+    if (peek().type == IDENTIFIER && peek(1).type == DOT) {
+        Token name = peek();
+        Token field = peek(2);
+        if (field.type == IDENTIFIER &&
+            (field.value == "push" || field.value == "pop" ||
+             field.value == "resize" || field.value == "len" || field.value == "cap")) {
+            consume(); // identifier
+            consume(); // DOT
+            Token method = consume(); // method name
+            Node node;
+            node.line = name.line;
+            node.column = name.column;
+            node.file = name.file;
+            node.varName = name.value;
+            if (method.value == "push") {
+                node.type = NODE_ARRAY_PUSH;
+                expect(LPAREN);
+                node.left = makeNode(parseExpr());
+                expect(RPAREN);
+            } else if (method.value == "pop") {
+                node.type = NODE_ARRAY_POP;
+                expect(LPAREN);
+                expect(RPAREN);
+            } else if (method.value == "resize") {
+                node.type = NODE_ARRAY_RESIZE;
+                expect(LPAREN);
+                node.left = makeNode(parseExpr());
+                expect(RPAREN);
+            } else if (method.value == "len") {
+                node.type = NODE_ARRAY_LEN;
+                expect(LPAREN);
+                expect(RPAREN);
+            } else if (method.value == "cap") {
+                node.type = NODE_ARRAY_CAP;
+                expect(LPAREN);
+                expect(RPAREN);
+            }
+            expect(SEMICOLON);
+            return node;
+        }
+    }
+    // nw — создать динамический массив как оператор
+    if (peek().type == NW) {
+        Token token = peek();
+        Node node; node.type = NODE_VAR_DECL;
+        node.line = token.line; node.column = token.column; node.file = token.file;
+        consume(); // nw
+        Token typeToken = consume(); // rox / i32 / etc
+        node.left = makeNode();
+        node.left->type = NODE_DYN_ARRAY;
+        node.left->varType = typeToken.value;
+        node.left->line = typeToken.line;
+        node.left->column = typeToken.column;
+        node.left->file = typeToken.file;
+        expect(LBRACKET);
+        node.left->left = makeNode(parseExpr());
+        expect(RBRACKET);
+        node.varName = consume().value;
         expect(SEMICOLON);
         return node;
     }
