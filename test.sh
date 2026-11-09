@@ -711,6 +711,9 @@ expect_compile_error "missing-return-foreach" 'fn int scan() { svi rox[] lor ite
 expect_compile_error "missing-return-range" 'fn int sum() { cert ceh (3) { } }' "должна возвращать значение"
 expect_compile_error "missing-return-block" 'fn int nested() { cert ceh (1) { if (true) { return 1; } } }' "должна возвращать значение"
 expect_compile_error "missing-return-if-no-else" 'fn int pick(bool flag) { if (flag) { return 1; } }' "должна возвращать значение"
+expect_compile_error "forward-decl-mismatch" 'fn int f(); fn int f(int x) { return x; }' "количество параметров forward-declaration"
+expect_compile_error "forward-decl-return-type-mismatch" 'fn int f(); fn void f() { }' "тип результата forward-declaration"
+expect_compile_error "duplicate-forward-decl" 'fn int g(); fn int g();' "повторное объявление функции"
 
 IMPORT_DIR="$TMP_DIR/imports"
 mkdir -p "$IMPORT_DIR/lib"

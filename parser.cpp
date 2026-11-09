@@ -805,6 +805,12 @@ Node parseOne() {
             }
         }
         expect(RPAREN);
+        // Forward declaration: fn int name(type arg);
+        if (peek().type == SEMICOLON) {
+            consume();
+            node.isForwardDecl = true;
+            return node;
+        }
         expect(LBRACE);
         node.children = parseBlock();
         expect(RBRACE);

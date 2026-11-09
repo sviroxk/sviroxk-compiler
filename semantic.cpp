@@ -36,6 +36,7 @@ struct Function {
     sc::Type returnTy;
     int line;
     int column;
+    bool isForwardDecl = false;
 };
 
 class Checker {
@@ -63,12 +64,40 @@ public:
                     size_t separator = param.find(':');
                     fn.parameters.push_back(normalize(param.substr(0, separator)));
                 }
+                fn.isForwardDecl = node.isForwardDecl;
                 if (isBuiltinFunction(node.varName))
                     error(node, "имя функции '" + node.varName + "' зарезервировано встроенной функцией");
-                else if (functions_.count(node.varName))
-                    error(node, "повторное объявление функции '" + node.varName + "'");
-                else
+                else if (functions_.count(node.varName)) {
+                    Function& existing = functions_[node.varName];
+                    if (existing.isForwardDecl && !node.isForwardDecl) {
+                        // Validate forward declaration matches the definition.
+                        if (normalize(node.varType) != existing.returnType)
+                            error(node, "тип результата forward-declaration '" + node.varName +
+                                  "' не соответствует определению");
+                        else if (node.params.size() != existing.parameters.size())
+                            error(node, "количество параметров forward-declaration '" + node.varName +
+                                  "' не соответствует определению");
+                        else {
+                            bool paramMismatch = false;
+                            for (size_t i = 0; i < node.params.size(); ++i) {
+                                const size_t sep = node.params[i].find(':');
+                                const std::string ptype = normalize(node.params[i].substr(0, sep));
+                                if (ptype != existing.parameters[i]) { paramMismatch = true; break; }
+                            }
+                            if (paramMismatch)
+                                error(node, "типы параметров forward-declaration '" + node.varName +
+                                      "' не соответствуют определению");
+                            else
+                                existing = fn;
+                        }
+                    } else if (node.isForwardDecl && existing.isForwardDecl) {
+                        error(node, "повторное объявление функции '" + node.varName + "'");
+                    } else if (!existing.isForwardDecl && !node.isForwardDecl) {
+                        error(node, "повторное объявление функции '" + node.varName + "'");
+                    }
+                } else {
                     functions_[node.varName] = fn;
+                }
             }
         }
 
@@ -77,7 +106,7 @@ public:
                 checkNode(node);
         }
         for (const Node& node : program.children) {
-            if (node.type == NODE_FUNC_DEF)
+            if (node.type == NODE_FUNC_DEF && !node.isForwardDecl)
                 checkFunction(node);
             else if (node.type == NODE_STRUCT_DEF)
                 checkStruct(node);

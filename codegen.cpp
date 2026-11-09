@@ -1729,6 +1729,8 @@ void CodeGen::generate(const Node& program) {
 
     for (const Node& node : program.children) {
         if (node.type != NODE_FUNC_DEF) continue;
+        // Skip forward declarations in first pass (only declare, no body)
+        if (node.isForwardDecl) continue;
         std::vector<llvm::Type*> parameterTypes;
         std::vector<std::string> parameterNames;
         for (const std::string& parameter : node.params) {
@@ -1749,7 +1751,7 @@ void CodeGen::generate(const Node& program) {
     }
 
     for (const Node& node : program.children)
-        if (node.type == NODE_FUNC_DEF) genNode(node);
+        if (node.type == NODE_FUNC_DEF && !node.isForwardDecl) genNode(node);
 
     llvm::FunctionType* funcType =
         llvm::FunctionType::get(builder.getInt32Ty(), false);
