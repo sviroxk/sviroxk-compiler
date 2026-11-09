@@ -1024,6 +1024,11 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
 void CodeGen::genNode(const Node& node) {
     if (blockHasTerminator(builder.GetInsertBlock()))
         return;
+    if (node.type == NODE_IMPORT) {
+        // Imports are handled during tokenization (main.cpp::appendModuleTokens)
+        // No codegen needed - they were expanded into the token stream
+        return;
+    }
     if (node.type == NODE_SLOV) {
         if (node.left && node.left->type == NODE_STRING) {
             llvm::Value* str = getStringPtr(node.left->value);
