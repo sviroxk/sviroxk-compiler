@@ -45,6 +45,7 @@ public:
     }
 
     bool run(const Node& program) {
+        inStatement_ = true;
         for (const Node& node : program.children) {
             if (node.type == NODE_STRUCT_DEF) {
                 if (structs_.count(node.varName))
@@ -92,6 +93,8 @@ private:
     std::map<std::string, const Node*> structs_;
     std::vector<std::string> returnTypes_;
     unsigned loopDepth_ = 0;
+    bool inFunction_ = false;
+    bool inStatement_ = false;
 
     static bool isBuiltinFunction(const std::string& name) {
         static const std::set<std::string> names = {
@@ -733,18 +736,30 @@ private:
     bool alwaysReturns(const std::vector<Node>& statements) const {
         if (statements.empty()) return false;
         const Node& last = statements.back();
-        if (last.type == NODE_RETURN) return true;
-        if (last.type == NODE_IF && !last.elseChildren.empty())
+        switch (last.type) {
+        case NODE_RETURN: return true;
+        case NODE_IF:
+            if (last.elseChildren.empty()) return false;
             return alwaysReturns(last.children) && alwaysReturns(last.elseChildren);
-        return false;
+        default:
+            // Loops, blocks and expressions never guarantee a return on all paths:
+            // the body may not execute, or the last statement may be a side effect.
+            return false;
+        }
     }
 
     bool alwaysTerminates(const Node& node) const {
-        if (node.type == NODE_RETURN || node.type == NODE_BREAK ||
-            node.type == NODE_CONTINUE) return true;
-        if (node.type == NODE_IF && !node.elseChildren.empty())
+        switch (node.type) {
+        case NODE_RETURN:
+        case NODE_BREAK:
+        case NODE_CONTINUE:
+            return true;
+        case NODE_IF:
+            if (node.elseChildren.empty()) return false;
             return alwaysTerminates(node.children) && alwaysTerminates(node.elseChildren);
-        return false;
+        default:
+            return false;
+        }
     }
 
     bool alwaysTerminates(const std::vector<Node>& statements) const {
@@ -752,6 +767,8 @@ private:
     }
 
     void checkStatements(const std::vector<Node>& statements) {
+        const bool previousInStatement = inStatement_;
+        inStatement_ = true;
         bool terminated = false;
         for (const Node& statement : statements) {
             if (terminated)
@@ -759,11 +776,13 @@ private:
             checkNode(statement);
             terminated = terminated || alwaysTerminates(statement);
         }
+        inStatement_ = previousInStatement;
     }
 
     void checkFunction(const Node& node) {
         scopes_.emplace_back();
         returnTypes_.push_back(normalize(node.varType));
+        inFunction_ = true;
         for (const std::string& param : node.params) {
             size_t separator = param.find(':');
             std::string type = param.substr(0, separator);
@@ -775,6 +794,7 @@ private:
         if (normalize(node.varType) != "void" && !alwaysReturns(node.children))
             error(node, "функция должна возвращать значение на всех путях выполнения");
         returnTypes_.pop_back();
+        inFunction_ = false;
         scopes_.pop_back();
     }
 
@@ -1056,9 +1076,16 @@ private:
                       "', получено '" + typeName(actual) + "'");
             break;
         }
-        case NODE_FUNC_CALL:
-            call(node);
+        case NODE_FUNC_CALL: {
+            const std::string resultType = call(node);
+            // A function with a non-void return type called as a statement
+            // discards its result. Builtins are exempt: their result is
+            // intentionally ignorable (mirrors C semantics for print/sqrt/...).
+            if (inStatement_ && resultType != "void" && resultType != "<error>" &&
+                !isBuiltinFunction(node.varName))
+                error(node, "результат функции '" + node.varName + "' не используется");
             break;
+        }
         case NODE_SLOV:
             if (node.left) expression(*node.left);
             break;

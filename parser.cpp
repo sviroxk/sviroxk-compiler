@@ -1256,6 +1256,13 @@ Node parseOne() {
         return node;
     }
 
+    // Общий оператор-выражение: любое выражение, завершённое точкой с запятой,
+    // например тернарный оператор `cond ? a : b;` или вызов функции.
+    if (peek().type != END) {
+        Node node = parseExpr();
+        expect(SEMICOLON);
+        return node;
+    }
     failAt(peek(), "неизвестная конструкция, начинается с " + tokenDescription(peek()));
     return Node{};
 }

@@ -704,6 +704,13 @@ expect_compile_error "type-mismatch-initializer" 'int count = "wrong";'
 expect_compile_error "recursive-struct-definition" 'tip BadRecursive { rox value; BadRecursive next; }' "рекурсивное определение структуры"
 expect_compile_error "struct-copy-ownership" 'tip Container { rox id; ptr data; } svi tip Container lor a; a.id = 1; a.data = null; svi tip Container lor b; b = a;' "неявное копирование структуры"
 expect_compile_error "struct-ptr-field-access" 'tip Node { rox value; ptr next; } svi tip Node lor n1; svi tip Node lor n2; n1.value = 10; n1.next = &n2; n2.value = 20; n2.next = null; print(n1.next.value);' "не имеет полей"
+expect_compile_error "unused-function-result" 'fn int answer() { return 42; } answer();' "результат функции"
+expect_compile_error "missing-return-ternary" 'fn int choose(bool flag) { flag ? 1 : 2; }' "должна возвращать значение"
+expect_compile_error "missing-return-while" 'fn int while_loop() { while (true) { } }' "должна возвращать значение"
+expect_compile_error "missing-return-foreach" 'fn int scan() { svi rox[] lor items = [1, 2]; for x in items { } }' "должна возвращать значение"
+expect_compile_error "missing-return-range" 'fn int sum() { cert ceh (3) { } }' "должна возвращать значение"
+expect_compile_error "missing-return-block" 'fn int nested() { cert ceh (1) { if (true) { return 1; } } }' "должна возвращать значение"
+expect_compile_error "missing-return-if-no-else" 'fn int pick(bool flag) { if (flag) { return 1; } }' "должна возвращать значение"
 
 IMPORT_DIR="$TMP_DIR/imports"
 mkdir -p "$IMPORT_DIR/lib"
