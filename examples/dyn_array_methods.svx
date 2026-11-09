@@ -1,0 +1,14 @@
+nw rox[5] arr;
+arr.push(10);
+arr.push(20);
+arr.push(30);
+print(arr.len());
+print(arr[0]);
+print(arr[1]);
+print(arr[2]);
+arr.pop();
+print(arr.len());
+print(arr[1]);
+arr.resize(1);
+print(arr.len());
+print(arr.cap());

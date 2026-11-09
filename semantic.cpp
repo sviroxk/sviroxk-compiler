@@ -436,7 +436,7 @@ private:
             const std::string element = array->isDynArray
                 ? array->dynArrayElementType : array->ty.element->toString();
             if (!node.args.empty()) {
-                std::string value = expression(node.args[0]);
+                std::string value = expression(*node.left);
                 if (value != "<error>" && !element.empty() && !compatible(element, value))
                     error(node.args[0], "элемент массива ожидает тип '" + typeName(element) + "'");
             }

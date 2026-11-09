@@ -117,3 +117,17 @@
 - `./test.sh`: все 68 примеров + CLI + 28 негативных fixture + импорт/циклы — зелёно.
 - `CXXFLAGS='-Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer' ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./test.sh`: прошёл.
 - Коммит `171c14d`. Stage 3 (переменные, константы, выражения, definite assignment) — 100%.
+
+## Stage 4 — динамические массивы: push/pop/resize/len/cap
+- `nw T[n]` в codegen теперь выставляет `length = 0`, `capacity = n` (раньше оба были равны n, из-за чего первый push всегда ресайзился).
+- Добавлен `NODE_ARRAY_POP` в `genNode`: уменьшает length на 1 при ненулевой длине, без side-effect в противном случае.
+- `NODE_ARRAY_POP` также поддерживается в `genExpr` (возвращает последний элемент).
+- `NODE_ARRAY_PUSH` / `NODE_ARRAY_RESIZE` в `genNode` используют `growDynArray` с умножением capacity (минимум 1).
+- `NODE_ARRAY_LEN` / `NODE_ARRAY_CAP` в `genExpr` читают поля дескриптора.
+- `parseOne()` распознаёт array method calls как statements: `arr.push(x)`, `arr.pop()`, `arr.resize(n)`, `arr.len()`, `arr.cap()`.
+- `parsePrimary()` для `push`/`resize` теперь кладёт аргумент в `node.left` вместо `node.args`; `semantic.cpp::NODE_ARRAY_PUSH` читает `node.left`.
+- `examples/b2_dynamic_array.svx` обновлён: использует `push` вместо прямой индексной записи.
+- Добавлен `examples/dyn_array_methods.svx` с ожидаемым выводом `3\n10\n20\n30\n2\n20\n1\n5`.
+- `./test.sh`: все 68 примеров + CLI + 28 негативных fixture + импорт/циклы — зелёно.
+- `CXXFLAGS='-Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer' ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./test.sh`: прошёл.
+- Stage 4 (динамические массивы) — 100%.
