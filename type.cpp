@@ -71,14 +71,51 @@ Type Type::commonType(const Type& other) const {
     }
     if (isInteger() && other.isInteger()) {
         if (signed_ != other.signed_) {
-            // Mixed signedness: promote to the wider signed type if it fits, else error.
-            const unsigned w = std::max(width, other.width);
-            if (w <= 64) return Type::integer(w, true);
+            // Mixed signedness: narrow operands promote to i32; otherwise the
+            // wider signed type wins if it can hold the unsigned range, else error.
+            const unsigned unsignedBits = isUnsigned() ? width : other.width;
+            const unsigned signedBits = isUnsigned() ? other.width : width;
+            if (std::max(unsignedBits, signedBits) < 32) return Type::integer(32, true);
+            if (signedBits > unsignedBits) return Type::integer(signedBits, true);
             return Type::error();
         }
         return Type::integer(std::max(width, other.width), signed_);
     }
     return Type::error();
+}
+
+bool Type::isConvertibleTo(const Type& target) const {
+    if (isError() || target.isError()) return true;
+    if (kind == target.kind) {
+        if (isStruct()) return structName == target.structName;
+        if (isArray() && target.isArray()) return element->compatible(*target.element);
+        if (isDynArray() && target.isDynArray()) return element->compatible(*target.element);
+        return true;
+    }
+    // char <-> u8 (historical alias)
+    if ((isChar() && target.isInteger() && target.width == 8 && !target.signed_) ||
+        (isInteger() && width == 8 && !signed_ && target.isChar()))
+        return true;
+    // ptr <-> array / dyn array
+    if (isPtr() && (target.isArray() || target.isDynArray())) return true;
+    if (target.isPtr() && (isArray() || isDynArray())) return true;
+    // f64 <- f32 (widening)
+    if (isFloat() && target.isFloat() && target.width >= width) return true;
+    // integer -> float
+    if (target.isFloat() && isInteger()) return true;
+    // integer widening/narrowing (cast) — same signedness
+    if (isInteger() && target.isInteger()) {
+        if (signed_ != target.signed_) return false;
+        return true;
+    }
+    return false;
+}
+
+Type Type::promote() const {
+    if (isError()) return Type::error();
+    if (isInteger() && width < 32) return Type::integer(32, signed_);
+    if (isBool() || isChar()) return Type::integer(32, true);
+    return *this;
 }
 
 std::string Type::toString() const {
@@ -138,6 +175,22 @@ bool Type::fitsLiteral(const std::string& text) const {
         } catch (...) { return false; }
     }
     return false;
+}
+
+bool Type::fitsArithmeticLiteral(const std::string& text) const {
+    if (text.empty()) return false;
+    if (isError()) return false;
+    // Reject narrow integer types (< 32 bits) for arithmetic literals
+    if (isInteger() && width < 32) return false;
+    // Reject float literals for integer targets
+    if (isInteger()) {
+        try {
+            size_t parsed = 0;
+            std::stod(text, &parsed);
+            if (parsed == text.size()) return false; // floating point literal
+        } catch (...) {}
+    }
+    return fitsLiteral(text);
 }
 
 } // namespace sc

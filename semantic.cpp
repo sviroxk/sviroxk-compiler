@@ -148,14 +148,7 @@ private:
     bool compatible(const std::string& expectedRaw, const std::string& actualRaw) const {
         const sc::Type expected = sc::Type::from(expectedRaw);
         const sc::Type actual = sc::Type::from(actualRaw);
-        if (expected.compatible(actual)) return true;
-        // Историческая совместимость: char <-> u8, array<...> <-> ptr
-        if ((expected.isChar() && actual.isInteger() && actual.width == 8 && !actual.signed_) ||
-            (actual.isChar() && expected.isInteger() && expected.width == 8 && !expected.signed_))
-            return true;
-        if (expected.isPtr() && (actual.isArray() || actual.isDynArray())) return true;
-        if (actual.isPtr() && (expected.isArray() || expected.isDynArray())) return true;
-        return false;
+        return expected.compatible(actual);
     }
 
     bool declare(const std::string& name, const std::string& type,
@@ -491,11 +484,12 @@ private:
 
     bool fitsNumericLiteral(const Node& node, const std::string& target) const {
         if (!isNumericLiteral(node)) return false;
+        const sc::Type targetTy = sc::Type::from(target);
+        if (targetTy.isError()) return false;
         const bool floatingLiteral = node.value.find_first_of(".eE") != std::string::npos;
-        if (floatingLiteral && isInteger(target)) return false;
-        if (target == "i8" || target == "i16" || target == "u8" || target == "u16")
-            return false;
-        return literalFits(target, node.value);
+        if (floatingLiteral && targetTy.isInteger()) return false;
+        if (targetTy.isInteger() && targetTy.width < 32) return false;
+        return targetTy.fitsLiteral(node.value);
     }
 
     std::string binary(const Node& node) {
@@ -515,12 +509,9 @@ private:
             return left;
         }
         std::string right = node.right ? expression(*node.right) : std::string("<error>");
-        const bool narrowUnsignedPromotion = ty(left).isInteger() && ty(right).isInteger() &&
-            ty(left).isUnsigned() != ty(right).isUnsigned() &&
-            ty(left).width < 32 && ty(right).width < 32;
-        if (!narrowUnsignedPromotion && node.right && fitsNumericLiteral(*node.left, right))
+        if (node.right && fitsNumericLiteral(*node.left, right))
             left = right;
-        else if (!narrowUnsignedPromotion && node.right && fitsNumericLiteral(*node.right, left))
+        else if (node.right && fitsNumericLiteral(*node.right, left))
             right = left;
         if (left == "<error>" || right == "<error>") return "<error>";
         if (node.op == "//") {
@@ -590,29 +581,12 @@ private:
             error(node, "арифметический оператор '" + node.op + "' требует числовые операнды");
             return "<error>";
         }
-        // Arithmetic promotion with mixed signedness:
-        // - both narrower than 32 bits -> i32
-        // - signed wider than unsigned -> signed type
-        // - otherwise -> error (requires explicit cast)
-        if (leftTy.isInteger() && rightTy.isInteger() &&
-            leftTy.isUnsigned() != rightTy.isUnsigned()) {
-            const unsigned unsignedBits = leftTy.isUnsigned() ? leftTy.width : rightTy.width;
-            const unsigned signedBits = leftTy.isUnsigned() ? rightTy.width : leftTy.width;
-            if (std::max(unsignedBits, signedBits) < 32) return "i32";
-            if (signedBits > unsignedBits)
-                return (leftTy.isUnsigned() ? rightTy : leftTy).toString();
-            error(node, "нельзя смешивать signed- и unsigned-типы этой ширины без явного преобразования");
-            return "<error>";
-        }
-        if (leftTy.isFloat() || rightTy.isFloat()) {
-            const sc::Type result = leftTy.commonType(rightTy);
-            if (!result.isError()) return result.toString();
-        }
-        if (leftTy.isInteger() && rightTy.isInteger()) {
-            const sc::Type result = leftTy.commonType(rightTy);
-            if (!result.isError()) return result.toString();
-        }
-        return "i32";
+        // Arithmetic promotion: delegate to the unified commonType().
+        const sc::Type result = leftTy.commonType(rightTy);
+        if (!result.isError()) return result.toString();
+        error(node, "нельзя смешивать типы '" + typeName(leftTy.toString()) +
+              "' и '" + typeName(rightTy.toString()) + "' без явного преобразования");
+        return "<error>";
     }
 
     std::string call(const Node& node) {

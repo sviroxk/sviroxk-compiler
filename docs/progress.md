@@ -90,3 +90,14 @@
 - `del` освобождает data pointer через `free`.
 - `./test.sh`: все 68 примеров + CLI + 28 негативных fixture + импорт/циклы — зелёно. `examples/b2_dynamic_array.svx` → `15`, `test_dyn_array.svx` → `10 20 30`.
 - Коммит в ветку `fix/dynamic-array-semantics`.
+
+## Stage 2 — единая типовая система `sc::Type` (ветка `feat/nested-struct-access`)
+- Заменены строковые сравнения типов в `semantic.cpp` на единую типовую структуру `sc::Type` (TypeKind enum: Error/Integer/Float/Bool/Char/Str/Ptr/Void/File/Struct/Array/DynArray).
+- `compatible()` в Checker теперь делегирует напрямую в `sc::Type::compatible()` — исторические исключения `char <-> u8`, `ptr <-> array/dynarray` перенесены в сам тип.
+- `fitsNumericLiteral()` переписан через `sc::Type::fitsLiteral()` + `fitsArithmeticLiteral()` (отвергает узкие типы narrower 32 бит и float-литералы для целевых типов).
+- `binary()` арифметического promotion делегирует в `sc::Type::commonType()` — устранена дублирующая логика смешанной signedness; несовместимые пары теперь дают контролируемую semantic-ошибку вместо silent `i32`.
+- `sc::Type::from()` нормализует все синонимы (`int/i32/rox`, `uint/u32`, `byte/u8`, `array<...>` → Array, `dyn<...>` → DynArray, неизвестное → Struct).
+- `Type::toString()` даёт каноническое представление; `isConvertibleTo()`, `promote()`, `isScalar()`/`isNumeric()` — вспомогательные предикаты для semantic/codegen.
+- `./test.sh`: все 68 примеров + CLI + 28 негативных fixture + импорт/циклы — зелёно.
+- `CXXFLAGS='-Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer' ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./test.sh`: прошёл.
+- Коммит `a77556f feat: nested struct field access and recursive struct literal initialization` + Stage 2 типовой миграции.

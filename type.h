@@ -160,11 +160,24 @@ struct Type {
     // Проверяет, что текстовый литерал вписывается в тип (диапазон, формат).
     bool fitsLiteral(const std::string& text) const;
 
+    // Проверяет, что числовой литерал может использоваться в арифметическом
+    // контексте для этого типа (отвергает узкие типы narrower 32 бит и
+    // float-литералы для целевых типов).
+    bool fitsArithmeticLiteral(const std::string& text) const;
+
     // Неявное преобразование без потерь данных ( widening only ).
     bool compatible(const Type& other) const;
 
     // Тип результата бинарной операции (numeric promotion).
     Type commonType(const Type& other) const;
+
+    // Явное (cast) или неявное преобразование: может значение этого типа
+    // быть преобразовано к target без потери данных (widening) или с cast.
+    bool isConvertibleTo(const Type& target) const;
+
+    // Арифметическое продвижение: целые narrower 32 бит -> i32,
+    // f32/f64 остаются собой, bool/char -> i32.
+    Type promote() const;
 
     std::string toString() const;
 };
