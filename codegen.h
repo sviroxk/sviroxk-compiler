@@ -52,6 +52,11 @@ public:
     std::map<std::string, std::string> structTypesByVariable;
     llvm::BasicBlock* breakBlock = nullptr;
     llvm::BasicBlock* continueBlock = nullptr;
+    std::vector<Node*> deferStack_;
+
+    size_t saveDeferred() const;
+    void restoreDeferred(size_t base);
+    void flushDeferred();
     llvm::Function* putsFunc = nullptr;
     llvm::Function* printfFunc = nullptr;
     llvm::Function* abortFunc = nullptr;

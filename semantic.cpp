@@ -1206,6 +1206,19 @@ private:
                 error(node, "освободить можно только динамический массив или ptr");
             break;
         }
+        case NODE_DROP: {
+            const Symbol* symbol = lookup(node.varName);
+            if (!symbol) error(node, "неизвестное имя '" + node.varName + "'");
+            else if (!symbol->isDynArray && !symbol->ty.isArray() &&
+                     !symbol->ty.isPtr() && !symbol->ty.isFile() && !symbol->ty.isStr())
+                error(node, "drop поддерживается только для динамического массива, ptr, str и file");
+            break;
+        }
+        case NODE_DEFER: {
+            // Defer statement: validate the deferred statement recursively.
+            if (node.left) checkNode(*node.left);
+            break;
+        }
         case NODE_ARRAY_PUSH: {
             const Symbol* array = lookup(node.varName);
             if (!array) {

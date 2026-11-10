@@ -32,7 +32,7 @@ enum TokenType {
     PTR,
     ATK, ZAP, PRO, ZAK, FILE_T,
     SQRT, ABS, POW, MAX, MIN, FLO, CEL, RON, RAN,
-    CHR, ROX64, TRUE_T, FALSE_T, NW, DEL, BRK, CONT, IMP,
+    CHR, ROX64, TRUE_T, FALSE_T, NW, DEL, DROP, DEFER, BRK, CONT, IMP,
     AR, SER, REP, VV_S, STR,
     VD,
     // Сравнения

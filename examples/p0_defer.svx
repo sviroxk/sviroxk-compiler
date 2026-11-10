@@ -1,0 +1,5 @@
+// P0: defer — отложить выполнение statement до выхода из области видимости
+svi rox lor n = 0;
+defer print(1);
+n = n + 1;
+print(n);

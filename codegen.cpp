@@ -39,6 +39,22 @@ void CodeGen::restoreScope(const ScopeSnapshot& scope) {
     structTypesByVariable = scope.structTypesByVariable;
 }
 
+size_t CodeGen::saveDeferred() const {
+    return deferStack_.size();
+}
+
+void CodeGen::restoreDeferred(size_t base) {
+    while (deferStack_.size() > base) {
+        Node* deferred = deferStack_.back();
+        deferStack_.pop_back();
+        genNode(*deferred);
+    }
+}
+
+void CodeGen::flushDeferred() {
+    restoreDeferred(0);
+}
+
 llvm::Value* CodeGen::getStringPtr(const std::string& str) {
     llvm::GlobalVariable* gv = builder.CreateGlobalString(str);
     return builder.CreateInBoundsGEP(gv->getValueType(), gv,
@@ -1232,6 +1248,8 @@ void CodeGen::genNode(const Node& node) {
         }
     }
     else if (node.type == NODE_RETURN) {
+        // Deferred statements run before the function actually returns.
+        flushDeferred();
         llvm::Function* cur = builder.GetInsertBlock()->getParent();
         llvm::Type* retTy = cur->getReturnType();
         if (retTy->isVoidTy()) {
@@ -1438,10 +1456,13 @@ void CodeGen::genNode(const Node& node) {
             integerWidths[pname] = ty->isIntegerTy() ? ty->getIntegerBitWidth() : 32;
         }
         bool hasRet = false;
+        const size_t funcDeferredBase = saveDeferred();
         for (const Node& n : node.children) {
             genNode(n);
             if (n.type == NODE_RETURN) { hasRet = true; break; }
         }
+        // Run deferred statements at function exit (LIFO order).
+        restoreDeferred(funcDeferredBase);
         if (!hasRet && !retTy->isVoidTy()) {
             if (retTy->isDoubleTy())
                 builder.CreateRet(llvm::ConstantFP::get(builder.getDoubleTy(), 0.0));
@@ -1491,6 +1512,36 @@ void CodeGen::genNode(const Node& node) {
             builder.CreateCall(freeF, {ptr});
         }
     }
+    else if (node.type == NODE_DROP) {
+        // drop: deterministic deallocation for dyn arrays, ptr, str, file
+        if (dynArrays.count(node.varName)) {
+            llvm::AllocaInst* desc = dynArrays[node.varName];
+            llvm::Value* dataPtr = builder.CreateLoad(builder.getPtrTy(),
+                builder.CreateStructGEP(dynArrayType(), desc, 0));
+            llvm::FunctionType* freeType =
+                llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()}, false);
+            llvm::Function* freeF = module.getFunction("free");
+            if (!freeF) freeF = llvm::Function::Create(freeType,
+                llvm::Function::ExternalLinkage, "free", module);
+            builder.CreateCall(freeF, {dataPtr});
+            dynArrays.erase(node.varName);
+            dynArrayElementTypes.erase(node.varName);
+        } else if (vars.count(node.varName)) {
+            llvm::AllocaInst* alloca = vars[node.varName];
+            llvm::Value* ptr = builder.CreateLoad(builder.getPtrTy(), alloca);
+            llvm::FunctionType* freeType =
+                llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()}, false);
+            llvm::Function* freeF = module.getFunction("free");
+            if (!freeF) freeF = llvm::Function::Create(freeType,
+                llvm::Function::ExternalLinkage, "free", module);
+            builder.CreateCall(freeF, {ptr});
+        }
+    }
+    else if (node.type == NODE_DEFER) {
+        // defer: schedule the statement to run at scope exit.
+        // Deferred statements run in LIFO order when the current scope exits.
+        if (node.left) deferStack_.push_back(node.left);
+    }
     else if (node.type == NODE_FILE_WRITE) {
         llvm::FunctionType* fputsType =
             llvm::FunctionType::get(builder.getInt32Ty(),
@@ -1534,13 +1585,16 @@ void CodeGen::genNode(const Node& node) {
             llvm::BasicBlock::Create(context, "merge", func);
         builder.CreateCondBr(cond, thenBlock, elseBlock);
         const ScopeSnapshot parentScope = saveScope();
+        const size_t deferredBase = saveDeferred();
         builder.SetInsertPoint(thenBlock);
         for (const Node& n : node.children) genNode(n);
+        restoreDeferred(deferredBase);
         if (!blockHasTerminator(builder.GetInsertBlock()))
             builder.CreateBr(mergeBlock);
         restoreScope(parentScope);
         builder.SetInsertPoint(elseBlock);
         for (const Node& n : node.elseChildren) genNode(n);
+        restoreDeferred(deferredBase);
         if ((builder.GetInsertBlock()->empty() || !builder.GetInsertBlock()->back().isTerminator()))
             builder.CreateBr(mergeBlock);
         restoreScope(parentScope);
@@ -1571,7 +1625,9 @@ void CodeGen::genNode(const Node& node) {
         builder.CreateCondBr(cond, bodyBlock, afterBlock);
         builder.SetInsertPoint(bodyBlock);
         const ScopeSnapshot parentScope = saveScope();
+        const size_t deferredBase = saveDeferred();
         for (const Node& n : node.children) genNode(n);
+        restoreDeferred(deferredBase);
         if ((builder.GetInsertBlock()->empty() || !builder.GetInsertBlock()->back().isTerminator()))
             builder.CreateBr(stepBlock);
         restoreScope(parentScope);
@@ -1617,7 +1673,9 @@ void CodeGen::genNode(const Node& node) {
             arrayType, array, {builder.getInt32(0), current});
         llvm::Value* value = builder.CreateLoad(elementType, address);
         builder.CreateStore(value, element);
+        const size_t deferredBase = saveDeferred();
         for (const Node& child : node.children) genNode(child);
+        restoreDeferred(deferredBase);
         if ((builder.GetInsertBlock()->empty() || !builder.GetInsertBlock()->back().isTerminator())) builder.CreateBr(stepBlock);
         builder.SetInsertPoint(stepBlock);
         current = builder.CreateLoad(builder.getInt32Ty(), index);
@@ -1666,7 +1724,9 @@ void CodeGen::genNode(const Node& node) {
                                             : builder.CreateICmpSLT(current, end);
         builder.CreateCondBr(condition, bodyBlock, afterBlock);
         builder.SetInsertPoint(bodyBlock);
+        const size_t deferredBase = saveDeferred();
         for (const Node& child : node.children) genNode(child);
+        restoreDeferred(deferredBase);
         if ((builder.GetInsertBlock()->empty() || !builder.GetInsertBlock()->back().isTerminator())) builder.CreateBr(stepBlock);
         builder.SetInsertPoint(stepBlock);
         current = builder.CreateLoad(iteratorType, iterator);
@@ -1692,7 +1752,9 @@ void CodeGen::genNode(const Node& node) {
         builder.SetInsertPoint(headerBlock);
         builder.CreateBr(bodyBlock);
         builder.SetInsertPoint(bodyBlock);
+        const size_t deferredBase = saveDeferred();
         for (const Node& child : node.children) genNode(child);
+        restoreDeferred(deferredBase);
         if ((builder.GetInsertBlock()->empty() || !builder.GetInsertBlock()->back().isTerminator())) builder.CreateBr(headerBlock);
         restoreScope(parentScope);
         builder.SetInsertPoint(afterBlock);
@@ -1717,7 +1779,9 @@ void CodeGen::genNode(const Node& node) {
         builder.CreateCondBr(cond, bodyBlock, afterBlock);
         builder.SetInsertPoint(bodyBlock);
         const ScopeSnapshot parentScope = saveScope();
+        const size_t deferredBase = saveDeferred();
         for (const Node& n : node.children) genNode(n);
+        restoreDeferred(deferredBase);
         if ((builder.GetInsertBlock()->empty() || !builder.GetInsertBlock()->back().isTerminator()))
             builder.CreateBr(condBlock);
         restoreScope(parentScope);
@@ -1788,6 +1852,8 @@ void CodeGen::generate(const Node& program) {
     for (const Node& node : program.children)
         if (node.type != NODE_FUNC_DEF && node.type != NODE_STRUCT_DEF) genNode(node);
 
+    // Run deferred statements at program exit (LIFO order).
+    flushDeferred();
     builder.CreateRet(builder.getInt32(0));
 }
 

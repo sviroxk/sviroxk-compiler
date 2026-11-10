@@ -943,6 +943,21 @@ Node parseOne() {
         expect(SEMICOLON);
         return node;
     }
+    // drop — детерминированное освобождение значения (массив, файл, строка)
+    if (peek().type == DROP) {
+        Node node; node.type = NODE_DROP;
+        consume();
+        node.varName = consume().value;
+        expect(SEMICOLON);
+        return node;
+    }
+    // defer — отложить выполнение statement до выхода из области видимости
+    if (peek().type == DEFER) {
+        Node node; node.type = NODE_DEFER;
+        consume();
+        node.left = makeNode(parseOne());
+        return node;
+    }
     // zap — записать в файл
     if (peek().type == ZAP) {
         Node node; node.type = NODE_FILE_WRITE;

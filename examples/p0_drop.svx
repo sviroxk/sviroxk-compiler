@@ -1,0 +1,8 @@
+// P0: drop — детерминированное освобождение
+// drop для динамического массива освобождает data и помечает дескриптор как освобождённый.
+nw rox[3] values;
+values.push(1);
+values.push(2);
+print(values.len());
+drop values;
+print(1);
