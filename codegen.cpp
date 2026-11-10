@@ -253,12 +253,16 @@ void CodeGen::initStructLiteral(llvm::Value* storage, llvm::StructType* aggregat
         llvm::Value* address = builder.CreateStructGEP(aggregateType, storage,
                                                         static_cast<unsigned>(index));
         if (initializer->type == NODE_STRUCT_LITERAL) {
-            // Nested struct field: allocate a temp, initialize it, store the pointer
+            // Nested struct field: initialize a temp and copy the aggregate by value
             llvm::AllocaInst* temp = builder.CreateAlloca(fieldType, nullptr, field.name);
             llvm::StructType* nestedType = llvmStructTypes[field.type];
             initStructLiteral(temp, nestedType, field.type, *initializer);
             llvm::Value* loaded = builder.CreateLoad(fieldType, temp);
             builder.CreateStore(loaded, address);
+        } else if (initializer->type == NODE_STRUCT_INSTANCE) {
+            // Field initialized from another struct instance: copy the aggregate by value
+            llvm::Value* value = genExpr(*initializer);
+            builder.CreateStore(value, address);
         } else {
             llvm::Value* value = genExpr(*initializer);
             value = castTo(value, fieldType, isUnsignedExpr(*initializer));
@@ -305,6 +309,18 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         // Struct literals are only valid as initializers, not as standalone expressions.
         // They are handled in genNode for NODE_STRUCT_INSTANCE and NODE_VAR_DECL with struct type.
         return nullptr;
+    }
+    if (node.type == NODE_STRUCT_INSTANCE) {
+        // A struct instance used as an expression value (e.g. passed to a function):
+        // materialize it into a fresh alloca and load the aggregate by value.
+        if (!structDefs.count(node.varType)) {
+            codegenFailure(node, "неизвестная структура: " + node.varType);
+            return nullptr;
+        }
+        llvm::StructType* aggregateType = llvmStructTypes[node.varType];
+        llvm::AllocaInst* temp = builder.CreateAlloca(aggregateType, nullptr, node.varName);
+        initStructLiteral(temp, aggregateType, node.varType, node);
+        return builder.CreateLoad(aggregateType, temp);
     }
     if (node.type == NODE_STRUCT_FIELD) {
     // Handle nested struct access by following the field path chain.
@@ -1413,6 +1429,8 @@ void CodeGen::genNode(const Node& node) {
                 builder.CreateAlloca(ty, nullptr, pname);
             builder.CreateStore(&arg, alloca);
             vars[pname] = alloca;
+            if (ty->isStructTy())
+                structTypesByVariable[pname] = ptype;
             unsignedVars[pname] = ptype == "u8" || ptype == "u16" ||
                 ptype == "u32" || ptype == "u64" || ptype == "char";
             charVars[pname] = ptype == "char";
@@ -1727,6 +1745,11 @@ void CodeGen::generate(const Node& program) {
     printfFunc = llvm::Function::Create(printfType,
         llvm::Function::ExternalLinkage, "printf", module);
 
+    // First, register struct types so that function signatures referencing
+    // them (tip Pair p) resolve to a real StructType instead of null.
+    for (const Node& node : program.children)
+        if (node.type == NODE_STRUCT_DEF) genNode(node);
+
     for (const Node& node : program.children) {
         if (node.type != NODE_FUNC_DEF) continue;
         // Skip forward declarations in first pass (only declare, no body)
@@ -1763,7 +1786,7 @@ void CodeGen::generate(const Node& program) {
     builder.SetInsertPoint(block);
 
     for (const Node& node : program.children)
-        if (node.type != NODE_FUNC_DEF) genNode(node);
+        if (node.type != NODE_FUNC_DEF && node.type != NODE_STRUCT_DEF) genNode(node);
 
     builder.CreateRet(builder.getInt32(0));
 }

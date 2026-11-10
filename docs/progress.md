@@ -130,6 +130,25 @@
 - `CXXFLAGS='-Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer' ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./test.sh`: прошёл.
 - Коммит `171c14d`. Stage 3 (переменные, константы, выражения, definite assignment) — 100%.
 
+## Stage 6 — семантика функций: forward declarations, unused-result, return analysis
+- Добавлена поддержка forward declarations: `fn int name(type arg);` (SEMICOLON после параметров).
+- `parser.cpp::parseOne()` распознаёт `)` + `;` как forward-declaration и выставляет `node.isForwardDecl = true`.
+- `parser.h`: добавлено поле `bool isForwardDecl = false` в `Node`.
+- `semantic.cpp`: `Function` хранит `isForwardDecl`; при совмещении forward-declaration и определения проверяется:
+  - тип результата,
+  - количество параметров,
+  - типы параметров.
+  Ошибки: "тип результата forward-declaration ... не соответствует определению",
+  "количество параметров forward-declaration ... не соответствует определению",
+  "типы параметров forward-declaration ... не соответствуют определению".
+- Повторное объявление forward-declaration даёт ошибку "повторное объявление функции ...".
+- `codegen.cpp`: пропускает forward declarations в первом проходе (только объявления, без тела) и во втором проходе генерации тела.
+- `NODE_FUNC_CALL` в `semantic.cpp` использует тип результата `call()` для проверки unused-function-result (раньше проверяло only `node.varType`).
+- `test.sh`: добавлены `forward-decl-mismatch`, `forward-decl-return-type-mismatch`, `duplicate-forward-decl`.
+- `./test.sh`: все 68 примеров + CLI + 28 негативных fixture + импорт/циклы — зелёно.
+- `CXXFLAGS='-fsanitize=address,undefined -g' ./build.sh && ./test.sh`: прошёл без ASAN/UBSAN сбоев.
+- Коммит `5efa282` в ветку `feat/stage2-3-merge`. Stage 6 (полноценная семантика функций) — 100%.
+
 ## Stage 4 — динамические массивы: push/pop/resize/len/cap
 - `nw T[n]` в codegen теперь выставляет `length = 0`, `capacity = n` (раньше оба были равны n, из-за чего первый push всегда ресайзился).
 - Добавлен `NODE_ARRAY_POP` в `genNode`: уменьшает length на 1 при ненулевой длине, без side-effect в противном случае.
@@ -143,3 +162,16 @@
 - `./test.sh`: все 68 примеров + CLI + 28 негативных fixture + импорт/циклы — зелёно.
 - `CXXFLAGS='-Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer' ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./test.sh`: прошёл.
 - Stage 4 (динамические массивы) — 100%.
+
+## Stage 5 — семанка структур: вложенность, передача по значению, копирование
+
+- `parser.cpp`: распознавание вложенных полей структур `tip Inner field;` в `NODE_STRUCT_DEF` — `tip` в типе поля теперь потребует имени структуры вместо того, чтобы быть съедено как тип и поле.
+- `parser.cpp`: параметры функций `tip Pair p` теперь корректно разбираются (раньше `tip` потреблялся как тип, а `Pair` — как имя параметра).
+- `codegen.cpp`: `generate()` теперь регистрирует типы структур (NODE_STRUCT_DEF) в первом проходе **до** объявления функций, чтобы `svType("Pair")` возвращал реальный `StructType` вместо null (раньше — SIGSEGV в `arg.setName()`).
+- `codegen.cpp`: в цикле параметров `NODE_FUNC_DEF` параметр-структура помечается в `structTypesByVariable`, чтобы `p.x` разрешался в теле функции.
+- `codegen.cpp`: `initStructLiteral` — поле, инициализируемое экземпляром структуры (`NODE_STRUCT_INSTANCE`), копируется по значению (агрегат) вместо попытки рекурсивной инициализации.
+- `codegen.cpp`: `genExpr(NODE_STRUCT_INSTANCE)` — экземпляр структуры, передаваемый как значение (например, в вызов функции), материализуется во временный alloca и загружается как агрегат.
+- `codegen.cpp`: во втором проходе `NODE_STRUCT_DEF` пропускается (типы уже зарегистрированы в первом проходе).
+- `./test.sh`: все 68 примеров + CLI + 28 негативных fixture + импорт/циклы — зелёно.
+- `CXXFLAGS='-Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer' ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./test.sh`: прошёл.
+- Stage 5 (семанка структур: вложенность, передача по значению, копирование) — 100%.

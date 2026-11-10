@@ -82,7 +82,7 @@ static bool isTypeName(const std::string& type) {
            type == "i8" || type == "i16" || type == "i32" || type == "i64" ||
            type == "u8" || type == "u16" || type == "u32" || type == "u64" ||
            type == "f32" || type == "f64" || type == "ptr" || type == "file" ||
-           type == "chr" || type == "rox64";
+           type == "chr" || type == "rox64" || type == "tip";
 }
 
 static bool isBuiltinToken(TokenType t) {
@@ -104,7 +104,8 @@ static bool isCallableBuiltinToken(TokenType t) {
 
 static bool isTypeToken(TokenType t) {
     return t == ROX || t == DOR || t == COS || t == BUE || t == PTR ||
-           t == FILE_T || t == CHR || t == ROX64 || t == FIXED_TYPE || t == IDENTIFIER;
+           t == FILE_T || t == CHR || t == ROX64 || t == FIXED_TYPE ||
+           t == TIP || t == IDENTIFIER;
 }
 
 static std::string canonicalType(const std::string& type) {
@@ -651,11 +652,53 @@ Node parseOne() {
         parseDeclBody(node, isArray);
         return node;
     }
+    // Struct definition: tip Name { ... } — must be checked before type-first
+    // declarations, otherwise `tip` is consumed as a type and `Name` as a variable.
+    if (peek().type == TIP) {
+        Node node; node.type = NODE_STRUCT_DEF;
+        node.line = peek().line;
+        node.column = peek().column;
+        consume();
+        node.varName = consume().value;
+        expect(LBRACE);
+        while (peek().type != RBRACE && peek().type != END) {
+            Node field; field.type = NODE_VAR_DECL;
+            Token fieldType = consume();
+            if (!isTypeName(fieldType.value) && fieldType.type != IDENTIFIER)
+                failAt(fieldType, "неизвестный тип поля '" + fieldType.value + "'");
+            std::string ptype = canonicalType(fieldType.value);
+            // Struct field: tip StructName fieldName
+            if (fieldType.type == TIP) {
+                Token structName = peek();
+                if (!isNameToken(structName.type))
+                    failAt(structName, "ожидалось имя структуры в типе поля");
+                ptype = consume().value;
+            }
+            field.varType = ptype;
+            field.varName = consume().value;
+            if (peek().type == EQUALS) {
+                consume(); // =
+                field.left = makeNode(parseExpr());
+            }
+            expect(SEMICOLON);
+            node.children.push_back(field);
+        }
+        expect(RBRACE);
+        if (peek().type == SEMICOLON) consume();
+        return node;
+    }
+
     // Type-first declarations: int value = 42; f64[] values = [...]
+    // A type-first declaration requires `=` (or `[]`) after the variable name,
+    // otherwise `tip Pair p` in a function parameter is misparsed as a variable.
     bool isTypeFirstDecl = false;
     if (isTypeToken(peek().type)) {
-        if (peek(1).type == IDENTIFIER) isTypeFirstDecl = true;
-        if (peek(1).type == LBRACKET && peek(2).type == RBRACKET && peek(3).type == IDENTIFIER) isTypeFirstDecl = true;
+        if (peek(1).type == IDENTIFIER &&
+            (peek(2).type == EQUALS || (peek(2).type == LBRACKET && peek(3).type == RBRACKET)))
+            isTypeFirstDecl = true;
+        if (peek(1).type == LBRACKET && peek(2).type == RBRACKET && peek(3).type == IDENTIFIER &&
+            (peek(4).type == EQUALS || (peek(4).type == LBRACKET && peek(5).type == RBRACKET)))
+            isTypeFirstDecl = true;
     }
     if (isTypeFirstDecl) {
         Token typeToken = consume();
@@ -791,6 +834,13 @@ Node parseOne() {
             if (!isTypeName(typeToken.value))
                 failAt(typeToken, "неизвестный тип параметра '" + typeToken.value + "'");
             std::string ptype = canonicalType(typeToken.value);
+            // Struct type parameter: tip Pair paramName
+            if (typeToken.type == TIP) {
+                Token structName = peek();
+                if (!isNameToken(structName.type))
+                    failAt(structName, "ожидалось имя структуры в типе параметра");
+                ptype = consume().value;
+            }
             Token parameterName = peek();
             if (!isNameToken(parameterName.type))
                 failAt(parameterName, "ожидалось имя параметра");
@@ -1248,7 +1298,15 @@ Node parseOne() {
             Token fieldType = consume();
             if (!isTypeName(fieldType.value) && fieldType.type != IDENTIFIER)
                 failAt(fieldType, "неизвестный тип поля '" + fieldType.value + "'");
-            field.varType = canonicalType(fieldType.value);
+            std::string ptype = canonicalType(fieldType.value);
+            // Struct field: tip StructName fieldName
+            if (fieldType.type == TIP) {
+                Token structName = peek();
+                if (!isNameToken(structName.type))
+                    failAt(structName, "ожидалось имя структуры в типе поля");
+                ptype = consume().value;
+            }
+            field.varType = ptype;
             field.varName = consume().value;
             if (peek().type == EQUALS) {
                 consume(); // =
