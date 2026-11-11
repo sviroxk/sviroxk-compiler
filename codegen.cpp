@@ -2,6 +2,9 @@
 #include "type.h"
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/IR/GlobalVariable.h>
+#include <map>
+#include <vector>
 #include <iostream>
 #include <cstdint>
 #include <climits>
@@ -21,6 +24,68 @@ bool blockHasTerminator(const llvm::BasicBlock* block) {
 }
 
 } // namespace
+
+// Тип значения, на которое указывает слот переменной: локальная (alloca) или глобальная.
+llvm::Type* CodeGen::storageType(llvm::Value* storage) {
+    if (auto* alloca = llvm::dyn_cast<llvm::AllocaInst>(storage))
+        return alloca->getAllocatedType();
+    if (auto* global = llvm::dyn_cast<llvm::GlobalVariable>(storage))
+        return global->getValueType();
+    throw std::logic_error("внутренняя ошибка codegen: неизвестный вид хранилища переменной");
+}
+
+// Переменные кода верхнего уровня живут в глобальных переменных LLVM, чтобы их
+// видели функции; локальные переменные функций остаются на стеке (alloca).
+// Глобалы получают префикс "sc.global.", чтобы не конфликтовать с рантаймом C.
+llvm::Value* CodeGen::createStorage(llvm::Type* type, const std::string& name) {
+    if (!globalStorage)
+        return builder.CreateAlloca(type, nullptr, name);
+    return new llvm::GlobalVariable(module, type, false,
+        llvm::GlobalValue::InternalLinkage, llvm::Constant::getNullValue(type),
+        "sc.global." + name);
+}
+
+// Единая таблица функций C-рантайма: одно имя — одна сигнатура.
+llvm::Function* CodeGen::runtimeFunction(const std::string& name) {
+    if (llvm::Function* existing = module.getFunction(name)) return existing;
+    llvm::Type* i32 = builder.getInt32Ty();
+    llvm::Type* i64 = builder.getInt64Ty();
+    llvm::Type* ptr = builder.getPtrTy();
+    llvm::Type* f64 = builder.getDoubleTy();
+    llvm::Type* voidTy = builder.getVoidTy();
+    struct Signature { llvm::Type* result; std::vector<llvm::Type*> params; bool variadic; };
+    const std::map<std::string, Signature> table = {
+        {"puts",    {i32, {ptr}, false}},
+        {"printf",  {i32, {ptr}, true}},
+        {"scanf",   {i32, {ptr}, true}},
+        {"sprintf", {i32, {ptr, ptr}, true}},
+        {"abort",   {voidTy, {}, false}},
+        {"exit",    {voidTy, {i32}, false}},
+        {"malloc",  {ptr, {i64}, false}},
+        {"free",    {voidTy, {ptr}, false}},
+        {"memcpy",  {ptr, {ptr, ptr, i64}, false}},
+        {"strlen",  {i64, {ptr}, false}},
+        {"strcmp",  {i32, {ptr, ptr}, false}},
+        {"strstr",  {ptr, {ptr, ptr}, false}},
+        {"fopen",   {ptr, {ptr, ptr}, false}},
+        {"fgets",   {ptr, {ptr, i32, ptr}, false}},
+        {"fputs",   {i32, {ptr, ptr}, false}},
+        {"fclose",  {i32, {ptr}, false}},
+        {"rand",    {i32, {}, false}},
+        {"pow",     {f64, {f64, f64}, false}},
+        {"sqrt",    {f64, {f64}, false}},
+        {"floor",   {f64, {f64}, false}},
+        {"ceil",    {f64, {f64}, false}},
+        {"round",   {f64, {f64}, false}},
+    };
+    auto entry = table.find(name);
+    if (entry == table.end())
+        throw std::logic_error("внутренняя ошибка codegen: функция рантайма '" + name +
+                               "' отсутствует в таблице");
+    llvm::FunctionType* type = llvm::FunctionType::get(
+        entry->second.result, entry->second.params, entry->second.variadic);
+    return llvm::Function::Create(type, llvm::Function::ExternalLinkage, name, module);
+}
 
 CodeGen::ScopeSnapshot CodeGen::saveScope() const {
     return {vars, unsignedVars, charVars, constVars, integerWidths, arrays, arrayLengths,
@@ -151,11 +216,7 @@ void CodeGen::emitArrayBoundsCheck(llvm::Value* index, llvm::Value* length,
     const std::string message = "SC runtime error: array index out of bounds at line " +
         std::to_string(location.line) + ", column " + std::to_string(location.column);
     builder.CreateCall(putsFunc, {getStringPtr(message)});
-    llvm::FunctionType* exitType = llvm::FunctionType::get(
-        builder.getVoidTy(), {builder.getInt32Ty()}, false);
-    llvm::Function* exitF = module.getFunction("exit");
-    if (!exitF) exitF = llvm::Function::Create(exitType,
-        llvm::Function::ExternalLinkage, "exit", module);
+    llvm::Function* exitF = runtimeFunction("exit");
     builder.CreateCall(exitF, {builder.getInt32(1)});
     builder.CreateUnreachable();
     builder.SetInsertPoint(valid);
@@ -177,15 +238,12 @@ void CodeGen::growDynArray(const std::string& varName, llvm::Value* newCapacity)
     auto found = dynArrays.find(varName);
     if (found == dynArrays.end()) return;
     llvm::StructType* descType = dynArrayType();
-    llvm::AllocaInst* desc = found->second;
+    llvm::Value* desc = found->second;
     llvm::Type* elementType = dynArrayElementTypes[varName];
     if (!elementType) elementType = builder.getInt32Ty();
     llvm::Value* dataPtr = builder.CreateLoad(builder.getPtrTy(),
         builder.CreateStructGEP(descType, desc, 0));
-    llvm::Function* mallocF = module.getFunction("malloc");
-    if (!mallocF) mallocF = llvm::Function::Create(
-        llvm::FunctionType::get(builder.getPtrTy(), {builder.getInt64Ty()}, false),
-        llvm::Function::ExternalLinkage, "malloc", module);
+    llvm::Function* mallocF = runtimeFunction("malloc");
     llvm::Value* bytes = builder.CreateMul(newCapacity,
         builder.getInt64(elementType->getPrimitiveSizeInBits() / 8));
     llvm::Value* newData = builder.CreateCall(mallocF, {bytes});
@@ -194,18 +252,10 @@ void CodeGen::growDynArray(const std::string& varName, llvm::Value* newCapacity)
     // Copy existing elements into the new buffer.
     llvm::Value* copyBytes = builder.CreateMul(oldLength,
         builder.getInt64(elementType->getPrimitiveSizeInBits() / 8));
-    llvm::FunctionType* memcpyType = llvm::FunctionType::get(
-        builder.getPtrTy(),
-        {builder.getPtrTy(), builder.getPtrTy(), builder.getInt64Ty()}, false);
-    llvm::Function* memcpyF = module.getFunction("memcpy");
-    if (!memcpyF) memcpyF = llvm::Function::Create(memcpyType,
-        llvm::Function::ExternalLinkage, "memcpy", module);
+    llvm::Function* memcpyF = runtimeFunction("memcpy");
     builder.CreateCall(memcpyF, {newData, dataPtr, copyBytes});
     // Free the old buffer.
-    llvm::Function* freeF = module.getFunction("free");
-    if (!freeF) freeF = llvm::Function::Create(
-        llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()}, false),
-        llvm::Function::ExternalLinkage, "free", module);
+    llvm::Function* freeF = runtimeFunction("free");
     builder.CreateCall(freeF, {dataPtr});
     builder.CreateStore(newData, builder.CreateStructGEP(descType, desc, 0));
     builder.CreateStore(newCapacity, builder.CreateStructGEP(descType, desc, 2));
@@ -367,9 +417,9 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
     return nullptr;
     }
     if (node.type == NODE_IDENTIFIER) {
-        llvm::AllocaInst* alloca = vars[node.value];
+        llvm::Value* alloca = vars[node.value];
         if (alloca) {
-            llvm::Type* ty = alloca->getAllocatedType();
+            llvm::Type* ty = storageType(alloca);
             if (ty->isPointerTy())
                 return builder.CreateLoad(builder.getPtrTy(), alloca);
             return builder.CreateLoad(ty, alloca);
@@ -378,7 +428,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
     }
     if (node.type == NODE_ARRAY_ACCESS) {
         if (dynArrays.count(node.varName)) {
-            llvm::AllocaInst* desc = dynArrays[node.varName];
+            llvm::Value* desc = dynArrays[node.varName];
             llvm::StructType* descType = dynArrayType();
             llvm::Value* dataPtr = builder.CreateLoad(builder.getPtrTy(),
                 builder.CreateStructGEP(descType, desc, 0));
@@ -392,7 +442,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             return builder.CreateLoad(elementType, gep);
         }
         if (vars.count(node.varName) &&
-            vars[node.varName]->getAllocatedType()->isPointerTy()) {
+            storageType(vars[node.varName])->isPointerTy()) {
             llvm::Value* ptr = builder.CreateLoad(
                 builder.getPtrTy(), vars[node.varName]);
             llvm::Value* idx = genExpr(*node.left);
@@ -401,7 +451,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             return builder.CreateLoad(builder.getInt32Ty(), gep);
         }
         if (arrays.count(node.varName)) {
-            llvm::AllocaInst* arr = arrays[node.varName];
+            llvm::Value* arr = arrays[node.varName];
             unsigned n = arrayLengths[node.varName];
             llvm::Type* elementType = arrayElementTypes[node.varName];
             if (!elementType) elementType = builder.getInt32Ty();
@@ -415,12 +465,12 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         codegenFailure(node, "неизвестный массив '" + node.varName + "'");
     }
     if (node.type == NODE_ADDR) {
-        llvm::AllocaInst* alloca = vars[node.varName];
+        llvm::Value* alloca = vars[node.varName];
         if (alloca) return alloca;
         codegenFailure(node, "невозможно получить адрес неизвестной переменной '" + node.varName + "'");
     }
     if (node.type == NODE_DEREF) {
-        llvm::AllocaInst* alloca = vars[node.varName];
+        llvm::Value* alloca = vars[node.varName];
         if (alloca) {
             llvm::Value* ptr = builder.CreateLoad(builder.getPtrTy(), alloca);
             return builder.CreateLoad(builder.getInt32Ty(), ptr);
@@ -433,7 +483,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             codegenFailure(node, "неизвестный динамический массив '" + node.varName + "'");
         }
         llvm::StructType* descType = dynArrayType();
-        llvm::AllocaInst* desc = found->second;
+        llvm::Value* desc = found->second;
         unsigned field = (node.type == NODE_ARRAY_LEN) ? 1 : 2;
         return builder.CreateLoad(builder.getInt64Ty(),
             builder.CreateStructGEP(descType, desc, field));
@@ -444,7 +494,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             codegenFailure(node, "неизвестный динамический массив '" + node.varName + "'");
         }
         llvm::StructType* descType = dynArrayType();
-        llvm::AllocaInst* desc = found->second;
+        llvm::Value* desc = found->second;
         llvm::Value* length = builder.CreateLoad(builder.getInt64Ty(),
             builder.CreateStructGEP(descType, desc, 1));
         llvm::Value* dataPtr = builder.CreateLoad(builder.getPtrTy(),
@@ -474,12 +524,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         return builder.getTrue();
     }
     if (node.type == NODE_DYN_ARRAY) {
-        llvm::FunctionType* mallocType =
-            llvm::FunctionType::get(builder.getPtrTy(),
-                {builder.getInt64Ty()}, false);
-        llvm::Function* mallocF = module.getFunction("malloc");
-        if (!mallocF) mallocF = llvm::Function::Create(mallocType,
-            llvm::Function::ExternalLinkage, "malloc", module);
+        llvm::Function* mallocF = runtimeFunction("malloc");
         llvm::Value* size = genExpr(*node.left);
         size = builder.CreateSExt(size, builder.getInt64Ty());
         llvm::Value* bytes = builder.CreateMul(size,
@@ -508,15 +553,10 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         codegenFailure(node, "невозможно преобразовать значение к типу '" + node.varType + "'");
     }
     if (node.type == NODE_FILE_READ) {
-        llvm::AllocaInst* fileAlloca = vars[node.varName];
+        llvm::Value* fileAlloca = vars[node.varName];
         if (!fileAlloca) return getStringPtr("");
         llvm::Value* fp = builder.CreateLoad(builder.getPtrTy(), fileAlloca);
-        llvm::FunctionType* fgetsType = llvm::FunctionType::get(
-            builder.getPtrTy(),
-            {builder.getPtrTy(), builder.getInt32Ty(), builder.getPtrTy()}, false);
-        llvm::Function* fgetsF = module.getFunction("fgets");
-        if (!fgetsF) fgetsF = llvm::Function::Create(fgetsType,
-            llvm::Function::ExternalLinkage, "fgets", module);
+        llvm::Function* fgetsF = runtimeFunction("fgets");
         llvm::AllocaInst* buf = builder.CreateAlloca(
             llvm::ArrayType::get(builder.getInt8Ty(), 4096), nullptr, "filebuf");
         llvm::Value* bufPtr = builder.CreateInBoundsGEP(
@@ -527,29 +567,14 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         return bufPtr;
     }
     if (node.type == NODE_FILE_OPEN) {
-        llvm::FunctionType* fopenType =
-            llvm::FunctionType::get(builder.getPtrTy(),
-                {builder.getPtrTy(), builder.getPtrTy()}, false);
-        llvm::Function* fopenF = module.getFunction("fopen");
-        if (!fopenF) fopenF = llvm::Function::Create(fopenType,
-            llvm::Function::ExternalLinkage, "fopen", module);
+        llvm::Function* fopenF = runtimeFunction("fopen");
         llvm::Value* fname = node.left ? genExpr(*node.left) : getStringPtr("");
         llvm::Value* mode = node.right ? genExpr(*node.right) : getStringPtr("w");
         return builder.CreateCall(fopenF, {fname, mode});
     }
     if (node.type == NODE_INPUT && node.varType == "cos") {
-        llvm::FunctionType* printfType =
-            llvm::FunctionType::get(builder.getInt32Ty(),
-                {builder.getPtrTy()}, true);
-        llvm::Function* printfF = module.getFunction("printf");
-        if (!printfF) printfF = llvm::Function::Create(printfType,
-            llvm::Function::ExternalLinkage, "printf", module);
-        llvm::FunctionType* scanfType =
-            llvm::FunctionType::get(builder.getInt32Ty(),
-                {builder.getPtrTy()}, true);
-        llvm::Function* scanfF = module.getFunction("scanf");
-        if (!scanfF) scanfF = llvm::Function::Create(scanfType,
-            llvm::Function::ExternalLinkage, "scanf", module);
+        llvm::Function* printfF = runtimeFunction("printf");
+        llvm::Function* scanfF = runtimeFunction("scanf");
         llvm::Value* prompt = getStringPtr(node.value);
         builder.CreateCall(printfF, {prompt});
         llvm::AllocaInst* buf = builder.CreateAlloca(
@@ -562,18 +587,8 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         return bufPtr;
     }
     if (node.type == NODE_INPUT) {
-        llvm::FunctionType* printfType =
-            llvm::FunctionType::get(builder.getInt32Ty(),
-                {builder.getPtrTy()}, true);
-        llvm::Function* printfF = module.getFunction("printf");
-        if (!printfF) printfF = llvm::Function::Create(printfType,
-            llvm::Function::ExternalLinkage, "printf", module);
-        llvm::FunctionType* scanfType =
-            llvm::FunctionType::get(builder.getInt32Ty(),
-                {builder.getPtrTy()}, true);
-        llvm::Function* scanfF = module.getFunction("scanf");
-        if (!scanfF) scanfF = llvm::Function::Create(scanfType,
-            llvm::Function::ExternalLinkage, "scanf", module);
+        llvm::Function* printfF = runtimeFunction("printf");
+        llvm::Function* scanfF = runtimeFunction("scanf");
         llvm::Value* prompt = getStringPtr(node.value);
         builder.CreateCall(printfF, {prompt});
         llvm::AllocaInst* tmp =
@@ -661,11 +676,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
                     : builder.CreateSIToFP(rightValue, builder.getDoubleTy());
             else if (rightValue->getType()->isFloatTy())
                 rightValue = builder.CreateFPExt(rightValue, builder.getDoubleTy());
-            llvm::FunctionType* functionType = llvm::FunctionType::get(
-                builder.getDoubleTy(), {builder.getDoubleTy(), builder.getDoubleTy()}, false);
-            llvm::Function* powerFunction = module.getFunction("pow");
-            if (!powerFunction) powerFunction = llvm::Function::Create(
-                functionType, llvm::Function::ExternalLinkage, "pow", module);
+            llvm::Function* powerFunction = runtimeFunction("pow");
             llvm::Value* result = builder.CreateCall(powerFunction, {leftValue, rightValue});
             if (floatingOperands)
                 return (L->getType()->isDoubleTy() || R->getType()->isDoubleTy())
@@ -717,10 +728,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             llvm::Function* function = builder.GetInsertBlock()->getParent();
             llvm::BasicBlock* validBlock = llvm::BasicBlock::Create(context, "shift_valid", function);
             llvm::BasicBlock* trapBlock = llvm::BasicBlock::Create(context, "shift_invalid", function);
-            llvm::Function* abortFunction = module.getFunction("abort");
-            if (!abortFunction) abortFunction = llvm::Function::Create(
-                llvm::FunctionType::get(builder.getVoidTy(), false),
-                llvm::Function::ExternalLinkage, "abort", module);
+            llvm::Function* abortFunction = runtimeFunction("abort");
             builder.CreateCondBr(valid, validBlock, trapBlock);
             builder.SetInsertPoint(trapBlock);
             builder.CreateCall(abortFunction, {});
@@ -754,14 +762,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             name == "cel" || name == "ron") {
             const std::string mathName = name == "flo" ? "floor" :
                 name == "cel" ? "ceil" : name == "ron" ? "round" : name;
-            llvm::FunctionType* type = name == "pow"
-                ? llvm::FunctionType::get(builder.getDoubleTy(),
-                    {builder.getDoubleTy(), builder.getDoubleTy()}, false)
-                : llvm::FunctionType::get(builder.getDoubleTy(),
-                    {builder.getDoubleTy()}, false);
-            llvm::Function* function = module.getFunction(mathName);
-            if (!function) function = llvm::Function::Create(type,
-                llvm::Function::ExternalLinkage, mathName, module);
+            llvm::Function* function = runtimeFunction(mathName);
             std::vector<llvm::Value*> args;
             bool floatingArgument = false;
             bool wideIntegerArgument = false;
@@ -823,12 +824,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             return builder.CreateSelect(condition, left, right);
         }
         if (name == "str") {
-            llvm::FunctionType* sprintfType =
-                llvm::FunctionType::get(builder.getInt32Ty(),
-                    {builder.getPtrTy(), builder.getPtrTy()}, true);
-            llvm::Function* sprintfF = module.getFunction("sprintf");
-            if (!sprintfF) sprintfF = llvm::Function::Create(sprintfType,
-                llvm::Function::ExternalLinkage, "sprintf", module);
+            llvm::Function* sprintfF = runtimeFunction("sprintf");
             llvm::AllocaInst* buf = builder.CreateAlloca(
                 llvm::ArrayType::get(builder.getInt8Ty(), 64), nullptr, "strbuf");
             llvm::Value* bufPtr = builder.CreateInBoundsGEP(
@@ -849,42 +845,18 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             return bufPtr;
         }
         if (name == "ser") {
-            llvm::FunctionType* strcmpType =
-                llvm::FunctionType::get(builder.getInt32Ty(),
-                    {builder.getPtrTy(), builder.getPtrTy()}, false);
-            llvm::Function* strcmpF = module.getFunction("strcmp");
-            if (!strcmpF) strcmpF = llvm::Function::Create(strcmpType,
-                llvm::Function::ExternalLinkage, "strcmp", module);
+            llvm::Function* strcmpF = runtimeFunction("strcmp");
             llvm::Value* s1 = genExpr(node.args[0]);
             llvm::Value* s2 = genExpr(node.args[1]);
             llvm::Value* res = builder.CreateCall(strcmpF, {s1, s2});
             return builder.CreateICmpEQ(res, builder.getInt32(0));
         }
         if (name == "rep" && node.args.size() == 3) {
-            llvm::FunctionType* strlenType = llvm::FunctionType::get(
-                builder.getInt64Ty(), {builder.getPtrTy()}, false);
-            llvm::Function* strlenF = module.getFunction("strlen");
-            if (!strlenF) strlenF = llvm::Function::Create(strlenType,
-                llvm::Function::ExternalLinkage, "strlen", module);
-            llvm::FunctionType* strstrType = llvm::FunctionType::get(
-                builder.getPtrTy(), {builder.getPtrTy(), builder.getPtrTy()}, false);
-            llvm::Function* strstrF = module.getFunction("strstr");
-            if (!strstrF) strstrF = llvm::Function::Create(strstrType,
-                llvm::Function::ExternalLinkage, "strstr", module);
-            llvm::FunctionType* memcpyType = llvm::FunctionType::get(
-                builder.getPtrTy(), {builder.getPtrTy(), builder.getPtrTy(), builder.getInt64Ty()}, false);
-            llvm::Function* memcpyF = module.getFunction("memcpy");
-            if (!memcpyF) memcpyF = llvm::Function::Create(memcpyType,
-                llvm::Function::ExternalLinkage, "memcpy", module);
-            llvm::FunctionType* mallocType = llvm::FunctionType::get(
-                builder.getPtrTy(), {builder.getInt64Ty()}, false);
-            llvm::Function* mallocF = module.getFunction("malloc");
-            if (!mallocF) mallocF = llvm::Function::Create(mallocType,
-                llvm::Function::ExternalLinkage, "malloc", module);
-            llvm::FunctionType* abortType = llvm::FunctionType::get(builder.getVoidTy(), false);
-            llvm::Function* abortF = module.getFunction("abort");
-            if (!abortF) abortF = llvm::Function::Create(abortType,
-                llvm::Function::ExternalLinkage, "abort", module);
+            llvm::Function* strlenF = runtimeFunction("strlen");
+            llvm::Function* strstrF = runtimeFunction("strstr");
+            llvm::Function* memcpyF = runtimeFunction("memcpy");
+            llvm::Function* mallocF = runtimeFunction("malloc");
+            llvm::Function* abortF = runtimeFunction("abort");
 
             llvm::Value* source = genExpr(node.args[0]);
             llvm::Value* needle = genExpr(node.args[1]);
@@ -968,14 +940,8 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             return resultPhi;
         }
         if (name == "flo" || name == "cel" || name == "ron") {
-            llvm::FunctionType* ft = llvm::FunctionType::get(
-                builder.getDoubleTy(), {builder.getDoubleTy()}, false);
-            llvm::Function* f = module.getFunction(
-                name == "flo" ? "floor" : name == "cel" ? "ceil" : "round");
             std::string cname = name == "flo" ? "floor" : name == "cel" ? "ceil" : "round";
-            f = module.getFunction(cname);
-            if (!f) f = llvm::Function::Create(ft,
-                llvm::Function::ExternalLinkage, cname, module);
+            llvm::Function* f = runtimeFunction(cname);
             llvm::Value* arg = genExpr(node.args[0]);
             if (arg->getType()->isIntegerTy())
                 arg = builder.CreateSIToFP(arg, builder.getDoubleTy());
@@ -983,22 +949,13 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             return builder.CreateFPToSI(res, builder.getInt32Ty());
         }
         if (name == "ran") {
-            llvm::FunctionType* ft = llvm::FunctionType::get(
-                builder.getInt32Ty(), {}, false);
-            llvm::Function* f = module.getFunction("rand");
-            if (!f) f = llvm::Function::Create(ft,
-                llvm::Function::ExternalLinkage, "rand", module);
+            llvm::Function* f = runtimeFunction("rand");
             return builder.CreateCall(f, {});
         }
         if (name == "ar") {
-            llvm::FunctionType* strlenType =
-                llvm::FunctionType::get(builder.getInt32Ty(),
-                    {builder.getPtrTy()}, false);
-            llvm::Function* strlenF = module.getFunction("strlen");
-            if (!strlenF) strlenF = llvm::Function::Create(strlenType,
-                llvm::Function::ExternalLinkage, "strlen", module);
+            llvm::Function* strlenF = runtimeFunction("strlen");
             llvm::Value* str = genExpr(node.args[0]);
-            return builder.CreateCall(strlenF, {str});
+            return builder.CreateTrunc(builder.CreateCall(strlenF, {str}), builder.getInt32Ty());
         }
         // пользовательские функции
         if (funcs.count(name)) {
@@ -1022,7 +979,9 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
 }
 
 void CodeGen::genNode(const Node& node) {
-    if (blockHasTerminator(builder.GetInsertBlock()))
+    // Тела функций генерируются после завершённого main, поэтому для них
+    // проверка «блок уже завершён» не применяется.
+    if (node.type != NODE_FUNC_DEF && blockHasTerminator(builder.GetInsertBlock()))
         return;
     if (node.type == NODE_IMPORT) {
         // Imports are handled during tokenization (main.cpp::appendModuleTokens)
@@ -1083,12 +1042,7 @@ void CodeGen::genNode(const Node& node) {
             size = builder.CreateSExt(size, builder.getInt64Ty());
             llvm::Value* bytes = builder.CreateMul(size,
                 builder.getInt64(elementType->getPrimitiveSizeInBits() / 8));
-            llvm::FunctionType* mallocType =
-                llvm::FunctionType::get(builder.getPtrTy(),
-                    {builder.getInt64Ty()}, false);
-            llvm::Function* mallocF = module.getFunction("malloc");
-            if (!mallocF) mallocF = llvm::Function::Create(mallocType,
-                llvm::Function::ExternalLinkage, "malloc", module);
+            llvm::Function* mallocF = runtimeFunction("malloc");
             llvm::Value* data = builder.CreateCall(mallocF, {bytes});
             llvm::Function* function = builder.GetInsertBlock()->getParent();
             llvm::BasicBlock* trap = llvm::BasicBlock::Create(context, "dyn_oom", function);
@@ -1100,7 +1054,7 @@ void CodeGen::genNode(const Node& node) {
             builder.CreateUnreachable();
             builder.SetInsertPoint(next);
             llvm::StructType* descType = dynArrayType();
-            llvm::AllocaInst* desc = builder.CreateAlloca(descType, nullptr, node.varName);
+            llvm::Value* desc = createStorage(descType, node.varName);
             builder.CreateStore(data,
                 builder.CreateStructGEP(descType, desc, 0));
             builder.CreateStore(builder.getInt64(0),
@@ -1116,8 +1070,7 @@ void CodeGen::genNode(const Node& node) {
         llvm::Value* val = genExpr(*node.left);
         llvm::Type* ty = node.varType.empty()
             ? val->getType() : svType(node.varType);
-        llvm::AllocaInst* alloca =
-            builder.CreateAlloca(ty, nullptr, node.varName);
+        llvm::Value* alloca = createStorage(ty, node.varName);
         val = castTo(val, ty, isUnsignedExpr(*node.left));
         builder.CreateStore(val, alloca);
         vars[node.varName] = alloca;
@@ -1134,7 +1087,7 @@ void CodeGen::genNode(const Node& node) {
             return;
         }
         llvm::StructType* aggregateType = llvmStructTypes[node.varType];
-        llvm::AllocaInst* object = builder.CreateAlloca(aggregateType, nullptr, node.varName);
+        llvm::Value* object = createStorage(aggregateType, node.varName);
         vars[node.varName] = object;
         structTypesByVariable[node.varName] = node.varType;
         initStructLiteral(object, aggregateType, node.varType, *node.left);
@@ -1144,10 +1097,10 @@ void CodeGen::genNode(const Node& node) {
         integerWidths[node.varName] = 0;
     }
     else if (node.type == NODE_ASSIGN) {
-        llvm::AllocaInst* alloca = vars[node.varName];
+        llvm::Value* alloca = vars[node.varName];
         if (alloca && !constVars[node.varName]) {
             llvm::Value* val = genExpr(*node.left);
-            llvm::Type* ty = alloca->getAllocatedType();
+            llvm::Type* ty = storageType(alloca);
             val = castTo(val, ty, isUnsignedExpr(*node.left));
             builder.CreateStore(val, alloca);
         }
@@ -1160,7 +1113,7 @@ void CodeGen::genNode(const Node& node) {
         auto fieldIndex = structFieldIndices[structName->second].find(node.op);
         if (fieldIndex == structFieldIndices[structName->second].end())
             codegenFailure(node, "неизвестное поле структуры '" + node.varName + "." + node.op + "'");
-        llvm::Type* aggregateType = object->second->getAllocatedType();
+        llvm::Type* aggregateType = storageType(object->second);
         const unsigned index = fieldIndex->second;
         llvm::Type* fieldType = aggregateType->getStructElementType(index);
         llvm::Value* value = genExpr(*node.left);
@@ -1172,7 +1125,7 @@ void CodeGen::genNode(const Node& node) {
         if (node.left && node.right) {
             // динамический массив с описателем
             if (dynArrays.count(node.varName)) {
-                llvm::AllocaInst* desc = dynArrays[node.varName];
+                llvm::Value* desc = dynArrays[node.varName];
                 llvm::StructType* descType = dynArrayType();
                 llvm::Value* dataPtr = builder.CreateLoad(builder.getPtrTy(),
                     builder.CreateStructGEP(descType, desc, 0));
@@ -1187,7 +1140,7 @@ void CodeGen::genNode(const Node& node) {
             }
             // raw dynamic array (ptr variable)
             else if (vars.count(node.varName) &&
-                vars[node.varName]->getAllocatedType()->isPointerTy()) {
+                storageType(vars[node.varName])->isPointerTy()) {
                 llvm::Value* ptr = builder.CreateLoad(
                     builder.getPtrTy(), vars[node.varName]);
                 llvm::Value* idx = genExpr(*node.left);
@@ -1195,7 +1148,7 @@ void CodeGen::genNode(const Node& node) {
                     builder.getInt32Ty(), ptr, {idx});
                 builder.CreateStore(genExpr(*node.right), gep);
             } else if (arrays.count(node.varName)) {
-                llvm::AllocaInst* arr = arrays[node.varName];
+                llvm::Value* arr = arrays[node.varName];
                 unsigned n = arrayLengths[node.varName];
                 llvm::Type* elementType = arrayElementTypes[node.varName];
                 if (!elementType) elementType = builder.getInt32Ty();
@@ -1209,7 +1162,7 @@ void CodeGen::genNode(const Node& node) {
         }
     }
     else if (node.type == NODE_DEREF_ASSIGN) {
-        llvm::AllocaInst* alloca = vars[node.varName];
+        llvm::Value* alloca = vars[node.varName];
         if (alloca) {
             llvm::Value* ptr = builder.CreateLoad(builder.getPtrTy(), alloca);
             builder.CreateStore(genExpr(*node.left), ptr);
@@ -1235,7 +1188,7 @@ void CodeGen::genNode(const Node& node) {
         unsigned n = (unsigned)node.args.size();
         llvm::Type* elementType = svType(node.varType);
         llvm::ArrayType* at = llvm::ArrayType::get(elementType, n);
-        llvm::AllocaInst* arr = builder.CreateAlloca(at, nullptr, node.varName);
+        llvm::Value* arr = createStorage(at, node.varName);
         arrays[node.varName] = arr;
         arrayLengths[node.varName] = n;
         arrayElementTypes[node.varName] = elementType;
@@ -1252,7 +1205,7 @@ void CodeGen::genNode(const Node& node) {
         if (found == dynArrays.end())
             codegenFailure(node, "неизвестный динамический массив '" + node.varName + "'");
         llvm::StructType* descType = dynArrayType();
-        llvm::AllocaInst* desc = found->second;
+        llvm::Value* desc = found->second;
         llvm::Value* length = builder.CreateLoad(builder.getInt64Ty(),
             builder.CreateStructGEP(descType, desc, 1));
         llvm::Value* isNonEmpty = builder.CreateICmpNE(length, builder.getInt64(0));
@@ -1272,7 +1225,7 @@ void CodeGen::genNode(const Node& node) {
         if (found == dynArrays.end())
             codegenFailure(node, "неизвестный динамический массив '" + node.varName + "'");
         llvm::StructType* descType = dynArrayType();
-        llvm::AllocaInst* desc = found->second;
+        llvm::Value* desc = found->second;
         llvm::Type* elementType = dynArrayElementTypes[node.varName];
         if (!elementType) elementType = builder.getInt32Ty();
 
@@ -1322,7 +1275,7 @@ void CodeGen::genNode(const Node& node) {
         if (found == dynArrays.end())
             codegenFailure(node, "неизвестный динамический массив '" + node.varName + "'");
         llvm::StructType* descType = dynArrayType();
-        llvm::AllocaInst* desc = found->second;
+        llvm::Value* desc = found->second;
 
         llvm::Value* newSize = genExpr(*node.left);
         newSize = builder.CreateSExt(newSize, builder.getInt64Ty());
@@ -1380,7 +1333,7 @@ void CodeGen::genNode(const Node& node) {
             exit(1);
         }
         llvm::StructType* aggregateType = llvmStructTypes[node.varType];
-        llvm::AllocaInst* object = builder.CreateAlloca(aggregateType, nullptr, node.varName);
+        llvm::Value* object = createStorage(aggregateType, node.varName);
         vars[node.varName] = object;
         structTypesByVariable[node.varName] = node.varType;
         initStructLiteral(object, aggregateType, node.varType, node);
@@ -1461,26 +1414,16 @@ void CodeGen::genNode(const Node& node) {
         }
     }
     else if (node.type == NODE_DELETE) {
-        llvm::FunctionType* freeType =
-            llvm::FunctionType::get(builder.getVoidTy(),
-                {builder.getPtrTy()}, false);
-        llvm::Function* freeF = module.getFunction("free");
-        if (!freeF) freeF = llvm::Function::Create(freeType,
-            llvm::Function::ExternalLinkage, "free", module);
-        llvm::AllocaInst* alloca = vars[node.varName];
+        llvm::Function* freeF = runtimeFunction("free");
+        llvm::Value* alloca = vars[node.varName];
         if (alloca) {
             llvm::Value* ptr = builder.CreateLoad(builder.getPtrTy(), alloca);
             builder.CreateCall(freeF, {ptr});
         }
     }
     else if (node.type == NODE_FILE_WRITE) {
-        llvm::FunctionType* fputsType =
-            llvm::FunctionType::get(builder.getInt32Ty(),
-                {builder.getPtrTy(), builder.getPtrTy()}, false);
-        llvm::Function* fputsF = module.getFunction("fputs");
-        if (!fputsF) fputsF = llvm::Function::Create(fputsType,
-            llvm::Function::ExternalLinkage, "fputs", module);
-        llvm::AllocaInst* fileAlloca = vars[node.varName];
+        llvm::Function* fputsF = runtimeFunction("fputs");
+        llvm::Value* fileAlloca = vars[node.varName];
         if (fileAlloca) {
             llvm::Value* filePtr =
                 builder.CreateLoad(builder.getPtrTy(), fileAlloca);
@@ -1492,13 +1435,8 @@ void CodeGen::genNode(const Node& node) {
         genExpr(node);
     }
     else if (node.type == NODE_FILE_CLOSE) {
-        llvm::FunctionType* fcloseType =
-            llvm::FunctionType::get(builder.getInt32Ty(),
-                {builder.getPtrTy()}, false);
-        llvm::Function* fcloseF = module.getFunction("fclose");
-        if (!fcloseF) fcloseF = llvm::Function::Create(fcloseType,
-            llvm::Function::ExternalLinkage, "fclose", module);
-        llvm::AllocaInst* fileAlloca = vars[node.varName];
+        llvm::Function* fcloseF = runtimeFunction("fclose");
+        llvm::Value* fileAlloca = vars[node.varName];
         if (fileAlloca) {
             llvm::Value* filePtr =
                 builder.CreateLoad(builder.getPtrTy(), fileAlloca);
@@ -1568,9 +1506,9 @@ void CodeGen::genNode(const Node& node) {
     else if (node.type == NODE_FOR_EACH) {
         if (!arrays.count(node.left->value) || !arrayLengths.count(node.left->value))
             return;
-        llvm::AllocaInst* array = arrays[node.left->value];
+        llvm::Value* array = arrays[node.left->value];
         const unsigned length = arrayLengths[node.left->value];
-        llvm::ArrayType* arrayType = llvm::dyn_cast<llvm::ArrayType>(array->getAllocatedType());
+        llvm::ArrayType* arrayType = llvm::dyn_cast<llvm::ArrayType>(storageType(array));
         if (!arrayType) return;
         llvm::Type* elementType = arrayType->getElementType();
         llvm::Function* function = builder.GetInsertBlock()->getParent();
@@ -1710,22 +1648,9 @@ void CodeGen::genNode(const Node& node) {
 }
 
 void CodeGen::generate(const Node& program) {
-    llvm::FunctionType* putsType =
-        llvm::FunctionType::get(builder.getInt32Ty(),
-            {builder.getPtrTy()}, false);
-    putsFunc = llvm::Function::Create(putsType,
-        llvm::Function::ExternalLinkage, "puts", module);
-
-    llvm::FunctionType* abortType =
-        llvm::FunctionType::get(builder.getVoidTy(), false);
-    abortFunc = llvm::Function::Create(abortType,
-        llvm::Function::ExternalLinkage, "abort", module);
-
-    llvm::FunctionType* printfType =
-        llvm::FunctionType::get(builder.getInt32Ty(),
-            {builder.getPtrTy()}, true);
-    printfFunc = llvm::Function::Create(printfType,
-        llvm::Function::ExternalLinkage, "printf", module);
+    putsFunc = runtimeFunction("puts");
+    abortFunc = runtimeFunction("abort");
+    printfFunc = runtimeFunction("printf");
 
     for (const Node& node : program.children) {
         if (node.type != NODE_FUNC_DEF) continue;
@@ -1744,13 +1669,13 @@ void CodeGen::generate(const Node& program) {
         funcReturnTypes[node.varName] = returnType;
         llvm::FunctionType* functionType = llvm::FunctionType::get(
             svType(returnType), parameterTypes, false);
+        // Префикс "sc.fn.": пользовательские функции не конфликтуют с main и рантаймом C.
         funcs[node.varName] = llvm::Function::Create(
-            functionType, llvm::Function::ExternalLinkage, node.varName, module);
+            functionType, llvm::Function::InternalLinkage, "sc.fn." + node.varName, module);
     }
 
-    for (const Node& node : program.children)
-        if (node.type == NODE_FUNC_DEF) genNode(node);
-
+    // Сначала код верхнего уровня (main): он регистрирует структуры и создаёт
+    // глобальные переменные, которые затем видят тела функций.
     llvm::FunctionType* funcType =
         llvm::FunctionType::get(builder.getInt32Ty(), false);
     llvm::Function* mainFunc =
@@ -1760,10 +1685,15 @@ void CodeGen::generate(const Node& program) {
         llvm::BasicBlock::Create(context, "entry", mainFunc);
     builder.SetInsertPoint(block);
 
+    globalStorage = true;
     for (const Node& node : program.children)
         if (node.type != NODE_FUNC_DEF) genNode(node);
+    globalStorage = false;
 
     builder.CreateRet(builder.getInt32(0));
+
+    for (const Node& node : program.children)
+        if (node.type == NODE_FUNC_DEF) genNode(node);
 }
 
 bool CodeGen::verify(std::string& diagnostic) const {

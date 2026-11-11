@@ -64,6 +64,8 @@ public:
                 }
                 if (isBuiltinFunction(node.varName))
                     error(node, "имя функции '" + node.varName + "' зарезервировано встроенной функцией");
+                else if (node.varName == "main")
+                    error(node, "имя функции 'main' зарезервировано: точка входа программы — код верхнего уровня файла");
                 else if (functions_.count(node.varName))
                     error(node, "повторное объявление функции '" + node.varName + "'");
                 else
@@ -1043,6 +1045,13 @@ private:
             if (!node.left) {
                 error(node, "функция с результатом должна вернуть значение");
                 break;
+            }
+            if (node.left->type == NODE_IDENTIFIER) {
+                const Symbol* returned = lookup(node.left->value);
+                if (returned && returned->isDynArray) {
+                    error(node, "возврат динамического массива из функции пока не поддержан");
+                    break;
+                }
             }
             std::string actual = expression(*node.left);
             const std::string expectedReturnType = returnTypes_.back();
