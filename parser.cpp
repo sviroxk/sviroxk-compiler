@@ -2,6 +2,7 @@
 #include "diagnostics.h"
 #include <iostream>
 #include <sstream>
+#include <cctype>
 #include <cstdlib>
 #include <memory>
 #include <utility>
@@ -10,6 +11,12 @@ static int pos = 0;
 static unsigned parseErrorCount = 0;
 static int lastErrorPos = 0;
 static bool recovering = false;
+// Защита от зависаний: после kMaxSyntaxErrors сообщений или kMaxFailCalls
+// попыток сообщить об ошибке разбор останавливается (позиция переносится в END).
+static const unsigned kMaxSyntaxErrors = 20;
+static const unsigned kMaxFailCalls = 10000;
+static unsigned failCalls = 0;
+static bool parseStopped = false;
 static std::vector<Token> gtokens;
 static std::shared_ptr<std::vector<std::unique_ptr<Node>>> nodeArena =
     std::make_shared<std::vector<std::unique_ptr<Node>>>();
@@ -40,7 +47,17 @@ static std::string tokenDescription(const Token& token) {
     return "'" + token.value + "'";
 }
 
+static void stopParsing() {
+    parseStopped = true;
+    if (!gtokens.empty()) pos = static_cast<int>(gtokens.size()) - 1;
+}
+
 static void failAt(const Token& token, const std::string& message) {
+    if (parseStopped) return;
+    if (++failCalls > kMaxFailCalls) {
+        stopParsing();
+        return;
+    }
     if (!recovering) {
         ++parseErrorCount;
         lastErrorPos = pos;
@@ -51,15 +68,53 @@ static void failAt(const Token& token, const std::string& message) {
                 lastErrorPos = pos - 1;
         }
         sc::reportDiagnostic(token.file, token.line, token.column, "syntax", message);
+        if (parseErrorCount >= kMaxSyntaxErrors) {
+            sc::reportDiagnostic(token.file, token.line, token.column, "syntax",
+                                 "слишком много синтаксических ошибок, разбор остановлен");
+            stopParsing();
+        }
     }
     recovering = true;
 }
 
+// Пропускает токены до конца ошибочной конструкции с учётом вложенных `{ }`:
+// останавливается после `;` на нулевой глубине, после `}`, закрывающего
+// открытый здесь блок, или перед `}`, принадлежащей внешнему блоку.
 static void synchronizeStatement() {
-    while (peek().type != END && peek().type != RBRACE && peek().type != SEMICOLON)
+    int depth = 0;
+    while (peek().type != END) {
+        TokenType type = peek().type;
+        if (type == LBRACE) {
+            ++depth;
+        } else if (type == RBRACE) {
+            if (depth == 0) break;
+            --depth;
+            if (depth == 0) {
+                consume();
+                if (peek().type == SEMICOLON) consume();
+                break;
+            }
+        } else if (type == SEMICOLON && depth == 0) {
+            consume();
+            break;
+        }
         consume();
-    if (peek().type == SEMICOLON) consume();
+    }
     recovering = false;
+}
+
+// Восстановление после ошибки в parse()/parseBlock(): вернуться к месту первой
+// ошибки (но не раньше начала конструкции), пропустить конструкцию и
+// гарантировать, что позиция сдвинулась хотя бы на один токен.
+static void recoverAfterError(int start, bool insideBlock) {
+    if (parseStopped) return;
+    if (recovering) {
+        pos = lastErrorPos < start ? start : lastErrorPos;
+        synchronizeStatement();
+    }
+    recovering = false;
+    if (pos <= start && peek().type != END && !(insideBlock && peek().type == RBRACE))
+        consume();
 }
 
 static Token expect(TokenType type, const std::string& expected) {
@@ -587,18 +642,16 @@ Node parseOne();
 
 std::vector<Node> parseBlock() {
     std::vector<Node> nodes;
-    while (peek().type != RBRACE && peek().type != END) {
+    while (!parseStopped && peek().type != RBRACE && peek().type != END) {
         if (peek().type == SEMICOLON) { consume(); continue; }
+        const int start = pos;
         const unsigned errorsBefore = parseErrorCount;
+        const unsigned failsBefore = failCalls;
         Node statement = parseOne();
-        if (parseErrorCount == errorsBefore) {
+        if (parseErrorCount == errorsBefore && failCalls == failsBefore) {
             nodes.push_back(std::move(statement));
         } else {
-            if (recovering) {
-                pos = lastErrorPos;
-                synchronizeStatement();
-            }
-            recovering = false;
+            recoverAfterError(start, true);
         }
     }
     return nodes;
@@ -772,7 +825,7 @@ Node parseOne() {
         if (peek().type == VOID_T) {
             consume();
             node.varType = "void";
-        } else if (isTypeToken(peek().type) && isNameToken(peek(1).type) &&
+        } else if (isTypeToken(peek().type) && peek(1).type != LPAREN &&
                    peek(2).type == LPAREN) {
             Token returnType = consume();
             if (!isTypeName(returnType.value))
@@ -780,8 +833,15 @@ Node parseOne() {
             node.varType = canonicalType(returnType.value);
         }
         Token functionName = peek();
-        if (!isNameToken(functionName.type))
-            failAt(functionName, "ожидалось имя функции");
+        if (!isNameToken(functionName.type)) {
+            if (!functionName.value.empty() && functionName.type != END &&
+                (std::isalpha(static_cast<unsigned char>(functionName.value[0])) ||
+                 functionName.value[0] == '_'))
+                failAt(functionName, "'" + functionName.value +
+                       "' — зарезервированное слово, его нельзя использовать как имя функции");
+            else
+                failAt(functionName, "ожидалось имя функции");
+        }
         node.varName = consume().value;
         expect(LPAREN);
         while (peek().type != RPAREN && peek().type != END) {
@@ -1267,11 +1327,20 @@ Node parse(const std::vector<Token>& tokens) {
     parseErrorCount = 0;
     lastErrorPos = 0;
     recovering = false;
+    failCalls = 0;
+    parseStopped = false;
     Node program;
     program.type = NODE_PROGRAM;
     program.arena = nodeArena;
-    while (peek().type != END) {
+    while (!parseStopped && peek().type != END) {
         if (peek().type == SEMICOLON) { consume(); continue; }
+        if (peek().type == RBRACE) {
+            // Лишняя `}` на верхнем уровне: одна ошибка, токен пропускается.
+            failAt(peek(), "лишняя '}': нет открытого блока");
+            consume();
+            recovering = false;
+            continue;
+        }
         if (peek().type == IMP) {
             consume();
             Node node; node.type = NODE_IMPORT;
@@ -1279,13 +1348,14 @@ Node parse(const std::vector<Token>& tokens) {
             expect(SEMICOLON);
             program.children.push_back(node);
         } else {
+            const int start = pos;
             const unsigned errorsBefore = parseErrorCount;
+            const unsigned failsBefore = failCalls;
             Node declaration = parseOne();
-            if (parseErrorCount == errorsBefore) {
+            if (parseErrorCount == errorsBefore && failCalls == failsBefore) {
                 program.children.push_back(std::move(declaration));
-            } else if (recovering) {
-                pos = lastErrorPos;
-                synchronizeStatement();
+            } else {
+                recoverAfterError(start, false);
             }
         }
     }
