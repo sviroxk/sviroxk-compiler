@@ -26,6 +26,8 @@ struct Symbol {
     // For dynamic arrays: track length and capacity
     bool isDynArray = false;
     std::string dynArrayElementType;
+    // Для ptr p = &x: тип x, его возвращает *p.
+    std::string pointee;
     int dynArrayLength = 0;   // current length (for bounds checking)
     int dynArrayCapacity = 0; // allocated capacity
 };
@@ -380,7 +382,7 @@ private:
                 error(node, "разыменование требует тип ptr, получен '" + typeName(symbol->ty.toString()) + "'");
                 return "<error>";
             }
-            return "i32";
+            return symbol->pointee.empty() ? "i32" : symbol->pointee;
         }
         case NODE_DYN_ARRAY: {
             std::string element = normalize(node.varType);
@@ -438,10 +440,10 @@ private:
             }
             const std::string element = array->isDynArray
                 ? array->dynArrayElementType : array->ty.element->toString();
-            if (!node.args.empty()) {
+            if (node.left) {
                 std::string value = expression(*node.left);
                 if (value != "<error>" && !element.empty() && !compatible(element, value))
-                    error(node.args[0], "элемент массива ожидает тип '" + typeName(element) + "'");
+                    error(*node.left, "элемент массива ожидает тип '" + typeName(element) + "'");
             }
             return "void";
         }
@@ -819,6 +821,10 @@ private:
                     dynArrayInit, dynElementType);
             if (dynArrayInit && scopes_.back().count(node.varName))
                 scopes_.back()[node.varName].dynArrayCapacity = dynCapacity;
+            if (node.left->type == NODE_ADDR && scopes_.back().count(node.varName)) {
+                if (const Symbol* target = lookup(node.left->varName))
+                    scopes_.back()[node.varName].pointee = target->type;
+            }
             break;
         }
         case NODE_ARRAY_DECL: {
@@ -1171,11 +1177,11 @@ private:
                 if (!node.args.empty()) expression(node.args[0]);
                 break;
             }
-            if (!node.args.empty()) {
-                std::string value = expression(node.args[0]);
+            if (node.left) {
+                std::string value = expression(*node.left);
                 if (value != "<error>" && !array->dynArrayElementType.empty() &&
                     !compatible(array->dynArrayElementType, value))
-                    error(node.args[0], "элемент массива ожидает тип '" +
+                    error(*node.left, "элемент массива ожидает тип '" +
                           typeName(array->dynArrayElementType) + "'");
             }
             break;

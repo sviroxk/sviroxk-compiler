@@ -1000,6 +1000,7 @@ Node parseOne() {
     // arr[0] = 10 — присваивание элемента массива
     if (isNameToken(peek().type) && peek(1).type == LBRACKET) {
         Node node; node.type = NODE_ARRAY_ASSIGN;
+        node.line = peek().line; node.column = peek().column; node.file = peek().file;
         node.varName = consume().value;
         consume(); // [
         node.left = makeNode(parseExpr());

@@ -108,6 +108,7 @@ sources=(
     "test_chain_access.svx"
     "test_nested_struct.svx"
     "test_simple_chain.svx"
+    "test_dyn_array.svx"
 )
 
 for source in "${sources[@]}"; do
@@ -442,7 +443,7 @@ for source in "${sources[@]}"; do
             exit 1
         fi
     elif [[ "$source" == "examples/dyn_array_methods.svx" ]]; then
-        expected=$'3\n10\n20\n30\n2\n20\n1\n5'
+        expected=$'3\n10\n20\n30\n2\n20\n1\n4'
         if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
             echo "FAIL: dynamic array methods result mismatch" >&2
             cat "$work/output.txt" >&2
@@ -599,6 +600,13 @@ for source in "${sources[@]}"; do
         expected=$'1\n2\n3\n4'
         if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
             echo "FAIL: nested struct literal mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "test_dyn_array.svx" ]]; then
+        expected=$'10\n20\n30'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: nw rox[n] must create n zeroed elements" >&2
             cat "$work/output.txt" >&2
             exit 1
         fi
@@ -812,8 +820,7 @@ printf '%s\n' 'svi rox[] lor values = [1, 2, 3];' 'let i: int = 5;' 'print(value
 printf '%s\n' 'svi rox[] lor values = [1, 2, 3];' 'let i: int = 0 - 1;' 'values[i] = 4;' > "$RUNTIME_DIR/static_write.svx"
 printf '%s\n' 'ptr values = nw rox[2];' 'values.push(7);' 'let i: int = 3;' 'print(values[i]);' > "$RUNTIME_DIR/dynamic_read.svx"
 expect_runtime_error "static-array-read-oob" "$RUNTIME_DIR/static_read.svx" "array index out of bounds at line 3, column 7"
-# TODO(шаг 3): у записи в элемент массива нет позиции в AST, сейчас печатается "line 1, column 1".
-expect_runtime_error "static-array-write-oob" "$RUNTIME_DIR/static_write.svx" "array index out of bounds"
+expect_runtime_error "static-array-write-oob" "$RUNTIME_DIR/static_write.svx" "array index out of bounds at line 3, column 1"
 expect_runtime_error "dynamic-array-read-oob" "$RUNTIME_DIR/dynamic_read.svx" "array index out of bounds at line 4, column 7"
 
 # Программа из строки: компилируется, запускается, вывод совпадает с ожидаемым.
@@ -864,6 +871,25 @@ expect_program_output "ar-and-rep-together" $'print(ar("abc"));\nprint(rep("hell
 expect_program_output "user-fn-named-strlen" $'fn int strlen(int x) { return x + 1; }\nprint(strlen(4));\nprint(ar("abcd"));' $'5\n4'
 expect_compile_error "user-main-reserved" $'fn void main() { print(111); }\nprint(1);' "имя функции 'main' зарезервировано"
 expect_compile_error "return-dynamic-array" $'fn ptr make() { ptr v = nw rox[3]; return v; }\nprint(1);' "возврат динамического массива из функции пока не поддержан"
+
+# Шаг 3: строки в куче, файлы, nw, push, разыменование.
+expect_program_output "str-huge-double" 'print(ar(str(1e300)));' '308'
+expect_program_output "str-returned-from-fn" $'fn str mk(int n) { return str(n); }\nstr a = mk(12);\nstr b = mk(345);\nprint(a);\nprint(b);' $'12\n345'
+expect_program_output "str-locals-in-fn" $'fn str both(int a, int b) { str x = str(a); str y = str(b); return x; }\nprint(both(7, 8));\nprint(str(3.5));\nprint(str(-2147483647));' $'7\n3.500000\n-2147483647'
+expect_program_output "file-roundtrip" "file f = atk(\"$TMP_DIR/roundtrip.txt\", \"w\");
+zap(f, \"line1\");
+zak(f);
+file g = atk(\"$TMP_DIR/roundtrip.txt\", \"r\");
+str t = pro(g);
+print(t);
+zak(g);" 'line1'
+expect_program_output "nw-has-length-n" $'ptr v = nw rox[3];\nv[0] = 10;\nprint(v[0]);\nprint(v.len());\nprint(v[2]);' $'10\n3\n0'
+expect_program_output "nw-empty-then-push" $'ptr v = nw rox[0];\nprint(v.len());\nv.push(5);\nprint(v[0]);' $'0\n5'
+expect_program_output "deref-f64" $'f64 f = 2.5;\nptr p = &f;\nprint(*p);\n*p = 4.25;\nprint(f);' $'2.500000\n4.250000'
+expect_program_output "deref-int" $'int x = 7;\nptr p = &x;\n*p = *p + 1;\nprint(x);\nprint(*p);' $'8\n8'
+printf '%s\n' 'file f = atk("no-such-dir/missing.txt", "r");' 'str t = pro(f);' 'print(t);' > "$RUNTIME_DIR/missing_file.svx"
+expect_runtime_error "open-missing-file" "$RUNTIME_DIR/missing_file.svx" "cannot open file 'no-such-dir/missing.txt' at line 1, column 10"
+expect_compile_error "push-string-into-int-array" $'ptr v = nw rox[3];\nv.push("hello");' "элемент массива ожидает тип"
 
 expect_compile_error "array-negative-index" "svi rox[] lor values = [1, 2]; slov(values[-1]);" "индекс массива выходит за границы"
 expect_compile_error "array-upper-index" "svi rox[] lor values = [1, 2]; slov(values[2]);" "индекс массива выходит за границы"
@@ -971,5 +997,42 @@ if (( status >= 128 )) || ! grep -Fq "циклический импорт" "$TMP
     exit 1
 fi
 echo "PASS: cyclic import detection"
+
+# AddressSanitizer на собранных программах: каждая уже собранная и проверенная
+# программа (module.ll + output.txt) пересобирается с -fsanitize=address и должна
+# дать тот же вывод без отчётов ASan. Утечки не проверяются: строки в куче пока
+# не освобождаются (освобождение при выходе из области — этап модели памяти).
+asan_probe="$TMP_DIR/asan-probe"
+mkdir -p "$asan_probe"
+printf 'int main(void) { return 0; }\n' > "$asan_probe/probe.c"
+if clang -fsanitize=address "$asan_probe/probe.c" -o "$asan_probe/probe" 2>/dev/null &&
+   "$asan_probe/probe"; then
+    asan_count=0
+    for work in "$TMP_DIR"/*/; do
+        work=${work%/}
+        [[ -f "$work/module.ll" && -f "$work/output.txt" ]] || continue
+        case "$work" in *input*) continue ;; esac
+        sed -E 's/^(define [^{]*)\{$/\1 sanitize_address {/' "$work/module.ll" > "$work/asan.ll"
+        if ! clang -no-pie -fsanitize=address -O0 "$work/asan.ll" -o "$work/asan-program" -lm 2>"$work/asan-build.err"; then
+            echo "FAIL: could not build $work with AddressSanitizer" >&2
+            cat "$work/asan-build.err" >&2
+            exit 1
+        fi
+        if ! (cd "$work" && ASAN_OPTIONS=detect_leaks=0 timeout --signal=TERM 20s ./asan-program \
+                </dev/null >"$work/asan-output.txt" 2>"$work/asan.err"); then
+            echo "FAIL: AddressSanitizer reported an error in $work" >&2
+            head -c 3000 "$work/asan.err" >&2
+            exit 1
+        fi
+        if ! cmp -s "$work/output.txt" "$work/asan-output.txt"; then
+            echo "FAIL: output under AddressSanitizer differs for $work" >&2
+            exit 1
+        fi
+        asan_count=$((asan_count + 1))
+    done
+    echo "PASS: AddressSanitizer clean on $asan_count compiled programs"
+else
+    echo "SKIP: clang cannot build with -fsanitize=address here; ASan check of compiled programs skipped"
+fi
 
 echo "All compiler tests passed."

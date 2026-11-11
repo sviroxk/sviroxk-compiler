@@ -1,4 +1,4 @@
-ptr values = nw rox[2];
+ptr values = nw rox[0];
 values.push(7);
 values.push(8);
 print(values[0] + values[1]);

@@ -38,6 +38,8 @@ public:
     std::map<std::string, llvm::Type*> arrayElementTypes;
     std::map<std::string, llvm::Value*> dynArrays;
     std::map<std::string, llvm::Type*> dynArrayElementTypes;
+    // Тип значения, на которое указывает ptr-переменная (известен для ptr p = &x).
+    std::map<std::string, llvm::Type*> pointeeTypes;
     std::map<std::string, llvm::Function*> funcs;
     std::map<std::string, std::vector<std::string>> funcParamTypes;
     std::map<std::string, std::string> funcReturnTypes;
@@ -68,6 +70,9 @@ public:
     llvm::Function* runtimeFunction(const std::string& name);
     llvm::Value* castTo(llvm::Value* val, llvm::Type* ty, bool sourceUnsigned = false);
     llvm::Value* toBool(llvm::Value* val);
+    void emitRuntimeFailureIf(llvm::Value* failed, const std::string& message,
+                              const Node& location, llvm::Value* detail = nullptr);
+    llvm::Value* allocateStringBuffer(llvm::Value* bytes, const Node& location);
     void emitArrayBoundsCheck(llvm::Value* index, llvm::Value* length, const Node& location);
     llvm::StructType* dynArrayType();
     void growDynArray(const std::string& varName, llvm::Value* newCapacity);
