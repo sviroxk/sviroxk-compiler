@@ -27,6 +27,8 @@ SC находится на ранней стадии разработки. На�
 | Типы параметров в `fucn` | ✅ |
 | `rep()`, `test.sh` | ✅ |
 
+- ASan generated-program suite включает 10 отдельных memory-safety cases для heap/del, dynamic arrays и файлов; 3 heap lifecycle cases проходят с LeakSanitizer. Unsafe detector self-tests подтверждают инструментирование, но не означают поддержку безопасных указателей. Контракт и исключения: `docs/memory-safety-tests.md`.
+
 ## Следующие направления
 
 - [~] Скалярные типы и алиасы `int/i32`, `uint/u32`, `short/i16`, `ushort/u16`, `long/i64`, `ulong/u64`, `byte/u8`, `float/f32`, `double/f64`; прямые литералы проверяются по диапазону, явные скалярные casts проходят runtime-тесты. `i8/i16` продвигаются до i32, `u8/u16` до u32; mixed signedness от 32 бит отклоняется. Decimal/exponent float literals поддержаны и покрыты runtime-тестами; их неявное преобразование в integer запрещено, явный cast покрыт положительным и отрицательными compile tests. Точные массивы/поля структур отклоняются; pointer/heap array path остаётся i32; runtime overflow checks ещё нет.

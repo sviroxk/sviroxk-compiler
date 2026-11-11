@@ -1050,6 +1050,7 @@ if clang -fsanitize=address "$asan_probe/probe.c" -o "$asan_probe/probe" 2>/dev/
         asan_count=$((asan_count + 1))
     done
     echo "PASS: AddressSanitizer clean on $asan_count compiled programs"
+    bash tests/memory-safety.sh "$SC_BIN" "$TMP_DIR/memory-safety"
 else
     echo "SKIP: clang cannot build with -fsanitize=address here; ASan check of compiled programs skipped"
 fi
