@@ -15,17 +15,17 @@ done
 ./test-conformance.sh
 SC_BIN="$PWD/sc"
 
-version_output=$("$SC_BIN" --version)
+version_output=$(timeout --signal=TERM 10s "$SC_BIN" --version)
 if [[ "$version_output" != "SC compiler 0.3.0" ]]; then
     echo "FAIL: --version returned unexpected text: $version_output" >&2
     exit 1
 fi
-help_output=$("$SC_BIN" --help)
+help_output=$(timeout --signal=TERM 10s "$SC_BIN" --help)
 if ! grep -Fq 'Usage: sc <source.svx>' <<< "$help_output"; then
     echo "FAIL: --help is missing source usage" >&2
     exit 1
 fi
-if "$SC_BIN" --unknown >/dev/null 2>"${TMPDIR:-/tmp}/sc-unknown-option.log"; then
+if timeout --signal=TERM 10s "$SC_BIN" --unknown >/dev/null 2>"${TMPDIR:-/tmp}/sc-unknown-option.log"; then
     echo "FAIL: unknown CLI option returned success" >&2
     exit 1
 fi
@@ -105,6 +105,9 @@ sources=(
     "examples/a9_file_open.svx"
     "examples/contextual_numeric_literals.svx"
     "examples/unsigned_print.svx"
+    "test_chain_access.svx"
+    "test_nested_struct.svx"
+    "test_simple_chain.svx"
 )
 
 for source in "${sources[@]}"; do
@@ -152,6 +155,9 @@ for source in "${sources[@]}"; do
         cat "$work/link.err" >&2
         exit 1
     fi
+    # set +e: статус запуска программы проверяется явно ниже (раньше `$?` после
+    # if/elif был мёртвым кодом, а set -e обрывал скрипт без сообщения).
+    set +e
     if [[ "$source" == "examples/b2_numeric_input.svx" ]]; then
         printf '%s
 ' '37' | timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"
@@ -168,8 +174,10 @@ for source in "${sources[@]}"; do
     else
         timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"
     fi
-    if [[ $? -ne 0 ]]; then
-        echo "FAIL: program failed or exceeded 10s for $source" >&2
+    run_status=$?
+    set -e
+    if (( run_status != 0 )); then
+        echo "FAIL: program failed or exceeded 10s for $source (status $run_status)" >&2
         cat "$work/runtime.err" >&2
         exit 1
     fi
@@ -579,6 +587,27 @@ for source in "${sources[@]}"; do
             cat "$work/output.txt" >&2
             exit 1
         fi
+    elif [[ "$source" == "test_chain_access.svx" ]]; then
+        expected=$'1\n2\n3\n4\n42\n7'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: chained struct access mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "test_nested_struct.svx" ]]; then
+        expected=$'1\n2\n3\n4'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: nested struct literal mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
+    elif [[ "$source" == "test_simple_chain.svx" ]]; then
+        expected=$'5\n10'
+        if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+            echo "FAIL: simple struct chain mismatch" >&2
+            cat "$work/output.txt" >&2
+            exit 1
+        fi
     elif [[ "$source" == "examples/string_replace.svx" ]]; then
         long_base=""
         for ((repeat = 0; repeat < 20; repeat++)); do
@@ -645,6 +674,11 @@ expect_compile_error() {
     else
         status=$?
     fi
+    if (( status == 124 )); then
+        echo "FAIL: compiler hung (timeout 10s) on '$name'" >&2
+        head -c 2000 "$work/error.log" >&2
+        exit 1
+    fi
     if (( status >= 128 )); then
         echo "FAIL: compiler crashed while handling '$name' (status $status)" >&2
         cat "$work/error.log" >&2
@@ -675,6 +709,111 @@ expect_compile_error() {
     fi
     echo "PASS: invalid input '$name' reported an error without crashing"
 }
+
+# Мусорный ввод: компилятор обязан завершиться кодом 1 или 2 быстрее 5 секунд,
+# не зависнуть (124) и не упасть (>=128), и выдать не больше max_errors ошибок.
+expect_garbage_input() {
+    local name=$1
+    local source=$2
+    local expected=$3
+    local max_errors=${4:-3}
+    local work="$TMP_DIR/garbage-$name"
+    local status=0
+    mkdir -p "$work"
+    printf '%s' "$source" > "$work/input.svx"
+    if (ulimit -c 0; timeout --signal=KILL 5s ./sc "$work/input.svx" >"$work/output.ll" 2>"$work/error.log"); then
+        echo "FAIL: garbage input '$name' compiled successfully" >&2
+        exit 1
+    else
+        status=$?
+    fi
+    if (( status != 1 && status != 2 )); then
+        echo "FAIL: garbage input '$name': exit status $status (124/137 = hang, >=128 = crash), expected 1 or 2" >&2
+        head -c 2000 "$work/error.log" >&2
+        exit 1
+    fi
+    local count
+    count=$(grep -c 'error\[' "$work/error.log" || true)
+    if (( count < 1 || count > max_errors )); then
+        echo "FAIL: garbage input '$name' produced $count diagnostics, expected 1..$max_errors" >&2
+        head -c 2000 "$work/error.log" >&2
+        exit 1
+    fi
+    if [[ -n "$expected" ]] && ! grep -Fq "$expected" "$work/error.log"; then
+        echo "FAIL: garbage input '$name' did not produce expected error '$expected'" >&2
+        cat "$work/error.log" >&2
+        exit 1
+    fi
+    echo "PASS: garbage input '$name' ($count diagnostics, status $status)"
+}
+
+expect_garbage_input "stray-rbrace" $'}\n' "лишняя '}'" 1
+expect_garbage_input "stray-rbraces" $'}}}\n' "лишняя '}'"
+expect_garbage_input "if-without-parens" $'let x: int = 1;\nif x == 1 { print(1); }\nprint(2);\n' "получено 'x'"
+expect_garbage_input "array-param-type" $'fn int first(int[] a) { return 0; }\nprint(1);\n' "ожидалось имя параметра"
+expect_garbage_input "struct-param-type" $'tip P { int x = 0; }\nfn int getx(P p) { return 1; }\nprint(1);\n' "неизвестный тип параметра 'P'"
+expect_garbage_input "keyword-function-name" $'fn int f32(int a) { return a; }\nprint(1);\n' "'f32' — зарезервированное слово"
+expect_garbage_input "truncated-fn" 'fn int f(' ""
+expect_garbage_input "truncated-let" 'let x: int = ' "ожидалось выражение"
+expect_garbage_input "truncated-if" 'if (1) {' ""
+expect_garbage_input "truncated-struct" 'tip P {' ""
+expect_garbage_input "truncated-call" 'print(max(1, ' ""
+expect_garbage_input "truncated-cop" 'cop f(1 2 3' ""
+expect_garbage_input "stray-rbrace-in-fn" $'fn void f() { print(1); } }\nprint(2);\n' "лишняя '}'" 1
+many_errors=""
+for ((i = 0; i < 50; i++)); do many_errors+=$'let a: int = ;\n'; done
+expect_garbage_input "error-limit" "$many_errors" "слишком много синтаксических ошибок" 21
+
+expect_compile_error "multiple-syntax-errors" $'let a: int = ;\nlet b: int = ;'
+expect_compile_error "diagnostic-source-caret" 'let value: int = ;' "ожидалось выражение"
+
+expect_compile_error_file() {
+    local source=$1
+    local expected=$2
+    local name
+    name=$(basename "$source" .svx)
+    local work="$TMP_DIR/invalid-file-$name"
+    local status=0
+    mkdir -p "$work"
+    if (ulimit -c 0; timeout --signal=TERM 10s ./sc "$source" >"$work/output.ll" 2>"$work/error.log"); then
+        echo "FAIL: invalid example '$source' compiled successfully" >&2
+        exit 1
+    else
+        status=$?
+    fi
+    if (( status != 1 && status != 2 )); then
+        echo "FAIL: example '$source': exit status $status, expected 1 or 2" >&2
+        head -c 2000 "$work/error.log" >&2
+        exit 1
+    fi
+    if ! grep -Fq "$expected" "$work/error.log"; then
+        echo "FAIL: example '$source' did not produce expected error '$expected'" >&2
+        cat "$work/error.log" >&2
+        exit 1
+    fi
+    echo "PASS: invalid example '$source' rejected with expected error"
+}
+
+expect_compile_error_file "examples/a15_builtin_collision.svx" "зарезервировано встроенной функцией"
+expect_compile_error_file "examples/a19_nested_function.svx" "вложенные определения функций"
+expect_compile_error_file "examples/a20_unreachable.svx" "недостижимый код"
+expect_compile_error_file "examples/a5_positions.svx" "a5_positions.svx:5:13: error[semantic]"
+expect_compile_error_file "examples/array_bounds_negative.svx" "индекс массива выходит за границы"
+expect_compile_error_file "examples/array_bounds_upper.svx" "индекс массива выходит за границы"
+expect_compile_error_file "examples/continue_counted_loop.svx" "недостижимый код"
+expect_compile_error_file "examples/diagnostic_caret.svx" "^"
+expect_compile_error_file "examples/p0_struct_copy_ownership.svx" "неявное копирование структуры"
+expect_compile_error_file "examples/p0_struct_recursive.svx" "рекурсивное определение структуры"
+
+RUNTIME_DIR="$TMP_DIR/runtime-sources"
+mkdir -p "$RUNTIME_DIR"
+printf '%s\n' 'svi rox[] lor values = [1, 2, 3];' 'let i: int = 5;' 'print(values[i]);' > "$RUNTIME_DIR/static_read.svx"
+printf '%s\n' 'svi rox[] lor values = [1, 2, 3];' 'let i: int = 0 - 1;' 'values[i] = 4;' > "$RUNTIME_DIR/static_write.svx"
+printf '%s\n' 'ptr values = nw rox[2];' 'values.push(7);' 'let i: int = 3;' 'print(values[i]);' > "$RUNTIME_DIR/dynamic_read.svx"
+expect_runtime_error "static-array-read-oob" "$RUNTIME_DIR/static_read.svx" "array index out of bounds at line 3, column 7"
+# TODO(шаг 3): у записи в элемент массива нет позиции в AST, сейчас печатается "line 1, column 1".
+expect_runtime_error "static-array-write-oob" "$RUNTIME_DIR/static_write.svx" "array index out of bounds"
+expect_runtime_error "dynamic-array-read-oob" "$RUNTIME_DIR/dynamic_read.svx" "array index out of bounds at line 4, column 7"
 
 expect_compile_error "array-negative-index" "svi rox[] lor values = [1, 2]; slov(values[-1]);" "индекс массива выходит за границы"
 expect_compile_error "array-upper-index" "svi rox[] lor values = [1, 2]; slov(values[2]);" "индекс массива выходит за границы"
