@@ -131,7 +131,7 @@
 - Коммит `171c14d`. Stage 3 (переменные, константы, выражения, definite assignment) — 100%.
 
 ## Stage 4 — динамические массивы: push/pop/resize/len/cap
-- `nw T[n]` в codegen теперь выставляет `length = 0`, `capacity = n` (раньше оба были равны n, из-за чего первый push всегда ресайзился).
+- `nw T[n]` в codegen выставлял `length = 0`, `capacity = n`. **Изменено на шаге 3:** `nw T[n]` создаёт n обнулённых элементов (`length = capacity = n`, как `new T[n]()` в C++ и `make([]T, n)` в Go); пустой массив — `nw T[0]`, затем `push`.
 - Добавлен `NODE_ARRAY_POP` в `genNode`: уменьшает length на 1 при ненулевой длине, без side-effect в противном случае.
 - `NODE_ARRAY_POP` также поддерживается в `genExpr` (возвращает последний элемент).
 - `NODE_ARRAY_PUSH` / `NODE_ARRAY_RESIZE` в `genNode` используют `growDynArray` с умножением capacity (минимум 1).

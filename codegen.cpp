@@ -58,10 +58,11 @@ llvm::Function* CodeGen::runtimeFunction(const std::string& name) {
         {"puts",    {i32, {ptr}, false}},
         {"printf",  {i32, {ptr}, true}},
         {"scanf",   {i32, {ptr}, true}},
-        {"sprintf", {i32, {ptr, ptr}, true}},
         {"abort",   {voidTy, {}, false}},
         {"exit",    {voidTy, {i32}, false}},
         {"malloc",  {ptr, {i64}, false}},
+        {"calloc",  {ptr, {i64, i64}, false}},
+        {"snprintf", {i32, {ptr, i64, ptr}, true}},
         {"free",    {voidTy, {ptr}, false}},
         {"memcpy",  {ptr, {ptr, ptr, i64}, false}},
         {"strlen",  {i64, {ptr}, false}},
@@ -188,6 +189,40 @@ unsigned CodeGen::integerWidth(const Node& node) const {
     if (node.type == NODE_BINOP && node.left && node.right)
         return std::max(integerWidth(*node.left), integerWidth(*node.right));
     return 32;
+}
+
+// Ошибка выполнения: если failed истинно, печатает "SC runtime error: <message> at line L, column C"
+// и завершает программу с кодом 1. detail (строка C) подставляется вместо %s в message.
+void CodeGen::emitRuntimeFailureIf(llvm::Value* failed, const std::string& message,
+                                   const Node& location, llvm::Value* detail) {
+    llvm::Function* function = builder.GetInsertBlock()->getParent();
+    llvm::BasicBlock* fail = llvm::BasicBlock::Create(context, "runtime_error", function);
+    llvm::BasicBlock* ok = llvm::BasicBlock::Create(context, "runtime_ok", function);
+    builder.CreateCondBr(failed, fail, ok);
+    builder.SetInsertPoint(fail);
+    const std::string text = "SC runtime error: " + message + " at line " +
+        std::to_string(location.line) + ", column " + std::to_string(location.column);
+    if (detail)
+        builder.CreateCall(printfFunc, {getStringPtr(text + "\n"), detail});
+    else
+        builder.CreateCall(putsFunc, {getStringPtr(text)});
+    builder.CreateCall(runtimeFunction("exit"), {builder.getInt32(1)});
+    builder.CreateUnreachable();
+    builder.SetInsertPoint(ok);
+}
+
+// Единственное место, где компилятор выделяет строковые буферы в куче (str(),
+// строковый ввод, чтение файла). Владелец буфера — переменная, которой присвоен
+// результат. Пока буфер не освобождается (утечка вместо висячего указателя);
+// освобождение при выходе из области видимости — этап модели памяти.
+llvm::Value* CodeGen::allocateStringBuffer(llvm::Value* bytes, const Node& location) {
+    if (bytes->getType()->getIntegerBitWidth() < 64)
+        bytes = builder.CreateZExt(bytes, builder.getInt64Ty());
+    llvm::Value* buffer = builder.CreateCall(runtimeFunction("malloc"), {bytes});
+    emitRuntimeFailureIf(builder.CreateICmpEQ(buffer,
+        llvm::ConstantPointerNull::get(builder.getPtrTy())), "out of memory", location);
+    builder.CreateStore(builder.getInt8(0), buffer);
+    return buffer;
 }
 
 void CodeGen::emitArrayBoundsCheck(llvm::Value* index, llvm::Value* length,
@@ -473,7 +508,9 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         llvm::Value* alloca = vars[node.varName];
         if (alloca) {
             llvm::Value* ptr = builder.CreateLoad(builder.getPtrTy(), alloca);
-            return builder.CreateLoad(builder.getInt32Ty(), ptr);
+            auto pointee = pointeeTypes.find(node.varName);
+            llvm::Type* type = pointee != pointeeTypes.end() ? pointee->second : builder.getInt32Ty();
+            return builder.CreateLoad(type, ptr);
         }
         codegenFailure(node, "неизвестный указатель '" + node.varName + "'");
     }
@@ -556,12 +593,10 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         llvm::Value* fileAlloca = vars[node.varName];
         if (!fileAlloca) return getStringPtr("");
         llvm::Value* fp = builder.CreateLoad(builder.getPtrTy(), fileAlloca);
+        emitRuntimeFailureIf(builder.CreateICmpEQ(fp,
+            llvm::ConstantPointerNull::get(builder.getPtrTy())), "file is not open", node);
         llvm::Function* fgetsF = runtimeFunction("fgets");
-        llvm::AllocaInst* buf = builder.CreateAlloca(
-            llvm::ArrayType::get(builder.getInt8Ty(), 4096), nullptr, "filebuf");
-        llvm::Value* bufPtr = builder.CreateInBoundsGEP(
-            llvm::ArrayType::get(builder.getInt8Ty(), 4096), buf,
-            {builder.getInt32(0), builder.getInt32(0)});
+        llvm::Value* bufPtr = allocateStringBuffer(builder.getInt64(4096), node);
         builder.CreateCall(fgetsF,
             {bufPtr, builder.getInt32(4096), fp});
         return bufPtr;
@@ -570,18 +605,17 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         llvm::Function* fopenF = runtimeFunction("fopen");
         llvm::Value* fname = node.left ? genExpr(*node.left) : getStringPtr("");
         llvm::Value* mode = node.right ? genExpr(*node.right) : getStringPtr("w");
-        return builder.CreateCall(fopenF, {fname, mode});
+        llvm::Value* file = builder.CreateCall(fopenF, {fname, mode});
+        emitRuntimeFailureIf(builder.CreateICmpEQ(file,
+            llvm::ConstantPointerNull::get(builder.getPtrTy())), "cannot open file '%s'", node, fname);
+        return file;
     }
     if (node.type == NODE_INPUT && node.varType == "cos") {
         llvm::Function* printfF = runtimeFunction("printf");
         llvm::Function* scanfF = runtimeFunction("scanf");
         llvm::Value* prompt = getStringPtr(node.value);
         builder.CreateCall(printfF, {prompt});
-        llvm::AllocaInst* buf = builder.CreateAlloca(
-            llvm::ArrayType::get(builder.getInt8Ty(), 256), nullptr, "strinput");
-        llvm::Value* bufPtr = builder.CreateInBoundsGEP(
-            llvm::ArrayType::get(builder.getInt8Ty(), 256), buf,
-            {builder.getInt32(0), builder.getInt32(0)});
+        llvm::Value* bufPtr = allocateStringBuffer(builder.getInt64(256), node);
         llvm::Value* fmt = getStringPtr("%255s");
         builder.CreateCall(scanfF, {fmt, bufPtr});
         return bufPtr;
@@ -824,12 +858,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             return builder.CreateSelect(condition, left, right);
         }
         if (name == "str") {
-            llvm::Function* sprintfF = runtimeFunction("sprintf");
-            llvm::AllocaInst* buf = builder.CreateAlloca(
-                llvm::ArrayType::get(builder.getInt8Ty(), 64), nullptr, "strbuf");
-            llvm::Value* bufPtr = builder.CreateInBoundsGEP(
-                llvm::ArrayType::get(builder.getInt8Ty(), 64), buf,
-                {builder.getInt32(0), builder.getInt32(0)});
+            llvm::Function* snprintfF = runtimeFunction("snprintf");
             llvm::Value* val = genExpr(node.args[0]);
             llvm::Value* fmt;
             if (val->getType()->isFloatingPointTy()) {
@@ -841,7 +870,13 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             } else {
                 fmt = getStringPtr(isUnsignedExpr(node.args[0]) ? "%u" : "%d");
             }
-            builder.CreateCall(sprintfF, {bufPtr, fmt, val});
+            // Точный размер: snprintf(NULL, 0, ...) возвращает длину без '\0'.
+            llvm::Value* length = builder.CreateCall(snprintfF,
+                {llvm::ConstantPointerNull::get(builder.getPtrTy()), builder.getInt64(0), fmt, val});
+            llvm::Value* bytes = builder.CreateAdd(
+                builder.CreateSExt(length, builder.getInt64Ty()), builder.getInt64(1));
+            llvm::Value* bufPtr = allocateStringBuffer(bytes, node);
+            builder.CreateCall(snprintfF, {bufPtr, bytes, fmt, val});
             return bufPtr;
         }
         if (name == "ser") {
@@ -1040,10 +1075,12 @@ void CodeGen::genNode(const Node& node) {
             llvm::Type* elementType = svType(alloc.varType);
             llvm::Value* size = genExpr(*alloc.left);
             size = builder.CreateSExt(size, builder.getInt64Ty());
-            llvm::Value* bytes = builder.CreateMul(size,
-                builder.getInt64(elementType->getPrimitiveSizeInBits() / 8));
-            llvm::Function* mallocF = runtimeFunction("malloc");
-            llvm::Value* data = builder.CreateCall(mallocF, {bytes});
+            // nw T[n]: длина n, элементы обнулены (как new T[n]() в C++ и make([]T, n) в Go).
+            // calloc(0) может вернуть NULL, поэтому выделяется минимум один элемент.
+            llvm::Value* count = builder.CreateSelect(
+                builder.CreateICmpEQ(size, builder.getInt64(0)), builder.getInt64(1), size);
+            llvm::Value* data = builder.CreateCall(runtimeFunction("calloc"), {count,
+                builder.getInt64(elementType->getPrimitiveSizeInBits() / 8)});
             llvm::Function* function = builder.GetInsertBlock()->getParent();
             llvm::BasicBlock* trap = llvm::BasicBlock::Create(context, "dyn_oom", function);
             llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "dyn_alloc", function);
@@ -1057,8 +1094,8 @@ void CodeGen::genNode(const Node& node) {
             llvm::Value* desc = createStorage(descType, node.varName);
             builder.CreateStore(data,
                 builder.CreateStructGEP(descType, desc, 0));
-            builder.CreateStore(builder.getInt64(0),
-                builder.CreateStructGEP(descType, desc, 1)); // length = 0
+            builder.CreateStore(size,
+                builder.CreateStructGEP(descType, desc, 1)); // length = n
             builder.CreateStore(size,
                 builder.CreateStructGEP(descType, desc, 2)); // capacity = size
             dynArrays[node.varName] = desc;
@@ -1067,6 +1104,10 @@ void CodeGen::genNode(const Node& node) {
             constVars[node.varName] = node.isConst;
             return;
         }
+        // ptr p = &x: запомнить тип x, чтобы *p читал и писал значение нужного типа.
+        pointeeTypes.erase(node.varName);
+        if (node.left->type == NODE_ADDR && vars.count(node.left->varName) && vars[node.left->varName])
+            pointeeTypes[node.varName] = storageType(vars[node.left->varName]);
         llvm::Value* val = genExpr(*node.left);
         llvm::Type* ty = node.varType.empty()
             ? val->getType() : svType(node.varType);
@@ -1165,7 +1206,11 @@ void CodeGen::genNode(const Node& node) {
         llvm::Value* alloca = vars[node.varName];
         if (alloca) {
             llvm::Value* ptr = builder.CreateLoad(builder.getPtrTy(), alloca);
-            builder.CreateStore(genExpr(*node.left), ptr);
+            auto pointee = pointeeTypes.find(node.varName);
+            llvm::Value* value = genExpr(*node.left);
+            if (pointee != pointeeTypes.end())
+                value = castTo(value, pointee->second, isUnsignedExpr(*node.left));
+            builder.CreateStore(value, ptr);
         }
     }
     else if (node.type == NODE_RETURN) {
