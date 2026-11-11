@@ -33,6 +33,16 @@ echo "PASS: CLI version/help/unknown-option contract"
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+# Parser API regression: run in the same process, including the sanitizer CI build.
+read -r -a PARSER_TEST_FLAGS <<< "${CXXFLAGS:-}"
+"${CXX:-clang++}" -std=c++17 "${PARSER_TEST_FLAGS[@]}" -I. \
+    tests/parser-state.cpp lexer.cpp parser.cpp -o "$TMP_DIR/parser-state"
+timeout --signal=TERM 10s "$TMP_DIR/parser-state" 2>"$TMP_DIR/parser-state.err"
+if ! grep -Fq 'error[syntax]' "$TMP_DIR/parser-state.err"; then
+    echo "FAIL: parser API regression did not report the expected syntax error" >&2
+    exit 1
+fi
+
 sources=(
     "hello.svx"
     "test.svx"

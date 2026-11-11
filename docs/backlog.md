@@ -3,7 +3,7 @@
 Порядок — по приоритету и зависимостям. Не отмечать выполненным без тестов.
 
 ## P0 — корректность/безопасность
-- [ ] Убрать глобальное состояние parser и сделать AST ownership безопасным при копировании Node (arena пока локальный workaround).
+- [x] Состояние parser принадлежит одному разбору; `ParseResult` хранит дерево и статус ошибок. Копии `Node` удерживают expression subtrees через `shared_ptr` без глобальной arena; lifetime и повторные разборы покрыты API regression под ASan/UBSan.
 - [~] ASan/UBSan LeakSanitizer проверяет parser arena, heap result `rep` и static array bounds. Динамические pointer/file/memory safety cases требуют runtime metadata.
 - [x] Исправить compiler warnings под `-Wall -Wextra -Werror`; строгая сборка проходит локально и в CI.
 - [x] Проверять LLVM module verifier до печати IR; некорректный IR возвращает internal diagnostic и exit code 3.

@@ -328,9 +328,9 @@ void CodeGen::initStructLiteral(llvm::Value* storage, llvm::StructType* aggregat
         const StructField& field = fields[index];
         const Node* initializer;
         if (named.count(field.name)) {
-            initializer = named.at(field.name)->left;
+            initializer = named.at(field.name)->left.get();
         } else if (positionalIndex < positional.size()) {
-            initializer = positional[positionalIndex++]->left;
+            initializer = positional[positionalIndex++]->left.get();
         } else {
             initializer = &field.defaultVal;
         }

@@ -143,3 +143,10 @@
 - `./test.sh`: все 68 примеров + CLI + 28 негативных fixture + импорт/циклы — зелёно.
 - `CXXFLAGS='-Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer' ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./test.sh`: прошёл.
 - Stage 4 (динамические массивы) — 100%.
+
+
+## P0 — изолированный parser и владение копиями AST
+- Baseline `179f4da`: копия выражения `1 + 2 * 3` после уничтожения исходного дерева и следующего `parse` давала ASan `heap-use-after-free` (exit 1).
+- Состояние разбора перенесено в локальный `Parser`; `ParseResult` возвращает дерево и собственный статус ошибок. Глобальная arena удалена, `left/right/extra` используют shared ownership. Копирование сохраняет время жизни поддерева, но не является независимым deep clone.
+- `tests/parser-state.cpp` проверяет переживание исходного дерева/повторного разбора, восстановление после ошибочного разбора, независимый статус и пустой input. Тест включён в `test.sh`, включая ASan/UBSan CI-конфигурацию.
+- LLVM 18.1.8: warning-clean build, `./test.sh`, отдельный `./test-conformance.sh` (3/3) и полный `./test.sh` под ASan/UBSan + LeakSanitizer прошли. Каждый полный прогон включает 93 программы под ASan и новую API regression. Синтаксис SC не менялся; потоки и performance benchmarks не проверялись.
