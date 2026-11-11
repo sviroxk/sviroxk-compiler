@@ -133,7 +133,8 @@ for source in "${sources[@]}"; do
         exit 1
     fi
     if [[ "$source" == "examples/fixed_width.svx" ]]; then
-        for ir_type in 'alloca i8' 'alloca i16' 'alloca i32' 'alloca i64' 'alloca float' 'alloca double'; do
+        # Переменные верхнего уровня — глобалы LLVM (шаг 2), ширина хранения проверяется по ним.
+        for ir_type in 'global i8 ' 'global i16 ' 'global i32 ' 'global i64 ' 'global float ' 'global double '; do
             if ! grep -Fq "$ir_type" "$work/module.ll"; then
                 echo "FAIL: expected LLVM storage width missing: $ir_type" >&2
                 exit 1
@@ -814,6 +815,55 @@ expect_runtime_error "static-array-read-oob" "$RUNTIME_DIR/static_read.svx" "arr
 # TODO(шаг 3): у записи в элемент массива нет позиции в AST, сейчас печатается "line 1, column 1".
 expect_runtime_error "static-array-write-oob" "$RUNTIME_DIR/static_write.svx" "array index out of bounds"
 expect_runtime_error "dynamic-array-read-oob" "$RUNTIME_DIR/dynamic_read.svx" "array index out of bounds at line 4, column 7"
+
+# Программа из строки: компилируется, запускается, вывод совпадает с ожидаемым.
+expect_program_output() {
+    local name=$1
+    local source=$2
+    local expected=$3
+    local work="$TMP_DIR/program-$name"
+    local status=0
+    mkdir -p "$work"
+    printf '%s\n' "$source" > "$work/input.svx"
+    if (ulimit -c 0; timeout --signal=TERM 10s ./sc "$work/input.svx" >"$work/module.ll" 2>"$work/compiler.err"); then
+        :
+    else
+        status=$?
+        echo "FAIL: program '$name' did not compile (status $status)" >&2
+        head -c 2000 "$work/compiler.err" >&2
+        exit 1
+    fi
+    llvm-as "$work/module.ll" -o "$work/module.bc"
+    llc "$work/module.bc" -o "$work/program.s"
+    clang -no-pie "$work/program.s" -o "$work/program" -lm
+    if ! (ulimit -c 0; timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"); then
+        echo "FAIL: program '$name' failed at runtime" >&2
+        cat "$work/runtime.err" >&2
+        exit 1
+    fi
+    if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
+        echo "FAIL: program '$name' output mismatch" >&2
+        echo "expected:" >&2; printf '%s\n' "$expected" >&2
+        echo "actual:" >&2; cat "$work/output.txt" >&2
+        exit 1
+    fi
+    echo "PASS: program '$name'"
+}
+
+# Шаг 2: глобальные переменные, структуры и имена в функциях.
+expect_program_output "global-read-in-fn" $'let g = 5;\nfn int h() { return g; }\nprint(h());' '5'
+expect_program_output "global-write-in-fn" $'let counter: int = 0;\nfn void inc() { counter = counter + 1; }\ninc();\ninc();\nprint(counter);' '2'
+expect_program_output "global-in-recursion" $'let depth: int = 0;\nfn int fact(int n) { depth = depth + 1; if (n <= 1) { return 1; } return n * fact(n - 1); }\nprint(fact(5));\nprint(depth);' $'120\n5'
+expect_program_output "global-declared-after-fn" $'fn void show() { print(total); }\nlet total: int = 7;\nshow();' '7'
+expect_program_output "global-array-in-fn" $'svi rox[] lor arr = [1, 2, 3];\nfn int second() { return arr[1]; }\nprint(second());' '2'
+expect_program_output "global-const-and-param-shadow" $'const limit: int = 10;\nlet x: int = 1;\nfn int f(int x) { return x + limit; }\nprint(f(5));\nprint(x);' $'15\n1'
+expect_program_output "block-local-vs-global" $'if (1) { let inner: int = 3; print(inner); }\nlet inner: int = 9;\nfn int f() { return inner; }\nprint(f());' $'3\n9'
+expect_program_output "globals-named-like-runtime" $'let printf = 3;\nlet puts = 4;\nfn int f() { return printf + puts; }\nprint(f());' '7'
+expect_program_output "struct-in-fn" $'tip P { int x = 4; }\nfn int f() { svi tip P lor p; return p.x; }\nprint(f());' '4'
+expect_program_output "ar-and-rep-together" $'print(ar("abc"));\nprint(rep("hello world", "world", "SC"));' $'3\nhello SC'
+expect_program_output "user-fn-named-strlen" $'fn int strlen(int x) { return x + 1; }\nprint(strlen(4));\nprint(ar("abcd"));' $'5\n4'
+expect_compile_error "user-main-reserved" $'fn void main() { print(111); }\nprint(1);' "имя функции 'main' зарезервировано"
+expect_compile_error "return-dynamic-array" $'fn ptr make() { ptr v = nw rox[3]; return v; }\nprint(1);' "возврат динамического массива из функции пока не поддержан"
 
 expect_compile_error "array-negative-index" "svi rox[] lor values = [1, 2]; slov(values[-1]);" "индекс массива выходит за границы"
 expect_compile_error "array-upper-index" "svi rox[] lor values = [1, 2]; slov(values[2]);" "индекс массива выходит за границы"
