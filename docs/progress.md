@@ -150,3 +150,11 @@
 - Состояние разбора перенесено в локальный `Parser`; `ParseResult` возвращает дерево и собственный статус ошибок. Глобальная arena удалена, `left/right/extra` используют shared ownership. Копирование сохраняет время жизни поддерева, но не является независимым deep clone.
 - `tests/parser-state.cpp` проверяет переживание исходного дерева/повторного разбора, восстановление после ошибочного разбора, независимый статус и пустой input. Тест включён в `test.sh`, включая ASan/UBSan CI-конфигурацию.
 - LLVM 18.1.8: warning-clean build, `./test.sh`, отдельный `./test-conformance.sh` (3/3) и полный `./test.sh` под ASan/UBSan + LeakSanitizer прошли. Каждый полный прогон включает 93 программы под ASan и новую API regression. Синтаксис SC не менялся; потоки и performance benchmarks не проверялись.
+
+
+## P0 — memory-safety sanitizer cases для pointers/arrays/files
+- Baseline `ad3096d`: compiler sanitizers и ASan 93 программ уже проходили, но отдельной проверки детектора UAF/double-free/raw OOB и leak-clean heap lifecycle cases в CI не было.
+- Добавлен `tests/memory-safety.sh`, вызываемый из `test.sh` после ASan probe: 4 корректных случая (3 с LeakSanitizer), 3 контролируемые runtime ошибки, 3 намеренно небезопасных self-tests детектора. Вывод, статус и точный класс sanitizer-ошибки проверяются раздельно; timeout не считается ожидаемой ошибкой.
+- При расширении покрытия выявлен старый verifier-баг `print(v.pop())`: PHI predecessors mismatch, exit 3. Вне задачи, не исправлен; воспроизведение добавлено в backlog. Statement `v.pop();` покрыт положительно.
+- Runtime metadata/ownership не вводились. Ограничения file/string leaks, закрытых handles, alias lifetime и UBSan для generated IR описаны в `docs/memory-safety-tests.md`.
+- LLVM 18.1.8: strict build, полный `test.sh` (прежние 93 программы под ASan + 10 новых cases), отдельный conformance (3/3), полный ASan/UBSan/LeakSanitizer compiler suite и `bash -n` прошли. Mutation check: временная копия suite без `sanitize_address` корректно падает на UAF detector (exit 1, unsafe program exit 0), подтверждая чувствительность теста.

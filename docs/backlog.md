@@ -4,17 +4,18 @@
 
 ## P0 — корректность/безопасность
 - [x] Состояние parser принадлежит одному разбору; `ParseResult` хранит дерево и статус ошибок. Копии `Node` удерживают expression subtrees через `shared_ptr` без глобальной arena; lifetime и повторные разборы покрыты API regression под ASan/UBSan.
-- [~] ASan/UBSan LeakSanitizer проверяет parser arena, heap result `rep` и static array bounds. Динамические pointer/file/memory safety cases требуют runtime metadata.
+- [~] ASan/UBSan/LeakSanitizer проверяет компилятор и копии AST; ASan сгенерированных программ дополнен 10 memory-safety cases (heap/del, рост и границы dynamic arrays, files/EOF, detector self-tests UAF/double-free/raw OOB). Для 3 корректных heap lifecycle cases включён LeakSanitizer. Контролируемая диагностика alias/UAF/double-free/closed-file и автоматическое освобождение строк требуют runtime metadata/ownership contract и остаются открытыми. См. `docs/memory-safety-tests.md`.
 - [x] Исправить compiler warnings под `-Wall -Wextra -Werror`; строгая сборка проходит локально и в CI.
 - [x] Проверять LLVM module verifier до печати IR; некорректный IR возвращает internal diagnostic и exit code 3.
 - [~] Прямые numeric literals во всех expression contexts проверяются до codegen. Остаются checked casts для вычисляемых значений и точное signed/unsigned conversion semantics.
-- [~] Bounds checks для статических массивов проверены; dynamic arrays ещё не имеют length metadata.
+- [~] Bounds checks статических массивов и dynamic arrays с дескриптором проверены, включая read/write под ASan. Raw ptr и aliases без length metadata пока не имеют безопасной проверки границ.
 
 ## P1 — зрелость compiler
 - [x] Short-circuit evaluation для `&&`/`||` реализована через LLVM CFG; side-effect regression покрывает пропуск правого операнда.
 - [~] Shared diagnostics показывают source excerpt/caret; parser собирает несколько syntax errors с синхронизацией по `;`/`}`; lexer recovery и richer diagnostic codes ещё отсутствуют.
 - [ ] Проверка definite assignment и return analysis для вложенных control-flow.
 - [ ] Корректность LLVM IR при ранних return, вложенных циклах, break/continue.
+  - [ ] Исправить PHI в выражении `pop()`: `ptr v = nw rox[0]; v.push(1); print(v.pop());` — compiler exit 3, `PHI node entries do not match predecessors`. Обнаружено на baseline `ad3096d`, не исправлялось в тестовом шаге; `v.pop();` как statement работает.
 - [ ] Namespace modules, visibility, stable symbol resolution.
 
 ## P2 — библиотека и инструментальная цепочка
