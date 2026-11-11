@@ -15,7 +15,7 @@
 - [~] Shared diagnostics показывают source excerpt/caret; parser собирает несколько syntax errors с синхронизацией по `;`/`}`; lexer recovery и richer diagnostic codes ещё отсутствуют.
 - [ ] Проверка definite assignment и return analysis для вложенных control-flow.
 - [ ] Корректность LLVM IR при ранних return, вложенных циклах, break/continue.
-  - [ ] Исправить PHI в выражении `pop()`: `ptr v = nw rox[0]; v.push(1); print(v.pop());` — compiler exit 3, `PHI node entries do not match predecessors`. Обнаружено на baseline `ad3096d`, не исправлялось в тестовом шаге; `v.pop();` как statement работает.
+  - [x] Исправлен PHI в выражении `pop()`: `ptr v = nw rox[0]; v.push(1); print(v.pop());` теперь печатает `1` вместо compiler exit 3. Проверены рост, пустой массив, LIFO/длина, несколько pop в выражении, if и floating-point zero; 4 regression cases входят в обычный и ASan-прогон.
 - [ ] Namespace modules, visibility, stable symbol resolution.
 
 ## P2 — библиотека и инструментальная цепочка
