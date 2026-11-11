@@ -891,6 +891,15 @@ printf '%s\n' 'file f = atk("no-such-dir/missing.txt", "r");' 'str t = pro(f);' 
 expect_runtime_error "open-missing-file" "$RUNTIME_DIR/missing_file.svx" "cannot open file 'no-such-dir/missing.txt' at line 1, column 10"
 expect_compile_error "push-string-into-int-array" $'ptr v = nw rox[3];\nv.push("hello");' "элемент массива ожидает тип"
 
+# Объявление функции без тела (fn T name(...);) и взаимная рекурсия.
+expect_program_output "forward-decl-call-before-def" $'fn int triple(int x);\nprint(triple(4));\nfn int triple(int x) { return x * 3; }' '12'
+expect_program_output "forward-decl-mutual-recursion" $'fn bool ev(int n);\nfn bool od(int n) { if (n == 0) { return false; } return ev(n - 1); }\nfn bool ev(int n) { if (n == 0) { return true; } return od(n - 1); }\nprint(ev(10));\nprint(od(7));' $'1\n1'
+expect_compile_error "forward-decl-without-definition" $'fn int g(int x);\nprint(1);' "функция 'g' объявлена, но не определена"
+expect_compile_error "forward-decl-param-mismatch" $'fn int g(int x);\nfn int g(f64 x) { return 1; }\nprint(g(1.0));' "сигнатура функции 'g' не совпадает"
+expect_compile_error "forward-decl-return-mismatch" $'fn f64 g(int x);\nfn int g(int x) { return 1; }\nprint(g(1));' "сигнатура функции 'g' не совпадает"
+expect_compile_error "duplicate-function-definition" $'fn int g(int x) { return 1; }\nfn int g(int x) { return 2; }\nprint(g(1));' "повторное определение функции 'g'"
+expect_compile_error "duplicate-forward-decl" $'fn int g(int x);\nfn int g(int x);\nfn int g(int x) { return 1; }\nprint(g(1));' "повторное объявление функции 'g'"
+
 expect_compile_error "array-negative-index" "svi rox[] lor values = [1, 2]; slov(values[-1]);" "индекс массива выходит за границы"
 expect_compile_error "array-upper-index" "svi rox[] lor values = [1, 2]; slov(values[2]);" "индекс массива выходит за границы"
 
