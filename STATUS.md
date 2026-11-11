@@ -10,7 +10,7 @@ SC находится на ранней стадии разработки. На�
 - Deprecated warnings пока не поддерживаются; legacy syntax остаётся рабочим и не помечен deprecated.
 
 - Generated ARM64 binaries, object files, LLVM/assembly output and empty build log removed from Git tracking; `.gitignore` excludes local build products. `test.svx` retained as an actual source regression fixture; stale `test` executable and unreferenced `test.txt` removed.
-- Parser AST nodes use a parse-lifetime owning arena instead of leaked raw `new` allocations; leak-detection sanitizer suite passes.
+- Parser state is per invocation; `ParseResult` owns its error status. Copied AST nodes retain expression subtrees through shared ownership, without a global arena; repeated parsing and subtree lifetime have an ASan/UBSan regression.
 - Legacy `rep` now replaces the first occurrence into a dynamically sized heap buffer; callers release it with `del`. Long input, match/no-match and sanitizer cases pass; OOM/size overflow currently abort.
 - `build.sh` accepts `CXXFLAGS`; `-Wall -Wextra -Werror` and ASan/UBSan+LeakSanitizer verification passed.
 - Semantic analysis rejects out-of-range integer/float literals and trailing parse garbage in every expression context before LLVM generation; implicit decimal/exponent float-literal-to-integer conversion is rejected, while explicit numeric casts remain supported.

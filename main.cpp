@@ -104,8 +104,9 @@ int main(int argc, char* argv[]) {
     appendModuleTokens(fs::absolute(argv[1]), allTokens, activeImports, loadedImports);
     allTokens.push_back({END, "", 1, 1, fs::absolute(argv[1]).string()});
 
-    Node node = parse(allTokens);
-    if (parseHadErrors()) return 1;
+    ParseResult parsed = parse(allTokens);
+    if (parsed.hadErrors) return 1;
+    Node& node = parsed.program;
     if (!checkSemantics(node, fs::absolute(argv[1]).string())) return 2;
 
     CodeGen codegen;

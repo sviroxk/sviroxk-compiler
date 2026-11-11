@@ -7,52 +7,52 @@
 #include <memory>
 #include <utility>
 
-static int pos = 0;
-static unsigned parseErrorCount = 0;
-static int lastErrorPos = 0;
-static bool recovering = false;
+namespace {
+class Parser {
+public:
+    explicit Parser(const std::vector<Token>& tokens) : gtokens(tokens) {}
+
+private:
+int pos = 0;
+unsigned parseErrorCount = 0;
+int lastErrorPos = 0;
+bool recovering = false;
 // Защита от зависаний: после kMaxSyntaxErrors сообщений или kMaxFailCalls
 // попыток сообщить об ошибке разбор останавливается (позиция переносится в END).
-static const unsigned kMaxSyntaxErrors = 20;
-static const unsigned kMaxFailCalls = 10000;
-static unsigned failCalls = 0;
-static bool parseStopped = false;
-static std::vector<Token> gtokens;
-static std::shared_ptr<std::vector<std::unique_ptr<Node>>> nodeArena =
-    std::make_shared<std::vector<std::unique_ptr<Node>>>();
-
+static constexpr unsigned kMaxSyntaxErrors = 20;
+static constexpr unsigned kMaxFailCalls = 10000;
+unsigned failCalls = 0;
+bool parseStopped = false;
+std::vector<Token> gtokens;
 template <typename... Args>
-static Node* makeNode(Args&&... args) {
-    auto node = std::make_unique<Node>(std::forward<Args>(args)...);
-    Node* result = node.get();
-    nodeArena->push_back(std::move(node));
-    return result;
+std::shared_ptr<Node> makeNode(Args&&... args) {
+    return std::make_shared<Node>(std::forward<Args>(args)...);
 }
 
-static Token peek(size_t offset = 0) {
+Token peek(size_t offset = 0) {
     if (gtokens.empty()) return {END, "", 1, 1, {}};
     size_t index = static_cast<size_t>(pos) + offset;
     if (index >= gtokens.size()) return gtokens.back();
     return gtokens[index];
 }
 
-static Token consume() {
+Token consume() {
     Token token = peek();
     if (token.type != END && pos < static_cast<int>(gtokens.size())) ++pos;
     return token;
 }
 
-static std::string tokenDescription(const Token& token) {
+std::string tokenDescription(const Token& token) {
     if (token.type == END) return "конец файла";
     return "'" + token.value + "'";
 }
 
-static void stopParsing() {
+void stopParsing() {
     parseStopped = true;
     if (!gtokens.empty()) pos = static_cast<int>(gtokens.size()) - 1;
 }
 
-static void failAt(const Token& token, const std::string& message) {
+void failAt(const Token& token, const std::string& message) {
     if (parseStopped) return;
     if (++failCalls > kMaxFailCalls) {
         stopParsing();
@@ -80,7 +80,7 @@ static void failAt(const Token& token, const std::string& message) {
 // Пропускает токены до конца ошибочной конструкции с учётом вложенных `{ }`:
 // останавливается после `;` на нулевой глубине, после `}`, закрывающего
 // открытый здесь блок, или перед `}`, принадлежащей внешнему блоку.
-static void synchronizeStatement() {
+void synchronizeStatement() {
     int depth = 0;
     while (peek().type != END) {
         TokenType type = peek().type;
@@ -106,7 +106,7 @@ static void synchronizeStatement() {
 // Восстановление после ошибки в parse()/parseBlock(): вернуться к месту первой
 // ошибки (но не раньше начала конструкции), пропустить конструкцию и
 // гарантировать, что позиция сдвинулась хотя бы на один токен.
-static void recoverAfterError(int start, bool insideBlock) {
+void recoverAfterError(int start, bool insideBlock) {
     if (parseStopped) return;
     if (recovering) {
         pos = lastErrorPos < start ? start : lastErrorPos;
@@ -117,7 +117,7 @@ static void recoverAfterError(int start, bool insideBlock) {
         consume();
 }
 
-static Token expect(TokenType type, const std::string& expected) {
+Token expect(TokenType type, const std::string& expected) {
     Token token = peek();
     if (token.type != type) {
         failAt(token, "ожидалось " + expected + ", получено " + tokenDescription(token));
@@ -125,11 +125,11 @@ static Token expect(TokenType type, const std::string& expected) {
     return consume();
 }
 
-static Token expect(TokenType type) {
+Token expect(TokenType type) {
     return expect(type, "другой токен");
 }
 
-static bool isTypeName(const std::string& type) {
+bool isTypeName(const std::string& type) {
     return type == "rox" || type == "dor" || type == "cos" || type == "bue" ||
            type == "int" || type == "float" || type == "string" || type == "str" || type == "bool" ||
            type == "uint" || type == "short" || type == "ushort" || type == "long" ||
@@ -140,29 +140,29 @@ static bool isTypeName(const std::string& type) {
            type == "chr" || type == "rox64";
 }
 
-static bool isBuiltinToken(TokenType t) {
+bool isBuiltinToken(TokenType t) {
     return t == SQRT || t == ABS || t == POW || t == MAX || t == MIN ||
            t == FLO || t == CEL || t == RON || t == RAN || t == AR ||
            t == SER || t == REP || t == STR || t == DEL || t == PRO ||
            t == TIP || t == FILE_T || t == PTR;
 }
 
-static bool isNameToken(TokenType t) {
+bool isNameToken(TokenType t) {
     return t == IDENTIFIER || isBuiltinToken(t);
 }
 
-static bool isCallableBuiltinToken(TokenType t) {
+bool isCallableBuiltinToken(TokenType t) {
     return t == SQRT || t == ABS || t == POW || t == MAX || t == MIN ||
            t == FLO || t == CEL || t == RON || t == RAN || t == AR ||
            t == SER || t == REP || t == STR;
 }
 
-static bool isTypeToken(TokenType t) {
+bool isTypeToken(TokenType t) {
     return t == ROX || t == DOR || t == COS || t == BUE || t == PTR ||
            t == FILE_T || t == CHR || t == ROX64 || t == FIXED_TYPE || t == IDENTIFIER;
 }
 
-static std::string canonicalType(const std::string& type) {
+std::string canonicalType(const std::string& type) {
     if (type == "int" || type == "i32" || type == "rox") return "i32";
     if (type == "uint" || type == "u32") return "u32";
     if (type == "short" || type == "i16") return "i16";
@@ -177,14 +177,6 @@ static std::string canonicalType(const std::string& type) {
     if (type == "bool" || type == "bue") return "bool";
     return type;
 }
-
-Node parseExpr();
-Node parsePrimary();
-Node parseUnary();
-Node parseStructLiteral();
-Node parseMul();
-Node parseAdd();
-std::vector<Node> parseBlock();
 
 Node parseStructLiteral() {
     Node node; node.type = NODE_STRUCT_LITERAL;
@@ -423,7 +415,7 @@ Node parsePrimary() {
             }
         } else if (peek().type == LBRACKET) {
             consume();
-            Node* access = makeNode();
+            auto access = makeNode();
             access->type = NODE_ARRAY_ACCESS;
             access->line = t.line;
             access->column = t.column;
@@ -500,7 +492,6 @@ Node parseUnary() {
 }
 
 // * и / — умножение и деление (+ и - в parseAdd). Символы те же: + - * /
-static Node makeBinary(Node left, const Token& op, Node right);
 
 Node parsePower() {
     Node left = parseUnary();
@@ -516,7 +507,7 @@ Node parseMul() {
     while (peek().type == STAR || peek().type == SLASH ||
            peek().type == INTEGER_DIV || peek().type == PERCENT) {
         std::string op = consume().value;
-        Node* b = makeNode();
+        auto b = makeNode();
         b->type = NODE_BINOP;
         b->op = op;
         b->line = gtokens[static_cast<size_t>(pos - 1)].line;
@@ -532,7 +523,7 @@ Node parseAdd() {
     Node left = parseMul();
     while (peek().type == PLUS || peek().type == MINUS) {
         Token op = consume();
-        Node* b = makeNode();
+        auto b = makeNode();
         b->type = NODE_BINOP;
         b->line = op.line;
         b->column = op.column;
@@ -543,8 +534,6 @@ Node parseAdd() {
     }
     return left;
 }
-
-static Node makeBinary(Node left, const Token& op, Node right);
 
 Node parseShift() {
     Node left = parseAdd();
@@ -582,7 +571,7 @@ Node parseBitOr() {
     return left;
 }
 
-static Node makeBinary(Node left, const Token& op, Node right) {
+Node makeBinary(Node left, const Token& op, Node right) {
     Node result;
     result.type = NODE_BINOP;
     result.line = op.line;
@@ -638,8 +627,6 @@ Node parseCond() {
     return parseExpr();
 }
 
-Node parseOne();
-
 std::vector<Node> parseBlock() {
     std::vector<Node> nodes;
     while (!parseStopped && peek().type != RBRACE && peek().type != END) {
@@ -659,7 +646,7 @@ std::vector<Node> parseBlock() {
 
 // Parse the body of a declaration: `= <expr> ;` or `= [ <expr> , ... ] ;`.
 // Sets node.type to NODE_ARRAY_DECL for array form, NODE_VAR_DECL otherwise.
-static void parseDeclBody(Node& node, bool isArray) {
+void parseDeclBody(Node& node, bool isArray) {
     expect(EQUALS);
     if (isArray) {
         node.type = NODE_ARRAY_DECL;
@@ -1327,18 +1314,10 @@ Node parseOne() {
     return Node{};
 }
 
-Node parse(const std::vector<Token>& tokens) {
-    nodeArena = std::make_shared<std::vector<std::unique_ptr<Node>>>();
-    gtokens = tokens;
-    pos = 0;
-    parseErrorCount = 0;
-    lastErrorPos = 0;
-    recovering = false;
-    failCalls = 0;
-    parseStopped = false;
+public:
+ParseResult run() {
     Node program;
     program.type = NODE_PROGRAM;
-    program.arena = nodeArena;
     while (!parseStopped && peek().type != END) {
         if (peek().type == SEMICOLON) { consume(); continue; }
         if (peek().type == RBRACE) {
@@ -1366,9 +1345,11 @@ Node parse(const std::vector<Token>& tokens) {
             }
         }
     }
-    return program;
+    return {std::move(program), parseErrorCount != 0};
 }
+};
+} // namespace
 
-bool parseHadErrors() {
-    return parseErrorCount != 0;
+ParseResult parse(const std::vector<Token>& tokens) {
+    return Parser(tokens).run();
 }

@@ -71,18 +71,23 @@ struct Node {
     int line = 1;
     int column = 1;
     std::string file;
-    Node* left = nullptr;
-    Node* right = nullptr;
-    Node* extra = nullptr;
+    // A copy retains expression subtrees; mutations remain shared (not a deep clone).
+    std::shared_ptr<Node> left;
+    std::shared_ptr<Node> right;
+    std::shared_ptr<Node> extra;
     std::vector<Node> children;
     std::vector<Node> elseChildren;
     std::vector<Node> args;
     std::vector<std::string> params;
-    std::shared_ptr<std::vector<std::unique_ptr<Node>>> arena;
 };
 
-Node parse(const std::vector<Token>& tokens);
-bool parseHadErrors();
+// Error status belongs to this invocation, not to the last call to parse().
+struct ParseResult {
+    Node program;
+    bool hadErrors = false;
+};
+
+ParseResult parse(const std::vector<Token>& tokens);
 bool checkSemantics(const Node& program, const std::string& filename);
 
 #endif

@@ -982,11 +982,11 @@ private:
                 const Node* literal = nullptr;
                 const Node* other = nullptr;
                 if (isNumericLiteral(*node.left->left)) {
-                    literal = node.left->left;
-                    other = node.left->right;
+                    literal = node.left->left.get();
+                    other = node.left->right.get();
                 } else if (isNumericLiteral(*node.left->right)) {
-                    literal = node.left->right;
-                    other = node.left->left;
+                    literal = node.left->right.get();
+                    other = node.left->left.get();
                 }
                 if (literal && other->type == NODE_IDENTIFIER && other->value == node.varName) {
                     const bool floatingLiteral = literal->value.find_first_of(".eE") != std::string::npos;
