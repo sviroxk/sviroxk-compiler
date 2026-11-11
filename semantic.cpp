@@ -38,6 +38,7 @@ struct Function {
     sc::Type returnTy;
     int line;
     int column;
+    bool isForwardDecl = false;  // есть только объявление, определения пока нет
 };
 
 class Checker {
@@ -60,6 +61,7 @@ public:
                 fn.returnTy = sc::Type::from(node.varType);
                 fn.line = node.line;
                 fn.column = node.column;
+                fn.isForwardDecl = node.isForwardDecl;
                 for (const std::string& param : node.params) {
                     size_t separator = param.find(':');
                     fn.parameters.push_back(normalize(param.substr(0, separator)));
@@ -69,18 +71,23 @@ public:
                 else if (node.varName == "main")
                     error(node, "имя функции 'main' зарезервировано: точка входа программы — код верхнего уровня файла");
                 else if (functions_.count(node.varName))
-                    error(node, "повторное объявление функции '" + node.varName + "'");
-                else
+                    mergeDeclaration(functions_[node.varName], fn, node);
+                else {
                     functions_[node.varName] = fn;
+                    functionNodes_[node.varName] = &node;
+                }
             }
         }
+        for (const auto& [name, fn] : functions_)
+            if (fn.isForwardDecl)
+                error(*functionNodes_[name], "функция '" + name + "' объявлена, но не определена");
 
         for (const Node& node : program.children) {
             if (node.type != NODE_FUNC_DEF && node.type != NODE_STRUCT_DEF)
                 checkNode(node);
         }
         for (const Node& node : program.children) {
-            if (node.type == NODE_FUNC_DEF)
+            if (node.type == NODE_FUNC_DEF && !node.isForwardDecl)
                 checkFunction(node);
             else if (node.type == NODE_STRUCT_DEF)
                 checkStruct(node);
@@ -93,6 +100,38 @@ private:
     mutable unsigned errors_ = 0;
     std::vector<std::map<std::string, Symbol>> scopes_;
     std::map<std::string, Function> functions_;
+    std::map<std::string, const Node*> functionNodes_;
+
+    // Второе появление имени функции: объявление + определение (в любом порядке)
+    // допустимо, если сигнатуры совпадают; два определения или два объявления — ошибка.
+    void mergeDeclaration(Function& existing, const Function& fn, const Node& node) {
+        const std::string& name = node.varName;
+        if (existing.isForwardDecl == fn.isForwardDecl) {
+            error(node, fn.isForwardDecl
+                ? "повторное объявление функции '" + name + "'"
+                : "повторное определение функции '" + name + "'");
+            return;
+        }
+        if (existing.returnType != fn.returnType ||
+            existing.parameters != fn.parameters) {
+            error(node, "сигнатура функции '" + name +
+                  "' не совпадает с её объявлением в строке " +
+                  std::to_string(existing.line) + ": " + signature(existing) +
+                  " и " + signature(fn));
+            return;
+        }
+        if (existing.isForwardDecl) {
+            existing = fn;
+            functionNodes_[name] = &node;
+        }
+    }
+
+    static std::string signature(const Function& fn) {
+        std::string text = fn.returnType + "(";
+        for (size_t i = 0; i < fn.parameters.size(); ++i)
+            text += (i ? ", " : "") + fn.parameters[i];
+        return text + ")";
+    }
     std::map<std::string, const Node*> structs_;
     std::vector<std::string> returnTypes_;
     unsigned loopDepth_ = 0;

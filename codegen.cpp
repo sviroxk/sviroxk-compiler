@@ -1698,7 +1698,7 @@ void CodeGen::generate(const Node& program) {
     printfFunc = runtimeFunction("printf");
 
     for (const Node& node : program.children) {
-        if (node.type != NODE_FUNC_DEF) continue;
+        if (node.type != NODE_FUNC_DEF || node.isForwardDecl) continue;
         std::vector<llvm::Type*> parameterTypes;
         std::vector<std::string> parameterNames;
         for (const std::string& parameter : node.params) {
@@ -1738,7 +1738,7 @@ void CodeGen::generate(const Node& program) {
     builder.CreateRet(builder.getInt32(0));
 
     for (const Node& node : program.children)
-        if (node.type == NODE_FUNC_DEF) genNode(node);
+        if (node.type == NODE_FUNC_DEF && !node.isForwardDecl) genNode(node);
 }
 
 bool CodeGen::verify(std::string& diagnostic) const {

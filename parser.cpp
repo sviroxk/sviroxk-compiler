@@ -865,6 +865,12 @@ Node parseOne() {
             }
         }
         expect(RPAREN);
+        // Объявление без тела: fn int name(int x);
+        if (peek().type == SEMICOLON) {
+            consume();
+            node.isForwardDecl = true;
+            return node;
+        }
         expect(LBRACE);
         node.children = parseBlock();
         expect(RBRACE);

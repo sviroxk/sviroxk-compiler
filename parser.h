@@ -66,6 +66,7 @@ struct Node {
     std::string varName;
     bool isConst = false;
     bool inclusiveRange = false;
+    bool isForwardDecl = false;  // fn T name(...); без тела
     std::string op;
     int line = 1;
     int column = 1;
