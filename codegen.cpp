@@ -537,7 +537,8 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         llvm::Value* dataPtr = builder.CreateLoad(builder.getPtrTy(),
             builder.CreateStructGEP(descType, desc, 0));
         llvm::Value* isNonEmpty = builder.CreateICmpNE(length, builder.getInt64(0));
-        llvm::Function* function = builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* emptyFrom = builder.GetInsertBlock();
+        llvm::Function* function = emptyFrom->getParent();
         llvm::BasicBlock* hasElem = llvm::BasicBlock::Create(context, "pop_has", function);
         llvm::BasicBlock* done = llvm::BasicBlock::Create(context, "pop_done", function);
         builder.CreateCondBr(isNonEmpty, hasElem, done);
@@ -553,7 +554,8 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         builder.SetInsertPoint(done);
         llvm::PHINode* phi = builder.CreatePHI(elementType, 2);
         phi->addIncoming(value, hasElem);
-        phi->addIncoming(llvm::Constant::getNullValue(elementType), done);
+        // Empty arrays reach done directly from the block before the conditional.
+        phi->addIncoming(llvm::Constant::getNullValue(elementType), emptyFrom);
         return phi;
     }
     if (node.type == NODE_ARRAY_PUSH || node.type == NODE_ARRAY_RESIZE) {

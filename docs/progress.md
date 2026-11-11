@@ -158,3 +158,10 @@
 - При расширении покрытия выявлен старый verifier-баг `print(v.pop())`: PHI predecessors mismatch, exit 3. Вне задачи, не исправлен; воспроизведение добавлено в backlog. Statement `v.pop();` покрыт положительно.
 - Runtime metadata/ownership не вводились. Ограничения file/string leaks, закрытых handles, alias lifetime и UBSan для generated IR описаны в `docs/memory-safety-tests.md`.
 - LLVM 18.1.8: strict build, полный `test.sh` (прежние 93 программы под ASan + 10 новых cases), отдельный conformance (3/3), полный ASan/UBSan/LeakSanitizer compiler suite и `bash -n` прошли. Mutation check: временная копия suite без `sanitize_address` корректно падает на UAF detector (exit 1, unsafe program exit 0), подтверждая чувствительность теста.
+
+
+## Исправление pop() expression — PHI predecessors
+- Baseline `1ec686b`: сначала добавлены 4 regression cases в `test.sh`; первый (`nw rox[0]`, `push(1)`, `print(v.pop())`) провалился с compiler exit 3, `PHI node entries do not match predecessors`.
+- В `genExpr(NODE_ARRAY_POP)` сохранён блок перед условным переходом. Именно из него идёт empty-array ветка в `pop_done`; раньше PHI неверно ссылался на сам `pop_done`. Statement lowering и контракт empty pop = typed zero не менялись.
+- Regression coverage: pop после роста, повторный pop пустого массива, LIFO/длина и два pop в одном выражении, pop внутри if, f64 значение/нулевой результат. Все 4 cases проходят и попадают в ASan-прогон.
+- LLVM 18.1.8: strict build, полный `test.sh` (97 программ под ASan + 10 memory-safety cases), отдельный conformance 3/3, полный ASan/UBSan/LeakSanitizer suite прошли. Termux/ARM64 и allocator/OOM paths не проверялись.

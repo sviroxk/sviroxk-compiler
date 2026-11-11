@@ -901,6 +901,12 @@ printf '%s\n' 'file f = atk("no-such-dir/missing.txt", "r");' 'str t = pro(f);' 
 expect_runtime_error "open-missing-file" "$RUNTIME_DIR/missing_file.svx" "cannot open file 'no-such-dir/missing.txt' at line 1, column 10"
 expect_compile_error "push-string-into-int-array" $'ptr v = nw rox[3];\nv.push("hello");' "элемент массива ожидает тип"
 
+# pop() expression: both PHI incoming blocks must be actual CFG predecessors.
+expect_program_output "pop-expression-after-growth" 'ptr v = nw rox[0]; v.push(1); print(v.pop()); print(v.len()); del v;' $'1\n0'
+expect_program_output "pop-expression-empty" 'ptr v = nw rox[0]; print(v.pop()); print(v.pop()); print(v.len()); del v;' $'0\n0\n0'
+expect_program_output "pop-expression-lifo-and-control-flow" $'ptr v = nw rox[0];\nv.push(10); v.push(20); v.push(30); v.push(40); v.push(50);\nprint(v.pop()); print(v.len()); print(v.pop() + v.pop());\nif (v.len() == 2) { print(v.pop()); } else { print(-1); }\nprint(v.pop()); print(v.pop()); print(v.len()); del v;' $'50\n4\n70\n20\n10\n0\n0'
+expect_program_output "pop-expression-float-zero" 'ptr v = nw f64[0]; print(v.pop()); v.push(2.5); print(v.pop()); print(v.pop()); del v;' $'0.000000\n2.500000\n0.000000'
+
 # Объявление функции без тела (fn T name(...);) и взаимная рекурсия.
 expect_program_output "forward-decl-call-before-def" $'fn int triple(int x);\nprint(triple(4));\nfn int triple(int x) { return x * 3; }' '12'
 expect_program_output "forward-decl-mutual-recursion" $'fn bool ev(int n);\nfn bool od(int n) { if (n == 0) { return false; } return ev(n - 1); }\nfn bool ev(int n) { if (n == 0) { return true; } return od(n - 1); }\nprint(ev(10));\nprint(od(7));' $'1\n1'
