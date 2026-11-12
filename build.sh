@@ -32,12 +32,12 @@ LLVM_COMPILE_FLAGS+=("-std=c++20")
 
 for source in main lexer parser type semantic codegen; do
     "$CXX" -c "$source.cpp" "${LLVM_COMPILE_FLAGS[@]}" \
-        "${EXTRA_CXXFLAGS[@]}" -fexceptions -o "$BUILD_DIR/$source.o"
+        "${EXTRA_CXXFLAGS[@]}" -fexceptions -pthread -o "$BUILD_DIR/$source.o"
 done
 
 "$CXX" "$BUILD_DIR/main.o" "$BUILD_DIR/lexer.o" \
     "$BUILD_DIR/parser.o" "$BUILD_DIR/semantic.o" "$BUILD_DIR/codegen.o" \
     "$BUILD_DIR/type.o" \
-    $LLVM_LDFLAGS "${EXTRA_CXXFLAGS[@]}" -fexceptions -o sc
+    $LLVM_LDFLAGS "${EXTRA_CXXFLAGS[@]}" -fexceptions -pthread -o sc
 chmod +x sc run.sh build.sh test.sh test-conformance.sh 2>/dev/null || true
 echo "Сборка SC завершена"

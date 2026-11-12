@@ -25,6 +25,28 @@ static constexpr unsigned kMaxSyntaxErrors = 20;
 static constexpr unsigned kMaxFailCalls = 10000;
 unsigned failCalls = 0;
 bool parseStopped = false;
+// Лимит вложенности (блоки, скобки, унарные операторы), как -fbracket-depth=256
+// у clang: глубже — внятная синтаксическая ошибка, а не переполнение стека.
+static constexpr int kMaxNesting = 256;
+int nesting = -1;  // верхний уровень (само выражение или блок) не считается
+
+// RAII: один уровень вложенности; ok() == false — лимит превышен, ошибка уже выдана.
+class NestingGuard {
+public:
+    NestingGuard(Parser& parser, const Token& at) : parser_(parser) {
+        if (++parser_.nesting > kMaxNesting && !parser_.parseStopped) {
+            parser_.failAt(at, "слишком глубокая вложенность: больше " +
+                           std::to_string(kMaxNesting) + " уровней");
+            parser_.stopParsing();
+        }
+    }
+    ~NestingGuard() { --parser_.nesting; }
+    NestingGuard(const NestingGuard&) = delete;
+    NestingGuard& operator=(const NestingGuard&) = delete;
+    [[nodiscard]] bool ok() const { return parser_.nesting <= kMaxNesting; }
+private:
+    Parser& parser_;
+};
 std::vector<Token> gtokens;
 std::set<std::string> structNames;  // имена, объявленные через struct
 static void setPos(Node& node, const Token& token) {
@@ -500,6 +522,12 @@ Node parsePrimary() {
 }
 
 Node parseUnary() {
+    NestingGuard guard(*this, peek());
+    if (!guard.ok()) {
+        Node stub; stub.type = NODE_NUMBER; stub.value = "0";
+        setPos(stub, peek());
+        return stub;
+    }
     if (peek().type == BIT_AND) {
         Token address = consume();
         Token name = peek();
@@ -686,6 +714,8 @@ Node parseCond() {
 
 std::vector<Node> parseBlock() {
     std::vector<Node> nodes;
+    NestingGuard guard(*this, peek());
+    if (!guard.ok()) return nodes;
     while (!parseStopped && peek().type != RBRACE && peek().type != END) {
         if (peek().type == SEMICOLON) { consume(); continue; }
         const int start = pos;

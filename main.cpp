@@ -5,6 +5,7 @@ static_assert(__cplusplus >= 202002L, "SC собирается как C++20: bui
 #include <filesystem>
 #include <set>
 #include <cstdlib>
+#include <pthread.h>
 #include "lexer.h"
 #include "diagnostics.h"
 #include "parser.h"
@@ -135,7 +136,7 @@ static int run(int argc, char* argv[]) {
 
 // spec §1: код 3 — внутренняя ошибка компилятора. Любое исключение — это она,
 // а не аварийное завершение (abort, код 134).
-int main(int argc, char* argv[]) {
+static int guardedRun(int argc, char* argv[]) {
     try {
         return run(argc, argv);
     } catch (const std::exception& error) {
@@ -144,4 +145,35 @@ int main(int argc, char* argv[]) {
         std::cerr << "Ошибка: внутренняя ошибка компилятора: неизвестное исключение\n";
     }
     return 3;
+}
+
+// Разбор, семантика и codegen рекурсивны: 256 уровней вложенности (лимит парсера)
+// и длинные цепочки `a + b + …` не помещаются в стандартные 8 МБ стека. Поэтому
+// компиляция идёт в потоке с большим стеком (память берётся по мере надобности),
+// как делает clang (runWithSufficientStackSpace).
+constexpr size_t kCompilerStackBytes = size_t{512} << 20;
+
+struct CompileJob {
+    int argc;
+    char** argv;
+    int status = 3;
+};
+
+static void* compileOnBigStack(void* raw) {
+    auto* job = static_cast<CompileJob*>(raw);
+    job->status = guardedRun(job->argc, job->argv);
+    return nullptr;
+}
+
+int main(int argc, char* argv[]) {
+    CompileJob job{argc, argv};
+    pthread_attr_t attributes;
+    pthread_t thread;
+    if (pthread_attr_init(&attributes) == 0) {
+        const bool started = pthread_attr_setstacksize(&attributes, kCompilerStackBytes) == 0 &&
+                             pthread_create(&thread, &attributes, compileOnBigStack, &job) == 0;
+        pthread_attr_destroy(&attributes);
+        if (started && pthread_join(thread, nullptr) == 0) return job.status;
+    }
+    return guardedRun(argc, argv);  // поток не создан: обычный стек
 }
