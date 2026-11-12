@@ -892,6 +892,9 @@ expect_program_output "block-local-vs-global" $'if (1) { let inner: int = 3; pri
 expect_program_output "globals-named-like-runtime" $'let printf = 3;\nlet puts = 4;\nfn int f() { return printf + puts; }\nprint(f());' '7'
 expect_program_output "struct-in-fn" $'struct P { int x = 4; }\nfn int f() { P p; return p.x; }\nprint(f());' '4'
 expect_program_output "ar-and-rep-together" $'print(len("abc"));\nprint(replace("hello world", "world", "SC"));' $'3\nhello SC'
+# Аудит, класс 2: ветви тернарного оператора разной ширины давали неверный IR (код 3).
+expect_program_output "ternary-mixed-int-width" $'short s = 1;\nprint(true ? 5 : s);\nprint(false ? 5 : s);\ni64 big = 5000000000;\nint k = 2;\nprint(k > 1 ? big : k);' $'5\n1\n5000000000'
+expect_program_output "ternary-f32-f64" $'f32 s = 1.5;\nprint(true ? 5.0 : s);\nprint(false ? 5.0 : s);' $'5.000000\n1.500000'
 expect_program_output "user-fn-named-strlen" $'fn int strlen(int x) { return x + 1; }\nprint(strlen(4));\nprint(len("abcd"));' $'5\n4'
 expect_compile_error "user-main-reserved" $'fn void main() { print(111); }\nprint(1);' "имя функции 'main' зарезервировано"
 expect_compile_error "return-dynamic-array" $'fn ptr make() { ptr v = new int[3]; return v; }\nprint(1);' "возврат динамического массива из функции пока не поддержан"

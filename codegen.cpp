@@ -789,7 +789,11 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
                 resultType = resultType->getIntegerBitWidth() >= falseValue->getType()->getIntegerBitWidth()
                     ? resultType : falseValue->getType();
             }
+            // Приведение — в конце своей ветви, до перехода в merge: PHI ждёт
+            // значения, вычисленные в предшествующих блоках.
+            builder.SetInsertPoint(trueEnd->getTerminator());
             trueValue = castTo(trueValue, resultType, isUnsignedExpr(*node.right));
+            builder.SetInsertPoint(falseEnd->getTerminator());
             falseValue = castTo(falseValue, resultType, isUnsignedExpr(*node.extra));
         }
         builder.SetInsertPoint(mergeBlock);
