@@ -704,6 +704,9 @@ Node parseExpr() {
     }
     if (peek().type == QUESTION) {
         Token question = consume();
+        // Цепочка `a ? b : c ? d : …` вкладывается вправо: каждый `?` — уровень вложенности.
+        NestingGuard guard(*this, question);
+        if (!guard.ok()) return left;
         Node ternary;
         ternary.type = NODE_TERNARY;
         ternary.line = question.line;
