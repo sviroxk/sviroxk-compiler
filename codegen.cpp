@@ -789,6 +789,9 @@ llvm::Value* CodeGen::genOtherExpr(const Node& node) {
     }
     if (node.type == NODE_ARRAY_LEN || node.type == NODE_ARRAY_CAP) {
         auto found = dynArrays.find(node.varName);
+        // Статический массив: длина и ёмкость — его фиксированная длина.
+        if (found == dynArrays.end() && arrayLengths.contains(node.varName))
+            return builder.getInt64(arrayLengths[node.varName]);
         if (found == dynArrays.end()) {
             codegenFailure(node, "неизвестный динамический массив '" + node.varName + "'");
         }

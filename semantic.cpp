@@ -597,8 +597,8 @@ private:
                 for (const Node& arg : node.args) expression(arg);
                 return "void";
             }
-            if (!array->isDynArray && !array->ty.isArray()) {
-                error(node, "'push' доступен только для массивов");
+            if (!array->isDynArray) {
+                error(node, "push поддерживается только для динамических массивов");
                 return "void";
             }
             const std::string element = array->isDynArray
@@ -616,8 +616,8 @@ private:
                 error(node, "неизвестный массив '" + node.varName + "'");
                 return "void";
             }
-            if (!array->isDynArray && !array->ty.isArray()) {
-                error(node, "'pop' доступен только для массивов");
+            if (!array->isDynArray) {  // у статического массива длина фиксирована
+                error(node, "pop поддерживается только для динамических массивов");
                 return "void";
             }
             return array->isDynArray ? array->dynArrayElementType : array->ty.element->toString();
