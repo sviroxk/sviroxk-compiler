@@ -886,6 +886,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             if (node.op == "-") return builder.CreateFSub(L, R);
             if (node.op == "*") return builder.CreateFMul(L, R);
             if (node.op == "/") return builder.CreateFDiv(L, R);
+            if (node.op == "%") return builder.CreateFRem(L, R);  // как fmod в C: знак делимого
             if (node.op == ">") return builder.CreateFCmpOGT(L, R);
             if (node.op == "<") return builder.CreateFCmpOLT(L, R);
             if (node.op == ">=") return builder.CreateFCmpOGE(L, R);
