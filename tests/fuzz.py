@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Ограниченный фаззер компилятора SC (из аудита 2026-11-12, sc-audit-crashes/tools/fuzz.py).
+"""Только тестовый инструмент: не часть компилятора и не часть языка SC (решение владельца 12.11).
+
+Ограниченный фаззер компилятора SC (из аудита 2026-11-12, sc-audit-crashes/tools/fuzz.py).
 
 Usage: tests/fuzz.py SC_BIN N SEED OUTDIR
 
