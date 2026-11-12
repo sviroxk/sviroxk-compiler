@@ -36,7 +36,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 # Parser API regression: run in the same process, including the sanitizer CI build.
 read -r -a PARSER_TEST_FLAGS <<< "${CXXFLAGS:-}"
-"${CXX:-clang++}" -std=c++17 "${PARSER_TEST_FLAGS[@]}" -I. \
+"${CXX:-clang++}" -std=c++20 "${PARSER_TEST_FLAGS[@]}" -I. \
     tests/parser-state.cpp lexer.cpp parser.cpp -o "$TMP_DIR/parser-state"
 timeout --signal=TERM 10s "$TMP_DIR/parser-state" 2>"$TMP_DIR/parser-state.err"
 if ! grep -Fq 'error[syntax]' "$TMP_DIR/parser-state.err"; then
@@ -45,7 +45,7 @@ if ! grep -Fq 'error[syntax]' "$TMP_DIR/parser-state.err"; then
 fi
 
 # Every AST node has a source position: examples, fixtures, stdlib and all spec programs.
-"${CXX:-clang++}" -std=c++17 "${PARSER_TEST_FLAGS[@]}" -I. \
+"${CXX:-clang++}" -std=c++20 "${PARSER_TEST_FLAGS[@]}" -I. \
     tests/ast-positions.cpp lexer.cpp parser.cpp -o "$TMP_DIR/ast-positions"
 mkdir -p "$TMP_DIR/spec-programs"
 awk -v dir="$TMP_DIR/spec-programs" '
