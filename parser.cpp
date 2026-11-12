@@ -169,8 +169,36 @@ Token expect(TokenType type, const std::string& expected) {
     return consume();
 }
 
+// Название ожидаемого токена для сообщения «ожидалась ';', получено …».
+static std::string expectedTokenName(TokenType type) {
+    switch (type) {
+    case SEMICOLON: return "';'";
+    case LPAREN: return "'('";
+    case RPAREN: return "')'";
+    case LBRACE: return "'{'";
+    case RBRACE: return "'}'";
+    case LBRACKET: return "'['";
+    case RBRACKET: return "']'";
+    case COMMA: return "','";
+    case EQUALS: return "'='";
+    case COLON: return "':'";
+    case IN_T: return "'in'";
+    case STRING: return "строка в кавычках";
+    case IDENTIFIER: return "имя";
+    default: return "другой токен";
+    }
+}
+
 Token expect(TokenType type) {
-    return expect(type, "другой токен");
+    const std::string name = expectedTokenName(type);
+    Token token = peek();
+    if (token.type != type) {
+        // «ожидалась ';'», «ожидалось имя», «ожидался другой токен»
+        const char* verb = (type == STRING || name == "другой токен") ? "ожидался " :
+                           type == IDENTIFIER ? "ожидалось " : "ожидалась ";
+        failAt(token, verb + name + ", получено " + tokenDescription(token));
+    }
+    return consume();
 }
 
 bool isTypeName(const std::string& type) {

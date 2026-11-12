@@ -995,6 +995,9 @@ expect_compile_error "digit-separator-double" 'print(1__000);' "error"
 expect_compile_error "array-literal-no-commas" $'int[] a = [1 2 3];\nprint(a[2]);' "ожидалась ',' между элементами массива"
 expect_compile_error "array-literal-no-commas-let" $'let a: int[] = [1, 2 3];' "ожидалась ',' между элементами массива"
 expect_program_output "array-literal-trailing-comma" $'int[] a = [1, 2, 3,];\nprint(a[2]);' '3'
+expect_compile_error "expect-names-token" $'int x = 0\nprint(x);' "2:1: error[syntax]: ожидалась ';', получено 'print'"
+expect_compile_error "expect-eof-position" $'int x = 0;\nwhile (x < 3) x += 1;' ":3:1: error[syntax]: ожидалась '}', получено конец файла"
+expect_compile_error "field-default-message-russian" $'struct P { int a = 2.5; }\nP p;' "а ожидается 'int/i32'"
 expect_program_output "defer-return-in-loop" $'fn int run() { defer print(9); for i in 0..3 { defer print(i); if (i == 1) { return 7; } } return 0; }\nprint(run());' $'0\n1\n9\n7'
 expect_program_output "defer-loop-forms" $'int n = 0; while (n < 2) { n = n + 1; defer print(n); }\nrepeat (2) { defer print(3); }\nwhile (n < 3) { n = n + 1; defer print(n); }\nfor i in 4..6 { defer print(i); }\nint[] values = [6, 7]; for item in values { defer print(item); }' $'1\n2\n3\n3\n3\n4\n5\n6\n7'
 expect_program_output "defer-break-continue" $'defer print(9); for i in 0..4 { defer print(i); if (i == 0) { continue; } if (i == 2) { break; } print(8); }' $'0\n8\n1\n2\n9'

@@ -66,7 +66,12 @@ static void appendModuleTokens(const fs::path& sourcePath,
 
     for (size_t i = 0; i < tokens.size();) {
         if (tokens[i].type != IMP) {
-            if (tokens[i].type == END) break;
+            if (tokens[i].type == END) {
+                // Конец корневого файла — с его настоящей позицией (раньше ошибка «получено
+                // конец файла» указывала на 1:1).
+                if (!importedAt) output.push_back(tokens[i]);
+                break;
+            }
             output.push_back(tokens[i++]);
             continue;
         }
@@ -110,7 +115,6 @@ static int run(int argc, char* argv[]) {
     std::set<fs::path> activeImports;
     std::set<fs::path> loadedImports;
     appendModuleTokens(fs::absolute(argv[1]), allTokens, activeImports, loadedImports);
-    allTokens.push_back({END, "", 1, 1, fs::absolute(argv[1]).string()});
 
     ParseResult parsed = parse(allTokens);
     if (parsed.hadErrors) return 1;
