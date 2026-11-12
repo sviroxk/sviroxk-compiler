@@ -320,6 +320,47 @@ void CodeGen::growDynArray(const std::string& varName, llvm::Value* newCapacity)
     builder.CreateStore(newCapacity, builder.CreateStructGEP(descType, desc, 2));
 }
 
+bool CodeGen::fieldIsUnsigned(const std::string& variable, const std::string& path) const {
+    auto structName = structTypesByVariable.find(variable);
+    if (structName == structTypesByVariable.end()) return false;
+    std::string current = structName->second;
+    std::string type;
+    size_t pos = 0;
+    while (true) {
+        const size_t dot = path.find('.', pos);
+        const std::string name = path.substr(pos, dot == std::string::npos ? std::string::npos : dot - pos);
+        auto def = structDefs.find(current);
+        if (def == structDefs.end()) return false;
+        type.clear();
+        for (const auto& field : def->second) if (field.name == name) type = field.type;
+        if (type.empty()) return false;
+        if (dot == std::string::npos) break;
+        current = type;
+        pos = dot + 1;
+    }
+    const sc::Type t = sc::Type::from(type);
+    return t.isUnsigned() || t.isChar();
+}
+
+void CodeGen::checkNarrowStore(llvm::Value* value, const Node& valueNode, llvm::Type* target,
+                               bool targetUnsigned, const Node& location) {
+    if (!value->getType()->isIntegerTy() || !target->isIntegerTy()) return;
+    const unsigned sourceWidth = value->getType()->getIntegerBitWidth();
+    const unsigned targetWidth = target->getIntegerBitWidth();
+    if (sourceWidth <= targetWidth || targetWidth == 1) return;
+    const bool sourceUnsigned = isUnsignedExpr(valueNode);
+    llvm::Type* wideType = builder.getIntNTy(sourceWidth + 1);
+    llvm::Value* v = sourceUnsigned ? builder.CreateZExt(value, wideType) : builder.CreateSExt(value, wideType);
+    const unsigned wide = sourceWidth + 1;
+    llvm::APInt low = targetUnsigned ? llvm::APInt(wide, 0)
+        : llvm::APInt::getSignedMinValue(targetWidth).sext(wide);
+    llvm::APInt high = targetUnsigned ? llvm::APInt::getMaxValue(targetWidth).zext(wide)
+        : llvm::APInt::getSignedMaxValue(targetWidth).sext(wide);
+    llvm::Value* inRange = builder.CreateAnd(builder.CreateICmpSGE(v, builder.getInt(low)),
+                                             builder.CreateICmpSLE(v, builder.getInt(high)));
+    emitRuntimeFailureIf(builder.CreateNot(inRange), "integer overflow", location);
+}
+
 llvm::Value* CodeGen::nullChecked(llvm::Value* pointer, const Node& location) {
     emitRuntimeFailureIf(builder.CreateICmpEQ(pointer,
         llvm::ConstantPointerNull::get(builder.getPtrTy())), "null pointer dereference", location);
@@ -331,6 +372,11 @@ bool CodeGen::isUnsignedExpr(const Node& node) const {
     if (node.type == NODE_IDENTIFIER) {
         auto isChar = charVars.find(node.value);
         if (isChar != charVars.end() && isChar->second) return true;
+    }
+    if (node.type == NODE_STRUCT_FIELD) return fieldIsUnsigned(node.varName, node.op);
+    if (node.type == NODE_ARRAY_ACCESS) {
+        auto found = unsignedElements.find(node.varName);
+        return found != unsignedElements.end() && found->second;
     }
     if (node.type == NODE_FUNC_CALL) {
         auto found = funcReturnTypes.find(node.varName);
@@ -529,8 +575,8 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         }
         if (vars.count(node.varName) &&
             storageType(vars[node.varName])->isPointerTy()) {
-            llvm::Value* ptr = builder.CreateLoad(
-                builder.getPtrTy(), vars[node.varName]);
+            llvm::Value* ptr = nullChecked(builder.CreateLoad(
+                builder.getPtrTy(), vars[node.varName]), node);
             llvm::Value* idx = genExpr(*node.left);
             llvm::Value* gep = builder.CreateGEP(
                 builder.getInt32Ty(), ptr, {idx});
@@ -1208,6 +1254,7 @@ void CodeGen::genNode(const Node& node) {
                 builder.CreateStructGEP(descType, desc, 2)); // capacity = size
             dynArrays[node.varName] = desc;
             dynArrayElementTypes[node.varName] = elementType;
+            unsignedElements[node.varName] = sc::Type::from(alloc.varType).isUnsigned();
             vars[node.varName] = desc;
             constVars[node.varName] = node.isConst;
             return;
@@ -1250,6 +1297,7 @@ void CodeGen::genNode(const Node& node) {
         if (alloca && !constVars[node.varName]) {
             llvm::Value* val = genExpr(*node.left);
             llvm::Type* ty = storageType(alloca);
+            checkNarrowStore(val, *node.left, ty, unsignedVars[node.varName], node);
             val = castTo(val, ty, isUnsignedExpr(*node.left));
             builder.CreateStore(val, alloca);
         }
@@ -1263,8 +1311,10 @@ void CodeGen::genNode(const Node& node) {
         structFieldAddressOnly_ = true;
         llvm::Value* address = genExpr(field);
         structFieldAddressOnly_ = false;
+        llvm::Type* fieldType = lastFieldType_;
         llvm::Value* value = genExpr(*node.left);
-        builder.CreateStore(castTo(value, lastFieldType_, isUnsignedExpr(*node.left)), address);
+        checkNarrowStore(value, *node.left, fieldType, fieldIsUnsigned(node.varName, node.op), node);
+        builder.CreateStore(castTo(value, fieldType, isUnsignedExpr(*node.left)), address);
     }
     else if (node.type == NODE_STRUCT_FIELD_ASSIGN) {
         auto object = vars.find(node.varName);
@@ -1278,6 +1328,7 @@ void CodeGen::genNode(const Node& node) {
         const unsigned index = fieldIndex->second;
         llvm::Type* fieldType = aggregateType->getStructElementType(index);
         llvm::Value* value = genExpr(*node.left);
+        checkNarrowStore(value, *node.left, fieldType, fieldIsUnsigned(node.varName, node.op), node);
         value = castTo(value, fieldType, isUnsignedExpr(*node.left));
         llvm::Value* address = builder.CreateStructGEP(aggregateType, object->second, index);
         builder.CreateStore(value, address);
@@ -1300,6 +1351,7 @@ void CodeGen::genNode(const Node& node) {
                 if (node.op == "compound") precomputed_[node.right->left->left.get()] = idx;
                 llvm::Value* value = genExpr(*node.right);
                 precomputed_.clear();
+                checkNarrowStore(value, *node.right, elementType, unsignedElements[node.varName], node);
                 builder.CreateStore(castTo(value, elementType, isUnsignedExpr(*node.right)), gep);
             }
             // raw dynamic array (ptr variable)
@@ -1327,6 +1379,7 @@ void CodeGen::genNode(const Node& node) {
                 if (node.op == "compound") precomputed_[node.right->left->left.get()] = idx;
                 llvm::Value* value = genExpr(*node.right);
                 precomputed_.clear();
+                checkNarrowStore(value, *node.right, elementType, unsignedElements[node.varName], node);
                 builder.CreateStore(castTo(value, elementType, isUnsignedExpr(*node.right)), gep);
             }
         }
@@ -1371,6 +1424,7 @@ void CodeGen::genNode(const Node& node) {
         arrays[node.varName] = arr;
         arrayLengths[node.varName] = n;
         arrayElementTypes[node.varName] = elementType;
+        unsignedElements[node.varName] = sc::Type::from(node.varType).isUnsigned();
         for (unsigned i = 0; i < n; i++) {
             llvm::Value* gep = builder.CreateInBoundsGEP(
                 at, arr, {builder.getInt32(0), builder.getInt32(i)});

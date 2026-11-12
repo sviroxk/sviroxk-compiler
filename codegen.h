@@ -69,7 +69,12 @@ public:
     bool globalStorage = false;
     // Готовые значения узлов (индекс в a[i] += x вычисляется один раз).
     std::map<const Node*, llvm::Value*> precomputed_;
-    bool structFieldAddressOnly_ = false;  // NODE_STRUCT_FIELD: вернуть адрес поля, не загружать
+    bool structFieldAddressOnly_ = false;
+    std::map<std::string, bool> unsignedElements;  // массив -> беззнаковые элементы
+    bool fieldIsUnsigned(const std::string& variable, const std::string& path) const;
+    // Запись в более узкий целый тип (x += 1 для u8): значение вне диапазона — ошибка выполнения.
+    void checkNarrowStore(llvm::Value* value, const Node& valueNode, llvm::Type* target,
+                          bool targetUnsigned, const Node& location);  // NODE_STRUCT_FIELD: вернуть адрес поля, не загружать
     llvm::Type* lastFieldType_ = nullptr;
     llvm::Value* nullChecked(llvm::Value* pointer, const Node& location);
 

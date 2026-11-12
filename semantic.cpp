@@ -412,7 +412,8 @@ private:
                 else if (position < positional.size()) value = positional[position++];
                 if (value) {
                     std::string actual = expression(*value->left);
-                    if (actual != "<error>" && !compatible(field.varType, actual))
+                    if (actual != "<error>" && !compatible(field.varType, actual) &&
+                        !constantFits(*value->left, field.varType))
                         error(*value, "поле '" + field.varName + "' ожидает тип '" +
                               typeName(normalize(field.varType)) + "', получен '" + typeName(actual) + "'");
                     if (value->left->type == NODE_NUMBER &&
@@ -769,6 +770,27 @@ private:
         const __int128 high = target.isUnsigned() ? (static_cast<__int128>(1) << w) - 1
                                                   : (static_cast<__int128>(1) << (w - 1)) - 1;
         return *v >= low && *v <= high;
+    }
+
+    static bool sameTarget(const Node& a, const Node& b) {
+        if (a.type != b.type) return false;
+        if (a.type == NODE_IDENTIFIER) return a.value == b.value;
+        if (a.type == NODE_STRUCT_FIELD) return a.varName == b.varName && a.op == b.op;
+        if (a.type == NODE_ARRAY_ACCESS) return a.varName == b.varName;
+        return false;
+    }
+
+    // t = t op v / t op= v для узкого целого t: разрешено, codegen проверяет диапазон результата.
+    bool narrowCompound(const Node& target, const Node& value,
+                        const std::string& targetType, const std::string& actual) const {
+        if (!isInteger(normalize(targetType)) || !isInteger(actual)) return false;
+        if (value.type != NODE_BINOP || !value.left) return false;
+        if (value.op != "+" && value.op != "-" && value.op != "*" && value.op != "/" &&
+            value.op != "%" && value.op != "//") return false;
+        if (!sameTarget(*value.left, target)) return false;
+        // Константа, не влезающая в тип цели (u8 x; x += 300), — ошибка компиляции.
+        if (value.right && constantInteger(*value.right) && !constantFits(*value.right, targetType)) return false;
+        return true;
     }
 
     std::string castHint(const std::string& expected, const std::string& actual) const {
@@ -1181,7 +1203,8 @@ private:
                 else if (position < positional.size()) value = positional[position++];
                 if (value) {
                     std::string actual = expression(*value->left);
-                    if (actual != "<error>" && !compatible(field.varType, actual))
+                    if (actual != "<error>" && !compatible(field.varType, actual) &&
+                        !constantFits(*value->left, field.varType))
                         error(*value, "поле '" + field.varName + "' ожидает тип '" +
                               typeName(normalize(field.varType)) + "', получен '" + typeName(actual) + "'");
                     if (value->left->type == NODE_NUMBER &&
@@ -1257,8 +1280,12 @@ private:
                         : isInteger(expected) && literalFits(expected, literal->value);
                 }
             }
+            Node self;
+            self.type = NODE_IDENTIFIER;
+            self.value = node.varName;
             if (actual != "<error>" && !compatible(expected, actual) && !literalArithmeticFits &&
-                !(node.left && constantFits(*node.left, expected)))
+                !(node.left && constantFits(*node.left, expected)) &&
+                !(node.left && narrowCompound(self, *node.left, expected, actual)))
                 error(node, "нельзя присвоить '" + typeName(actual) + "' значению типа '" + typeName(expected) + "'" +
                       castHint(expected, actual));
             else
@@ -1281,7 +1308,8 @@ private:
                 const std::string fieldType = expression(field);
                 if (fieldType == "<error>") { expression(*node.left); break; }
                 const std::string actual = expression(*node.left);
-                if (actual != "<error>" && !compatible(fieldType, actual) && !constantFits(*node.left, fieldType))
+                if (actual != "<error>" && !compatible(fieldType, actual) && !constantFits(*node.left, fieldType) &&
+                    !narrowCompound(field, *node.left, fieldType, actual))
                     error(*node.left, "поле ожидает тип '" + typeName(fieldType) +
                           "', получен '" + typeName(actual) + "'" + castHint(fieldType, actual));
                 break;
@@ -1318,7 +1346,12 @@ private:
                 !node.left->value.empty() && node.left->value.find_first_of(".eE") == std::string::npos)
                 node.left->varType = fieldType;
             const std::string actual = expression(*node.left);
-            if (actual != "<error>" && !compatible(fieldType, actual) && !constantFits(*node.left, fieldType))
+            Node self;
+            self.type = NODE_STRUCT_FIELD;
+            self.varName = node.varName;
+            self.op = node.op;
+            if (actual != "<error>" && !compatible(fieldType, actual) && !constantFits(*node.left, fieldType) &&
+                !narrowCompound(self, *node.left, fieldType, actual))
                 error(*node.left, "поле ожидает тип '" + typeName(fieldType) +
                       "', получен '" + typeName(actual) + "'" + castHint(fieldType, actual));
             break;
@@ -1341,13 +1374,19 @@ private:
                 } catch (...) {}
             }
             std::string value = expression(*node.right);
+            Node self;
+            self.type = NODE_ARRAY_ACCESS;
+            self.varName = node.varName;
             if (array && array->ty.isArray()) {
                 std::string element = array->ty.element->toString();
-                if (value != "<error>" && !compatible(element, value)) error(node, "элемент массива ожидает тип '" + typeName(element) + "'");
+                if (value != "<error>" && !compatible(element, value) && !constantFits(*node.right, element) &&
+                    !narrowCompound(self, *node.right, element, value))
+                    error(node, "элемент массива ожидает тип '" + typeName(element) + "'" + castHint(element, value));
             } else if (array && array->isDynArray) {
                 const std::string& element = array->dynArrayElementType;
-                if (value != "<error>" && !element.empty() && !compatible(element, value))
-                    error(node, "элемент массива ожидает тип '" + typeName(element) + "'");
+                if (value != "<error>" && !element.empty() && !compatible(element, value) &&
+                    !constantFits(*node.right, element) && !narrowCompound(self, *node.right, element, value))
+                    error(node, "элемент массива ожидает тип '" + typeName(element) + "'" + castHint(element, value));
             } else if (array && !array->ty.isPtr()) error(node, "значение не является массивом");
             break;
         }
