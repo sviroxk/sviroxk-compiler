@@ -566,9 +566,13 @@ private:
             }
             return "file";
         }
-        case NODE_FILE_READ:
-            if (!use(node, node.varName)) error(node, "неизвестный файл '" + node.varName + "'");
+        case NODE_FILE_READ: {
+            const Symbol* file = use(node, node.varName);
+            if (!file) error(node, "неизвестный файл '" + node.varName + "'");
+            else if (!file->ty.isFile())  // read(x) не-файла падал при выполнении
+                error(node, "ожидался file, получен '" + typeName(file->ty.toString()) + "'");
             return "str";
+        }
         case NODE_TERNARY: {
             const std::string conditionType = expression(*node.left);
             if (conditionType != "bool" && !isInteger(conditionType) && conditionType != "<error>")
