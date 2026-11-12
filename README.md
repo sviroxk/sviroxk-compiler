@@ -1,6 +1,6 @@
 # SC
 
-[![CI](https://github.com/sviroxk/sviroxk-compiler/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sviroxk/sviroxk-compiler/actions/workflows/ci.yml)
+[![SC compiler CI](https://img.shields.io/github/actions/workflow/status/sviroxk/sviroxk-compiler/ci.yml?branch=main&style=for-the-badge&logo=github&label=SC%20compiler%20CI)](https://github.com/sviroxk/sviroxk-compiler/actions/workflows/ci.yml) [![Claude](https://img.shields.io/badge/built%20with-Claude-D97757?style=for-the-badge&logo=claude&logoColor=white)](https://claude.ai) [![Viktor](https://img.shields.io/badge/built%20with-Viktor-5B4BDB?style=for-the-badge)](https://viktor.com) [![Cursor](https://img.shields.io/badge/built%20with-Cursor-000000?style=for-the-badge&logo=cursor&logoColor=white)](https://cursor.com)
 
 **Экспериментальный язык · компилятор 0.3.0 · C++17 + LLVM · исходники `.svx`**
 
@@ -171,13 +171,5 @@ Sanitizer-проверки показывают проверенные сцен�
 Generics, enum, Option/Result, безопасное владение, полноценная stdlib и self-hosting
 остаются планами, не реализованными возможностями. Исторические документы могут
 отставать от кода; источник подтверждённого поведения — тесты.
-
-## Авторы
-
-| Участник | Роль |
-| --- | --- |
-| **SVIROXK** ([@sviroxk](https://github.com/sviroxk)) | Автор и владелец языка SC |
-| **Claude** | ИИ-ассистент, помогает в разработке |
-| **Viktor** ([viktor.com](https://viktor.com)) | ИИ-ассистент, помогает в разработке |
 
 Лицензия: **Apache License 2.0** — полный текст в [LICENSE](LICENSE).
