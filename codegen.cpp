@@ -920,15 +920,17 @@ llvm::Value* CodeGen::genOtherExpr(const Node& node) {
         return file;
     }
     if (node.type == NODE_INPUT && node.varType == "str") {
+        // Подсказка — значение выражения; печать через "%s", а не как формат printf.
         llvm::Function* printfF = runtimeFunction("printf");
-        llvm::Value* prompt = getStringPtr(node.value);
-        builder.CreateCall(printfF, {prompt});
+        llvm::Value* prompt = node.left ? genExpr(*node.left) : getStringPtr("");
+        builder.CreateCall(printfF, {getStringPtr("%s"), prompt});
         return emitReadLine(llvm::ConstantPointerNull::get(builder.getPtrTy()), node, false);
     }
     if (node.type == NODE_INPUT) {
+        // Подсказка — значение выражения; печать через "%s", а не как формат printf.
         llvm::Function* printfF = runtimeFunction("printf");
-        llvm::Value* prompt = getStringPtr(node.value);
-        builder.CreateCall(printfF, {prompt});
+        llvm::Value* prompt = node.left ? genExpr(*node.left) : getStringPtr("");
+        builder.CreateCall(printfF, {getStringPtr("%s"), prompt});
         // Одна строка ввода — одно целое: пробелы вокруг допустимы, остальное — ошибка.
         llvm::Value* line = emitReadLine(llvm::ConstantPointerNull::get(builder.getPtrTy()), node, true);
         llvm::Value* endSlot = entryAlloca(builder.getPtrTy(), "input_end");

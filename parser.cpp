@@ -364,7 +364,7 @@ Node parsePrimary() {
     if (peek().type == VD) {
         Node left; left.type = NODE_INPUT; setPos(left, consume());
         expect(LPAREN);
-        left.value = consume().value;
+        if (peek().type != RPAREN) left.left = makeNode(parseExpr());  // подсказка — выражение str
         expect(RPAREN);
         return left;
     }
@@ -373,7 +373,7 @@ Node parsePrimary() {
         Node left; left.type = NODE_INPUT; setPos(left, consume());
         left.varType = "str";
         expect(LPAREN);
-        left.value = consume().value;
+        if (peek().type != RPAREN) left.left = makeNode(parseExpr());  // подсказка — выражение str
         expect(RPAREN);
         return left;
     }
@@ -1002,7 +1002,7 @@ Node parseOne() {
         Node node; node.type = NODE_INPUT; setPos(node, consume());
         node.varType = "str"; // строка
         expect(LPAREN);
-        node.value = consume().value;
+        if (peek().type != RPAREN) node.left = makeNode(parseExpr());
         expect(RPAREN);
         expect(SEMICOLON);
         return node;

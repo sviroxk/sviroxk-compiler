@@ -573,6 +573,11 @@ private:
             return "ptr";
         }
         case NODE_INPUT:
+            if (node.left) {
+                const std::string prompt = expression(*node.left);
+                if (prompt != "str" && prompt != "<error>")
+                    error(*node.left, "подсказка ввода должна иметь тип str");
+            }
             return normalize(node.varType) == "str" ? "str" : "i32";
         case NODE_FILE_OPEN: {
             const std::string pathType = node.left ? expression(*node.left) : "<error>";
