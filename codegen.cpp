@@ -90,7 +90,7 @@ llvm::Function* CodeGen::runtimeFunction(const std::string& name) {
 
 CodeGen::ScopeSnapshot CodeGen::saveScope() const {
     return {vars, unsignedVars, charVars, constVars, integerWidths, arrays, arrayLengths,
-            arrayElementTypes, structTypesByVariable};
+            arrayElementTypes, structTypesByVariable, dynArrays, dynArrayElementTypes, pointeeTypes};
 }
 
 void CodeGen::restoreScope(const ScopeSnapshot& scope) {
@@ -103,6 +103,29 @@ void CodeGen::restoreScope(const ScopeSnapshot& scope) {
     arrayLengths = scope.arrayLengths;
     arrayElementTypes = scope.arrayElementTypes;
     structTypesByVariable = scope.structTypesByVariable;
+    dynArrays = scope.dynArrays;
+    dynArrayElementTypes = scope.dynArrayElementTypes;
+    pointeeTypes = scope.pointeeTypes;
+}
+
+// Keep registrations when emitting a return path: sibling CFG paths still need them.
+void CodeGen::emitDeferred(size_t base) {
+    const ScopeSnapshot current = saveScope();
+    for (size_t i = deferred_.size(); i > base; --i) {
+        restoreScope(deferred_[i - 1].bindings);
+        genNode(*deferred_[i - 1].statement);
+    }
+    restoreScope(current);
+}
+
+void CodeGen::genScope(const std::vector<Node>& statements) {
+    const size_t base = deferred_.size();
+    for (const Node& statement : statements) {
+        if (blockHasTerminator(builder.GetInsertBlock())) break;
+        genNode(statement);
+    }
+    if (!blockHasTerminator(builder.GetInsertBlock())) emitDeferred(base);
+    deferred_.resize(base);
 }
 
 llvm::Value* CodeGen::getStringPtr(const std::string& str) {
@@ -1216,6 +1239,7 @@ void CodeGen::genNode(const Node& node) {
         }
     }
     else if (node.type == NODE_RETURN) {
+        emitDeferred(0);
         llvm::Function* cur = builder.GetInsertBlock()->getParent();
         llvm::Type* retTy = cur->getReturnType();
         if (retTy->isVoidTy()) {
@@ -1226,10 +1250,10 @@ void CodeGen::genNode(const Node& node) {
         }
     }
     else if (node.type == NODE_BREAK) {
-        if (breakBlock) builder.CreateBr(breakBlock);
+        if (breakBlock) { emitDeferred(loopDeferredBase_); builder.CreateBr(breakBlock); }
     }
     else if (node.type == NODE_CONTINUE) {
-        if (continueBlock) builder.CreateBr(continueBlock);
+        if (continueBlock) { emitDeferred(loopDeferredBase_); builder.CreateBr(continueBlock); }
     }
     else if (node.type == NODE_ARRAY_DECL) {
         unsigned n = (unsigned)node.args.size();
@@ -1392,14 +1416,7 @@ void CodeGen::genNode(const Node& node) {
         llvm::BasicBlock* block =
             llvm::BasicBlock::Create(context, "entry", func);
         llvm::BasicBlock* savedBlock = builder.GetInsertBlock();
-        auto savedVars = vars;
-        auto savedUnsignedVars = unsignedVars;
-        auto savedCharVars = charVars;
-        auto savedConstVars = constVars;
-        auto savedIntegerWidths = integerWidths;
-        auto savedArrays = arrays;
-        auto savedArrayLengths = arrayLengths;
-        auto savedStructTypesByVariable = structTypesByVariable;
+        const ScopeSnapshot parentScope = saveScope();
         builder.SetInsertPoint(block);
         int idx = 0;
         for (auto& arg : func->args()) {
@@ -1420,11 +1437,8 @@ void CodeGen::genNode(const Node& node) {
             constVars[pname] = false;
             integerWidths[pname] = ty->isIntegerTy() ? ty->getIntegerBitWidth() : 32;
         }
-        bool hasRet = false;
-        for (const Node& n : node.children) {
-            genNode(n);
-            if (n.type == NODE_RETURN) { hasRet = true; break; }
-        }
+        genScope(node.children);
+        const bool hasRet = blockHasTerminator(builder.GetInsertBlock());
         if (!hasRet && !retTy->isVoidTy()) {
             if (retTy->isDoubleTy())
                 builder.CreateRet(llvm::ConstantFP::get(builder.getDoubleTy(), 0.0));
@@ -1436,14 +1450,7 @@ void CodeGen::genNode(const Node& node) {
             builder.CreateRetVoid();
         }
         builder.SetInsertPoint(savedBlock);
-        vars = savedVars;
-        unsignedVars = savedUnsignedVars;
-        charVars = savedCharVars;
-        constVars = savedConstVars;
-        integerWidths = savedIntegerWidths;
-        arrays = savedArrays;
-        arrayLengths = savedArrayLengths;
-        structTypesByVariable = savedStructTypesByVariable;
+        restoreScope(parentScope);
         funcs[node.varName] = func;
     }
     else if (node.type == NODE_FUNC_CALL) {
@@ -1460,6 +1467,9 @@ void CodeGen::genNode(const Node& node) {
         } else {
             genExpr(node);
         }
+    }
+    else if (node.type == NODE_DEFER) {
+        deferred_.push_back({node.left.get(), saveScope()});
     }
     else if (node.type == NODE_DELETE) {
         llvm::Function* freeF = runtimeFunction("free");
@@ -1503,12 +1513,12 @@ void CodeGen::genNode(const Node& node) {
         builder.CreateCondBr(cond, thenBlock, elseBlock);
         const ScopeSnapshot parentScope = saveScope();
         builder.SetInsertPoint(thenBlock);
-        for (const Node& n : node.children) genNode(n);
+        genScope(node.children);
         if (!blockHasTerminator(builder.GetInsertBlock()))
             builder.CreateBr(mergeBlock);
         restoreScope(parentScope);
         builder.SetInsertPoint(elseBlock);
-        for (const Node& n : node.elseChildren) genNode(n);
+        genScope(node.elseChildren);
         if ((builder.GetInsertBlock()->empty() || !builder.GetInsertBlock()->back().isTerminator()))
             builder.CreateBr(mergeBlock);
         restoreScope(parentScope);
@@ -1530,6 +1540,8 @@ void CodeGen::genNode(const Node& node) {
             llvm::BasicBlock::Create(context, "step", func);
         auto savedBreak = breakBlock;
         auto savedContinue = continueBlock;
+        const size_t savedLoopBase = loopDeferredBase_;
+        loopDeferredBase_ = deferred_.size();
         breakBlock = afterBlock;
         continueBlock = stepBlock;
         builder.CreateBr(loopBlock);
@@ -1539,7 +1551,7 @@ void CodeGen::genNode(const Node& node) {
         builder.CreateCondBr(cond, bodyBlock, afterBlock);
         builder.SetInsertPoint(bodyBlock);
         const ScopeSnapshot parentScope = saveScope();
-        for (const Node& n : node.children) genNode(n);
+        genScope(node.children);
         if ((builder.GetInsertBlock()->empty() || !builder.GetInsertBlock()->back().isTerminator()))
             builder.CreateBr(stepBlock);
         restoreScope(parentScope);
@@ -1550,6 +1562,7 @@ void CodeGen::genNode(const Node& node) {
         builder.SetInsertPoint(afterBlock);
         breakBlock = savedBreak;
         continueBlock = savedContinue;
+        loopDeferredBase_ = savedLoopBase;
     }
     else if (node.type == NODE_FOR_EACH) {
         if (!arrays.count(node.left->value) || !arrayLengths.count(node.left->value))
@@ -1570,6 +1583,8 @@ void CodeGen::genNode(const Node& node) {
         const ScopeSnapshot parentScope = saveScope();
         const auto savedBreak = breakBlock;
         const auto savedContinue = continueBlock;
+        const size_t savedLoopBase = loopDeferredBase_;
+        loopDeferredBase_ = deferred_.size();
         vars[node.varName] = element;
         unsignedVars[node.varName] = false;
         charVars[node.varName] = false;
@@ -1585,7 +1600,7 @@ void CodeGen::genNode(const Node& node) {
             arrayType, array, {builder.getInt32(0), current});
         llvm::Value* value = builder.CreateLoad(elementType, address);
         builder.CreateStore(value, element);
-        for (const Node& child : node.children) genNode(child);
+        genScope(node.children);
         if ((builder.GetInsertBlock()->empty() || !builder.GetInsertBlock()->back().isTerminator())) builder.CreateBr(stepBlock);
         builder.SetInsertPoint(stepBlock);
         current = builder.CreateLoad(builder.getInt32Ty(), index);
@@ -1595,6 +1610,7 @@ void CodeGen::genNode(const Node& node) {
         restoreScope(parentScope);
         breakBlock = savedBreak;
         continueBlock = savedContinue;
+        loopDeferredBase_ = savedLoopBase;
     }
     else if (node.type == NODE_FOR_RANGE) {
         llvm::Value* start = genExpr(*node.left);
@@ -1617,6 +1633,8 @@ void CodeGen::genNode(const Node& node) {
         const ScopeSnapshot parentScope = saveScope();
         const auto savedBreak = breakBlock;
         const auto savedContinue = continueBlock;
+        const size_t savedLoopBase = loopDeferredBase_;
+        loopDeferredBase_ = deferred_.size();
         vars[node.varName] = iterator;
         unsignedVars[node.varName] = isUnsignedExpr(*node.left);
         integerWidths[node.varName] = iteratorType->getIntegerBitWidth();
@@ -1634,7 +1652,7 @@ void CodeGen::genNode(const Node& node) {
                                             : builder.CreateICmpSLT(current, end);
         builder.CreateCondBr(condition, bodyBlock, afterBlock);
         builder.SetInsertPoint(bodyBlock);
-        for (const Node& child : node.children) genNode(child);
+        genScope(node.children);
         if ((builder.GetInsertBlock()->empty() || !builder.GetInsertBlock()->back().isTerminator())) builder.CreateBr(stepBlock);
         builder.SetInsertPoint(stepBlock);
         current = builder.CreateLoad(iteratorType, iterator);
@@ -1645,6 +1663,7 @@ void CodeGen::genNode(const Node& node) {
         restoreScope(parentScope);
         breakBlock = savedBreak;
         continueBlock = savedContinue;
+        loopDeferredBase_ = savedLoopBase;
     }
     else if (node.type == NODE_LOOP) {
         llvm::Function* function = builder.GetInsertBlock()->getParent();
@@ -1653,6 +1672,8 @@ void CodeGen::genNode(const Node& node) {
         llvm::BasicBlock* afterBlock = llvm::BasicBlock::Create(context, "loop_after", function);
         const auto savedBreak = breakBlock;
         const auto savedContinue = continueBlock;
+        const size_t savedLoopBase = loopDeferredBase_;
+        loopDeferredBase_ = deferred_.size();
         breakBlock = afterBlock;
         continueBlock = headerBlock;
         const ScopeSnapshot parentScope = saveScope();
@@ -1660,12 +1681,13 @@ void CodeGen::genNode(const Node& node) {
         builder.SetInsertPoint(headerBlock);
         builder.CreateBr(bodyBlock);
         builder.SetInsertPoint(bodyBlock);
-        for (const Node& child : node.children) genNode(child);
+        genScope(node.children);
         if ((builder.GetInsertBlock()->empty() || !builder.GetInsertBlock()->back().isTerminator())) builder.CreateBr(headerBlock);
         restoreScope(parentScope);
         builder.SetInsertPoint(afterBlock);
         breakBlock = savedBreak;
         continueBlock = savedContinue;
+        loopDeferredBase_ = savedLoopBase;
     }
     else if (node.type == NODE_LOOP_W || node.type == NODE_WHILE) {
         llvm::Function* func = builder.GetInsertBlock()->getParent();
@@ -1677,6 +1699,8 @@ void CodeGen::genNode(const Node& node) {
             llvm::BasicBlock::Create(context, "after", func);
         auto savedBreak = breakBlock;
         auto savedContinue = continueBlock;
+        const size_t savedLoopBase = loopDeferredBase_;
+        loopDeferredBase_ = deferred_.size();
         breakBlock = afterBlock;
         continueBlock = condBlock;
         builder.CreateBr(condBlock);
@@ -1685,13 +1709,14 @@ void CodeGen::genNode(const Node& node) {
         builder.CreateCondBr(cond, bodyBlock, afterBlock);
         builder.SetInsertPoint(bodyBlock);
         const ScopeSnapshot parentScope = saveScope();
-        for (const Node& n : node.children) genNode(n);
+        genScope(node.children);
         if ((builder.GetInsertBlock()->empty() || !builder.GetInsertBlock()->back().isTerminator()))
             builder.CreateBr(condBlock);
         restoreScope(parentScope);
         builder.SetInsertPoint(afterBlock);
         breakBlock = savedBreak;
         continueBlock = savedContinue;
+        loopDeferredBase_ = savedLoopBase;
     }
 }
 
@@ -1739,6 +1764,8 @@ void CodeGen::generate(const Node& program) {
     globalStorage = true;
     for (const Node& node : program.children)
         if (node.type != NODE_FUNC_DEF && node.type != NODE_STRUCT_DEF) genNode(node);
+    emitDeferred(0);
+    deferred_.clear();
     globalStorage = false;
 
     builder.CreateRet(builder.getInt32(0));
