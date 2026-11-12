@@ -44,6 +44,11 @@ if ! grep -Fq 'error[syntax]' "$TMP_DIR/parser-state.err"; then
     exit 1
 fi
 
+# Lexer keyword table: every keyword maps to the same token as before.
+"${CXX:-clang++}" -std=c++20 "${PARSER_TEST_FLAGS[@]}" -I. \
+    tests/lexer-keywords.cpp lexer.cpp -o "$TMP_DIR/lexer-keywords"
+timeout --signal=TERM 10s "$TMP_DIR/lexer-keywords"
+
 # Every AST node has a source position: examples, fixtures, stdlib and all spec programs.
 "${CXX:-clang++}" -std=c++20 "${PARSER_TEST_FLAGS[@]}" -I. \
     tests/ast-positions.cpp lexer.cpp parser.cpp -o "$TMP_DIR/ast-positions"
