@@ -983,6 +983,12 @@ expect_compile_error "drop-raw-pointer" $'int x = 1;\nptr p = &x;\ndrop p;' 'dro
 expect_compile_error "drop-outer-in-loop" $'ptr v = new int[3];\nwhile (true) { drop v; }' "drop 'v' внутри цикла или функции"
 expect_compile_error "drop-global-in-function" $'ptr v = new int[3];\nfn void f() { drop v; }\nf();' "drop 'v' внутри цикла или функции"
 expect_compile_error "drop-without-name" 'drop 5;' 'после drop ожидалось имя переменной'
+# D-007 / аудит 07f: вернуть адрес локальной переменной или параметра — ошибка компиляции.
+expect_compile_error "return-addr-local" 'fn ptr g() { int x = 5; return &x; }' "возврат адреса локальной переменной 'x'"
+expect_compile_error "return-addr-param" 'fn ptr g(int a) { return &a; }' "возврат адреса локальной переменной 'a'"
+expect_compile_error "return-ptr-to-local" 'fn ptr g() { int x = 5; ptr p = &x; return p; }' "возврат 'p' — адреса локальной переменной"
+expect_program_output "return-addr-global" $'int G = 3;\nfn ptr g() { return &G; }\nptr p = g();\nprint(*p);' '3'
+expect_program_output "return-ptr-param" $'fn ptr g(ptr q) { return q; }\nint y = 4;\nptr p = g(&y);\nprint(*p);' '4'
 # D-007 / аудит 07c: close(f) освобождает файл так же, как drop f.
 expect_compile_error "close-then-write" $'file f = open("c.txt", "w");\nclose(f);\nwrite(f, "x");' "'f' используется после close (строка 2)"
 expect_compile_error "close-then-read" $'file f = open("c.txt", "r");\nclose(f);\nprint(read(f));' "'f' используется после close (строка 2)"
