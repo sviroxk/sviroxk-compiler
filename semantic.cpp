@@ -1149,7 +1149,7 @@ private:
                         literalFits(normalize(field.varType), field.left->value);
                     if (!fittingLiteral)
                         error(field, "значение по умолчанию поля '" + field.varName + "' имеет тип '" +
-                              typeName(actual) + "', awaited '" + typeName(normalize(field.varType)) + "'");
+                              typeName(actual) + "', а ожидается '" + typeName(normalize(field.varType)) + "'");
                 }
                 if (field.left->type == NODE_NUMBER &&
                     !literalFits(normalize(field.varType), field.left->value))
