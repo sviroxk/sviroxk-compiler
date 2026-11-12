@@ -672,7 +672,8 @@ expect_runtime_error() {
     llc "$work/module.bc" -o "$work/program.s"
     clang -no-pie "$work/program.s" -o "$work/program" -lm
     local status=0
-    if (ulimit -c 0; timeout --signal=TERM 10s "$work/program" >"$work/output.log" 2>"$work/error.log"); then
+    # 4-й аргумент (если задан) подаётся программе на stdin.
+    if (ulimit -c 0; printf '%s' "${4:-}" | timeout --signal=TERM 10s "$work/program" >"$work/output.log" 2>"$work/error.log"); then
         echo "FAIL: runtime error '$name' did not fail" >&2
         exit 1
     else
@@ -867,7 +868,8 @@ expect_program_output() {
     llvm-as "$work/module.ll" -o "$work/module.bc"
     llc "$work/module.bc" -o "$work/program.s"
     clang -no-pie "$work/program.s" -o "$work/program" -lm
-    if ! (ulimit -c 0; timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"); then
+    # 4-й аргумент (если задан) подаётся программе на stdin.
+    if ! (ulimit -c 0; printf '%s' "${4:-}" | timeout --signal=TERM 10s "$work/program" >"$work/output.txt" 2>"$work/runtime.err"); then
         echo "FAIL: program '$name' failed at runtime" >&2
         cat "$work/runtime.err" >&2
         exit 1
@@ -1280,6 +1282,18 @@ if clang -fsanitize=address "$asan_probe/probe.c" -o "$asan_probe/probe" 2>/dev/
 else
     echo "SKIP: clang cannot build with -fsanitize=address here; ASan check of compiled programs skipped"
 fi
+
+# Ввод читает строку целиком (D-007, аудит 07d/07e): без обрезки до 255 байт и не по словам.
+expect_program_output "input-line-whole" $'int n = input_int("");\nstring s = input_str("");\nprint(n * 2);\nprint(s);\nprint(len(s));' $'42\nhello world\n11' $'  21  \nhello world\n'
+expect_program_output "input-line-crlf" $'string s = input_str("");\nprint(len(s));' '2' $'ab\r\n'
+expect_program_output "input-line-long" $'string s = input_str("");\nprint(len(s));' '100000' "$(printf 'x%.0s' $(seq 100000))"
+expect_program_output "input-str-eof-empty" $'string s = input_str("");\nprint(len(s));' '0' ''
+printf '%s\n' 'int n = input_int("");' 'print(n);' > "$RUNTIME_DIR/input_int.svx"
+expect_runtime_error "input-int-garbage" "$RUNTIME_DIR/input_int.svx" "SC runtime error: invalid integer input at line 1, column 9" $'abc\n'
+expect_runtime_error "input-int-trailing" "$RUNTIME_DIR/input_int.svx" "invalid integer input" $'12abc\n'
+expect_runtime_error "input-int-overflow" "$RUNTIME_DIR/input_int.svx" "integer input out of range" $'99999999999999\n'
+expect_runtime_error "input-int-eof" "$RUNTIME_DIR/input_int.svx" "unexpected end of input" ''
+expect_program_output "file-read-lines" $'file o = open("input-lines.tmp", "w");\nwrite(o, "line one\\nline two");\nclose(o);\nfile i = open("input-lines.tmp", "r");\nprint(read(i));\nprint(read(i));\nprint(len(read(i)));\nclose(i);' $'line one\nline two\n0'
 
 # Каждый пример из docs/spec.md компилируется, запускается и даёт указанный вывод.
 bash tests/spec-examples.sh

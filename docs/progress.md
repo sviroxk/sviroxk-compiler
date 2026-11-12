@@ -249,3 +249,10 @@
 - Воспроизведено на main (LLVM 23.1.5): `f64 x = 5.5; print(x % 2.0);` — assertion `cast<IntegerType>` в codegen, abort (код 134); так же `x %= 2.0`.
 - Решение владельца 2026-11-12 (D-007): разрешить, остаток как `fmod` в C. Codegen: `frem` для дробных. spec §4: правило и проверяемый пример.
 - Тесты: `float-remainder` (f64, отрицательное делимое, f32, смешанный с целым, `%=`), `float-integer-division` (`//` для дробных по-прежнему ошибка).
+
+## Аудит 07d/07e: ввод строкой целиком
+- Воспроизведено на main (LLVM 23.1.5): `input_str`/`read` обрезали ввод до 255 байт и читали одно слово; `input_int` на мусоре, переполнении и конце ввода молча давал неверное число.
+- Исправлено (D-007): внутренняя функция `sc.read_line` (fgetc/getchar + realloc) читает строку любой длины без `\n`/`\r`; `input_int` разбирает строку через `strtoll` и выдаёт `SC runtime error` (invalid integer input / integer input out of range / unexpected end of input). Несколько чисел в одной строке больше не читаются — каждое число на своей строке (spec §12).
+- Служебные слоты — в начале функции (`entryAlloca`), чтобы ввод в цикле не растил стек.
+- Тесты: `input-line-whole`, `input-line-crlf`, `input-line-long` (100000 символов), `input-str-eof-empty`, `input-int-garbage`/`-trailing`/`-overflow`/`-eof`, `file-read-lines`; `memory-safety file-roundtrip-eof` обновлён (`read` больше не возвращает `\n`).
+- AGENTS.md: правило про кредиты (порог 1000, письмо — `docs/handoff.md` целиком).
