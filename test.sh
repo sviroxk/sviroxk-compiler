@@ -993,6 +993,29 @@ expect_compile_error "implicit-narrow-return" $'fn u8 f(int x) { return x; }\npr
 expect_compile_error "implicit-narrow-assign" $'u8 b = 1;\nint a = 300;\nb = a;' "нельзя присвоить 'int/i32' значению типа 'byte/u8'; возможна потеря"
 expect_compile_error "small-literal-out-of-range" 'u8 b = 256;' "числовой литерал вне диапазона типа 'byte/u8'"
 
+# Шаг 5в: null, вложенные и составные присваивания, мелочи раздела D.
+expect_program_output "null-pointer-ok" $'ptr p = null;\nif (p == null) { print(1); }\nint x = 5;\np = &x;\nif (p != null) { print(*p); }\nfn ptr none() { return null; }\nfn void check(ptr q) { if (q == null) { print(2); } }\ncheck(none());' $'1\n5\n2'
+null_runtime() { printf '%s' "$2" > "$RUNTIME_DIR/null_$1.svx"; expect_runtime_error "null-$1" "$RUNTIME_DIR/null_$1.svx" "$3"; }
+null_runtime deref-read $'ptr p = null;\nprint(*p);' "null pointer dereference at line 2, column 7"
+null_runtime deref-write $'ptr p = null;\n*p = 3;' "null pointer dereference at line 2, column 1"
+expect_compile_error "null-into-int" 'int a = null;' "null и указатели допустимы только для типа ptr"
+expect_compile_error "null-compare-int" $'int x = 1;\nif (x == null) { print(2); }' "указатели можно сравнивать только между собой и с null"
+expect_compile_error "null-ordering" $'ptr p = null;\nif (p < null) { print(1); }' "указатели можно сравнивать только между собой и с null"
+expect_program_output "nested-field-assign" $'tip In { int x = 0; }\ntip Out { tip In a; int y = 0; }\nsvi tip Out lor r = { };\nr.a.x = 5;\nr.a.x += 2;\nr.y = 1;\nprint(r.a.x);\nprint(r.y);' $'7\n1'
+expect_program_output "compound-field-and-element" $'tip P { int x = 1; }\nsvi tip P lor a = { x = 1; };\na.x += 2;\na.x *= 5;\na.x -= 3;\na.x /= 2;\na.x %= 4;\nprint(a.x);\nint[] s = [1, 2];\ns[0] += 5;\ns[1] *= 10;\nprint(s[0]);\nprint(s[1]);' $'2\n6\n20'
+expect_program_output "compound-index-evaluated-once" $'fn int k() { print(9); return 1; }\nptr v = nw rox[2];\nv[k()] += 4;\nv[k()] -= 1;\nprint(v[1]);' $'9\n9\n3'
+compound_runtime() { printf '%s' "$2" > "$RUNTIME_DIR/compound_$1.svx"; expect_runtime_error "compound-$1" "$RUNTIME_DIR/compound_$1.svx" "$3"; }
+compound_runtime element-overflow $'int[] a = [2147483647, 0];\na[0] += 1;' "integer overflow at line 2, column 6"
+compound_runtime field-division-by-zero $'tip P { int x = 0; }\nsvi tip P lor a = { x = 1; };\nint z = 0;\na.x %= z;' "division by zero at line 4, column 5"
+expect_compile_error "compound-field-const-zero" $'tip P { int x = 0; }\nsvi tip P lor a = { x = 1; };\na.x /= 0;' 'деление на ноль'
+expect_compile_error "nested-field-unknown" $'tip In { int x = 0; }\ntip Out { tip In a; }\nsvi tip Out lor r = { };\nr.a.y = 5;' "у структуры 'In' нет поля 'y'"
+expect_compile_error "nested-field-type" $'tip In { int x = 0; }\ntip Out { tip In a; }\nsvi tip Out lor r = { };\nr.a.x = 1.5;' "поле ожидает тип 'int/i32', получен 'double/f64'"
+expect_compile_error "call-args-need-comma" 'print(max(1 2));' "ожидалась ',' между аргументами"
+expect_program_output "loop-without-break-returns" $'fn int f() { loop { return 1; } }\nprint(f());' '1'
+expect_compile_error "loop-with-break-not-returning" 'fn int f(int n) { loop { if (n > 3) { break; } return 1; } }' 'функция должна возвращать значение на всех путях выполнения'
+expect_program_output "char-arithmetic" $'char c = \'a\';\nprint(c + 1);\nint d = c - 32;\nprint(d);' $'98\n65'
+expect_compile_error "char-plus-float" $'char c = \'a\';\nprint(c + 1.5);' "для char требует целый операнд"
+
 # Step 4b: PR22 struct parameters are aggregate copies, not aliases.
 expect_program_output "struct-by-value-copy" "$(cat examples/struct_by_value.svx)" $'17\n3\n4\n3'
 expect_program_output "struct-by-value-nested" $'tip Inner { int x = 2; }\ntip Outer { tip Inner inner = { x = 7; }; int y = 3; }\nfn int change(tip Outer value) { svi tip Inner lor replacement = { x = 9; }; value.inner = replacement; return value.inner.x + value.y; }\nsvi tip Outer lor original = { inner = { x = 5; }; y = 4; };\nprint(change(original)); print(original.inner.x);' $'13\n5'
