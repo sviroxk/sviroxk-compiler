@@ -1940,11 +1940,15 @@ void CodeGen::genNode(const Node& node) {
         builder.SetInsertPoint(mergeBlock);
     }
     else if (node.type == NODE_LOOP_N) {
+        // Счётчик i64: число повторов любой целой ширины (u8 … u64) сравнивается
+        // в одном типе; раньше счётчик i32 против i64/i8 давал неверный IR.
         llvm::Value* count = genExpr(*node.left);
+        if (count->getType() != builder.getInt64Ty())
+            count = isUnsignedExpr(*node.left) ? builder.CreateZExt(count, builder.getInt64Ty())
+                                               : builder.CreateSExt(count, builder.getInt64Ty());
         llvm::Function* func = builder.GetInsertBlock()->getParent();
-        llvm::AllocaInst* i =
-            builder.CreateAlloca(builder.getInt32Ty(), nullptr, "i");
-        builder.CreateStore(builder.getInt32(0), i);
+        llvm::Value* i = entryAlloca(builder.getInt64Ty(), "i");
+        builder.CreateStore(builder.getInt64(0), i);
         llvm::BasicBlock* loopBlock =
             llvm::BasicBlock::Create(context, "loop", func);
         llvm::BasicBlock* afterBlock =
@@ -1961,8 +1965,9 @@ void CodeGen::genNode(const Node& node) {
         continueBlock = stepBlock;
         builder.CreateBr(loopBlock);
         builder.SetInsertPoint(loopBlock);
-        llvm::Value* cur = builder.CreateLoad(builder.getInt32Ty(), i);
-        llvm::Value* cond = builder.CreateICmpSLT(cur, count);
+        llvm::Value* cur = builder.CreateLoad(builder.getInt64Ty(), i);
+        llvm::Value* cond = isUnsignedExpr(*node.left) ? builder.CreateICmpULT(cur, count)
+                                                       : builder.CreateICmpSLT(cur, count);
         builder.CreateCondBr(cond, bodyBlock, afterBlock);
         builder.SetInsertPoint(bodyBlock);
         const ScopeSnapshot parentScope = saveScope();
@@ -1971,7 +1976,7 @@ void CodeGen::genNode(const Node& node) {
             builder.CreateBr(stepBlock);
         restoreScope(parentScope);
         builder.SetInsertPoint(stepBlock);
-        llvm::Value* next = builder.CreateAdd(cur, builder.getInt32(1));
+        llvm::Value* next = builder.CreateAdd(cur, builder.getInt64(1));
         builder.CreateStore(next, i);
         builder.CreateBr(loopBlock);
         builder.SetInsertPoint(afterBlock);
