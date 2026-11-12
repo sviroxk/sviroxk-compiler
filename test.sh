@@ -974,6 +974,8 @@ expect_program_output "ptr-typed-access" $'i64 x = 5000000000;\nptr p = &x;\npri
 expect_compile_error "max-signed-unsigned" $'u32 a = 5;\nint b = -1;\nprint(max(a, b));' "max: нельзя смешивать signed- и unsigned-типы"
 expect_compile_error "min-signed-unsigned" $'u8 a = 5;\ni64 b = -1;\nprint(min(b, a));' "min: нельзя смешивать signed- и unsigned-типы"
 expect_program_output "max-unsigned-literal" $'u32 a = 5;\nprint(max(a, 3));\nprint(min(7, a));\nint b = -1;\nprint(max((int) a, b));' $'5\n5\n5'
+expect_compile_error "abs-unsigned" $'u32 a = 4294967295;\nprint(abs(a));' "abs: значение беззнакового типа"
+expect_program_output "abs-integers" $'int a = -5;\ni64 b = -5000000000;\nprint(abs(a));\nprint(abs(b));\nprint(abs(7));' $'5\n5000000000\n7'
 expect_program_output "defer-return-in-loop" $'fn int run() { defer print(9); for i in 0..3 { defer print(i); if (i == 1) { return 7; } } return 0; }\nprint(run());' $'0\n1\n9\n7'
 expect_program_output "defer-loop-forms" $'int n = 0; while (n < 2) { n = n + 1; defer print(n); }\nrepeat (2) { defer print(3); }\nwhile (n < 3) { n = n + 1; defer print(n); }\nfor i in 4..6 { defer print(i); }\nint[] values = [6, 7]; for item in values { defer print(item); }' $'1\n2\n3\n3\n3\n4\n5\n6\n7'
 expect_program_output "defer-break-continue" $'defer print(9); for i in 0..4 { defer print(i); if (i == 0) { continue; } if (i == 2) { break; } print(8); }' $'0\n8\n1\n2\n9'
@@ -1112,6 +1114,8 @@ int_runtime rem-zero $'int a = 5;\nint b = 0;\nprint(a % b);' "division by zero 
 int_runtime min-div-minus-one $'int a = -2147483647 - 1;\nint b = -1;\nprint(a / b);' "integer overflow at line 3, column 9"
 int_runtime shift-range $'int a = 1;\nint s = 40;\nprint(a << s);' "shift amount out of range at line 3, column 9"
 int_runtime pow-overflow $'int a = 2;\nprint(pow(a, 31));' "integer overflow at line 2"
+int_runtime abs-min $'int m = -2147483647 - 1;\nprint(abs(m));' "integer overflow at line 2"
+int_runtime abs-min-i64 $'i64 m = -9223372036854775807 - 1;\nprint(abs(m));' "integer overflow at line 2"
 int_runtime add-overflow $'int a = 2147483647;\nprint(a + 1);' "integer overflow at line 2, column 9"
 int_runtime sub-overflow $'int a = -2147483647;\nprint(a - 2);' "integer overflow at line 2, column 9"
 int_runtime mul-overflow-i64 $'i64 a = 4611686018427387904;\nprint(a * 2);' "integer overflow at line 2, column 9"

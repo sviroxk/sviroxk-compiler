@@ -1203,6 +1203,10 @@ llvm::Value* CodeGen::genCallExpr(const Node& node) {
                     value, llvm::ConstantFP::get(value->getType(), 0.0));
                 return builder.CreateSelect(negative, negated, value);
             }
+            // abs(MIN) не представим — integer overflow, как у `-x` (Rust: i32::abs паникует).
+            const unsigned width = value->getType()->getIntegerBitWidth();
+            emitRuntimeFailureIf(builder.CreateICmpEQ(value, builder.getInt(llvm::APInt::getSignedMinValue(width))),
+                                 "integer overflow", node);
             llvm::Value* negated = builder.CreateNeg(value);
             llvm::Value* negative = builder.CreateICmpSLT(
                 value, llvm::ConstantInt::get(value->getType(), 0));
