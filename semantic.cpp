@@ -32,7 +32,8 @@ struct Symbol {
     std::string pointee;
     int dynArrayLength = 0;   // current length (for bounds checking)
     int dynArrayCapacity = 0; // allocated capacity
-    int droppedLine = 0;      // строка drop; дальше имя использовать нельзя
+    int droppedLine = 0;      // строка drop/close; дальше имя использовать нельзя
+    const char* releasedBy = "drop"; // чем освобождено: "drop" или "close" (для текста ошибки)
     int deferDropLine = 0;    // строка defer drop; освобождение при выходе из области
 };
 
@@ -236,7 +237,7 @@ private:
     const Symbol* use(const Node& node, const std::string& name) const {
         const Symbol* symbol = lookup(name);
         if (symbol && symbol->droppedLine)
-            error(node, "'" + name + "' используется после drop (строка " +
+            error(node, "'" + name + "' используется после " + symbol->releasedBy + " (строка " +
                   std::to_string(symbol->droppedLine) + ")");
         return symbol;
     }
@@ -253,7 +254,8 @@ private:
     }
 
     // Проверка drop; возвращает освобождаемый символ или nullptr при ошибке.
-    Symbol* checkDrop(const Node& node) {
+    // close(f) освобождает файл так же, как drop f (D-007): verb — только для текста ошибок.
+    Symbol* checkDrop(const Node& node, const std::string& verb = "drop") {
         size_t index = 0;
         Symbol* symbol = lookupMutable(node.varName, &index);
         if (!symbol) { error(node, "неизвестное имя '" + node.varName + "'"); return nullptr; }
@@ -262,17 +264,17 @@ private:
             return nullptr;
         }
         if (symbol->droppedLine) {
-            error(node, "повторный drop '" + node.varName + "' (уже освобождено в строке " +
+            error(node, "повторный " + verb + " '" + node.varName + "' (уже освобождено в строке " +
                   std::to_string(symbol->droppedLine) + ")");
             return nullptr;
         }
         if (symbol->deferDropLine) {
-            error(node, "повторный drop '" + node.varName + "' (defer drop в строке " +
+            error(node, "повторный " + verb + " '" + node.varName + "' (defer drop в строке " +
                   std::to_string(symbol->deferDropLine) + ")");
             return nullptr;
         }
         if (index < dropBarrier_) {
-            error(node, "drop '" + node.varName + "' внутри цикла или функции, а объявлена она снаружи: "
+            error(node, verb + " '" + node.varName + "' внутри цикла или функции, а объявлена она снаружи: "
                   "освобождение выполнилось бы несколько раз");
             return nullptr;
         }
@@ -1589,7 +1591,10 @@ private:
             break;
         }
         case NODE_DROP:
-            if (Symbol* symbol = checkDrop(node)) symbol->droppedLine = node.line;
+            if (Symbol* symbol = checkDrop(node)) {
+                symbol->droppedLine = node.line;
+                symbol->releasedBy = "drop";
+            }
             break;
         case NODE_DELETE: {
             const Symbol* symbol = use(node, node.varName);
@@ -1653,8 +1658,19 @@ private:
                       "' доступен только для массивов");
             break;
         }
-        case NODE_FILE_WRITE:
         case NODE_FILE_CLOSE: {
+            const Symbol* symbol = use(node, node.varName);
+            if (!symbol) error(node, "неизвестный файл '" + node.varName + "'");
+            else if (!symbol->ty.isFile()) error(node, "ожидался file, получен '" + typeName(symbol->ty.toString()) + "'");
+            else if (!symbol->droppedLine) {
+                if (Symbol* file = checkDrop(node, "close")) {
+                    file->droppedLine = node.line;
+                    file->releasedBy = "close";
+                }
+            }
+            break;
+        }
+        case NODE_FILE_WRITE: {
             const Symbol* symbol = use(node, node.varName);
             if (!symbol) error(node, "неизвестный файл '" + node.varName + "'");
             else if (!symbol->ty.isFile()) error(node, "ожидался file, получен '" + typeName(symbol->ty.toString()) + "'");
