@@ -1,5 +1,5 @@
 fucn dor half(rox x) {
-    rev x / 2;
+    rev (dor)(x / 2);
 }
 
 svi dor lor y = 3.14;

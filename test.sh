@@ -969,6 +969,30 @@ expect_compile_error "int-const-add-overflow" 'print(2147483647 + 1);' "пере
 expect_compile_error "int-const-mul-overflow" 'print(65536 * 65536);' "переполнение: значение константного выражения 4294967296"
 expect_compile_error "int-const-pow-overflow" 'print(2 ** 40);' "переполнение: значение константного выражения 1099511627776"
 
+# Приведения (шаг 5б): явное — с проверкой диапазона; неявное — только без потерь.
+cast_runtime() { printf '%s' "$2" > "$RUNTIME_DIR/cast_$1.svx"; expect_runtime_error "cast-$1" "$RUNTIME_DIR/cast_$1.svx" "$3"; }
+cast_runtime i64-to-int $'i64 a = 5000000000;\nprint((int)a);' "value out of range for type 'i32' at line 2, column 8"
+cast_runtime negative-float-to-uint $'f64 a = -1.5;\nprint((uint)a);' "value out of range for type 'u32' at line 2, column 8"
+cast_runtime int-to-i8 $'int a = 300;\nprint((i8)a);' "value out of range for type 'i8' at line 2, column 8"
+cast_runtime negative-to-u32 $'int a = -1;\nprint((u32)a);' "value out of range for type 'u32' at line 2, column 8"
+cast_runtime nan-to-int $'f64 z = 0.0;\nf64 n = z / z;\nprint((int)n);' "value out of range for type 'i32' at line 3, column 8"
+cast_runtime huge-float-to-i64 $'f64 a = 1e300;\nprint((i64)a);' "value out of range for type 'i64' at line 2, column 8"
+expect_program_output "cast-in-range" $'int a = 100;\nprint((i8)a);\nf64 f = 3.75;\nprint((int)f);\nu32 u = 7;\nprint((int)u);\nint m = -5;\nprint((i64)m);\nprint((u8)255);\nprint((uint)3.9);\nprint((i64)5000000000);' $'100\n3\n7\n-5\n255\n3\n5000000000'
+expect_program_output "implicit-widening" $'i8 a = 5;\nint b = a;\ni64 c = b;\nu8 d = 7;\nu32 e = d;\nint g = d;\nf64 h = c;\nf32 k = 1.5;\nf64 l = k;\nprint(b + c + e + g);\nprint(h + l);' $'24\n6.500000'
+expect_program_output "small-literals-without-cast" $'u8 b = 200;\ni8 c = -5;\nb = 201;\nfn u8 f() { return 255; }\nfn void g(i8 x) { print(x); }\nprint(b);\nprint(c);\nprint(f());\ng(-128);' $'201\n-5\n255\n-128'
+expect_compile_error "cast-const-int-overflow" 'print((int)5000000000);' "числовой литерал вне диапазона типа 'int/i32'"
+expect_compile_error "cast-const-negative-float-to-uint" 'print((uint)-1.5);' "значение -1.5 не помещается в тип 'uint/u32'"
+expect_compile_error "cast-const-i8" 'print((i8)300);' "числовой литерал вне диапазона типа 'i8'"
+expect_compile_error "implicit-i64-to-int" $'i64 a = 1;\nint b = a;' 'нужно явное приведение'
+expect_compile_error "implicit-int-to-uint" $'int a = 1;\nuint b = a;' 'нужно явное приведение'
+expect_compile_error "implicit-i64-to-f32" $'i64 a = 1;\nf32 b = a;' 'нужно явное приведение'
+expect_compile_error "implicit-float-to-int" $'f64 a = 1.5;\nint b = a;' 'нужно явное приведение'
+expect_compile_error "implicit-f64-to-f32" $'f64 a = 1.5;\nf32 b = a;' 'нужно явное приведение'
+expect_compile_error "implicit-narrow-argument" $'fn void f(i8 x) { print(x); }\nint a = 1;\nf(a);' "аргумент 1 функции 'f': ожидался 'i8', получен 'int/i32'; возможна потеря значения"
+expect_compile_error "implicit-narrow-return" $'fn u8 f(int x) { return x; }\nprint(f(1));' "функция должна вернуть 'byte/u8', получено 'int/i32'; возможна потеря"
+expect_compile_error "implicit-narrow-assign" $'u8 b = 1;\nint a = 300;\nb = a;' "нельзя присвоить 'int/i32' значению типа 'byte/u8'; возможна потеря"
+expect_compile_error "small-literal-out-of-range" 'u8 b = 256;' "числовой литерал вне диапазона типа 'byte/u8'"
+
 # Step 4b: PR22 struct parameters are aggregate copies, not aliases.
 expect_program_output "struct-by-value-copy" "$(cat examples/struct_by_value.svx)" $'17\n3\n4\n3'
 expect_program_output "struct-by-value-nested" $'tip Inner { int x = 2; }\ntip Outer { tip Inner inner = { x = 7; }; int y = 3; }\nfn int change(tip Outer value) { svi tip Inner lor replacement = { x = 9; }; value.inner = replacement; return value.inner.x + value.y; }\nsvi tip Outer lor original = { inner = { x = 5; }; y = 4; };\nprint(change(original)); print(original.inner.x);' $'13\n5'

@@ -467,6 +467,8 @@ private:
             const std::set<std::string> numeric = {"i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "char"};
             if (!knownType(target))
                 error(node, "неизвестный тип преобразования '" + node.varType + "'");
+            else if (source == "<error>")
+                ;  // ошибка операнда уже сообщена
             else if (!numeric.count(target) || !numeric.count(source))
                 error(node, "явное преобразование между '" + typeName(source) +
                             "' и '" + typeName(target) + "' не поддерживается");
@@ -474,6 +476,22 @@ private:
                      node.left->value.find_first_of(".eE") == std::string::npos &&
                      isInteger(target) && !literalFits(target, node.left->value))
                 error(node, "числовой литерал вне диапазона типа '" + typeName(target) + "'");
+            else if (isInteger(target) && source != "<error>") {
+                const bool floatLiteral = node.left->type == NODE_NUMBER &&
+                    node.left->value.find_first_of(".eE") != std::string::npos &&
+                    node.left->value.rfind("0x", 0) != 0;
+                if (floatLiteral) {
+                    double v = 0;
+                    try { v = std::stod(node.left->value); } catch (...) {}
+                    const sc::Type t = ty(target);
+                    const double low = t.isUnsigned() ? -1.0 : -std::ldexp(1.0, static_cast<int>(t.width) - 1) - 1.0;
+                    const double high = std::ldexp(1.0, static_cast<int>(t.isUnsigned() ? t.width : t.width - 1));
+                    if (!(v > low && v < high))
+                        error(node, "значение " + node.left->value + " не помещается в тип '" + typeName(target) + "'");
+                } else if (constantInteger(*node.left) && !constantFits(*node.left, target)) {
+                    error(node, "значение константного выражения не помещается в тип '" + typeName(target) + "'");
+                }
+            }
             return target;
         }
         case NODE_ADDR: {
@@ -732,6 +750,34 @@ private:
                   "не помещается в тип '" + typeName(resultType) + "'");
     }
 
+    // Константа (литерал или константное целое выражение), точно представимая в target.
+    bool constantFits(const Node& value, const std::string& targetRaw) const {
+        const sc::Type target = ty(normalize(targetRaw));
+        if (!target.isInteger() && !target.isFloat()) return false;
+        if (value.type == NODE_NUMBER && value.varType.empty() &&
+            value.value.find_first_of(".eE") != std::string::npos)
+            return target.isFloat() && literalFits(target.toString(), value.value);
+        const auto v = constantInteger(value);
+        if (!v) return false;
+        if (target.isFloat()) {
+            const __int128 limit = static_cast<__int128>(1) << (target.width == 32 ? 24 : 53);
+            return *v >= -limit && *v <= limit;
+        }
+        const unsigned w = target.width;
+        const __int128 low = target.isUnsigned() ? 0 : -(static_cast<__int128>(1) << (w - 1));
+        const __int128 high = target.isUnsigned() ? (static_cast<__int128>(1) << w) - 1
+                                                  : (static_cast<__int128>(1) << (w - 1)) - 1;
+        return *v >= low && *v <= high;
+    }
+
+    std::string castHint(const std::string& expected, const std::string& actual) const {
+        const sc::Type e = ty(normalize(expected));
+        const sc::Type a = ty(normalize(actual));
+        if ((e.isInteger() || e.isFloat()) && (a.isInteger() || a.isFloat()))
+            return "; возможна потеря значения, нужно явное приведение: (" + typeName(normalize(expected)) + ") значение";
+        return "";
+    }
+
     std::string binary(const Node& node) {
         std::string left = expression(*node.left);
         if (node.op == "!") {
@@ -902,13 +948,14 @@ private:
             std::string actual = expression(node.args[i]);
             const std::string expectedType = i < count
                 ? normalize(function->second.parameters[i]) : std::string();
-            const bool fittingLiteral = i < count && node.args[i].type == NODE_NUMBER &&
-                literalFits(expectedType, node.args[i].value);
+            const bool fittingLiteral = i < count && (constantFits(node.args[i], expectedType) ||
+                (node.args[i].type == NODE_NUMBER && literalFits(expectedType, node.args[i].value)));
             if (i < count && actual != "<error>" &&
                 !compatible(function->second.parameters[i], actual) && !fittingLiteral) {
                 error(node.args[i], "аргумент " + std::to_string(i + 1) + " функции '" +
                       node.varName + "': ожидался '" + typeName(function->second.parameters[i]) +
-                      "', получен '" + typeName(actual) + "'");
+                      "', получен '" + typeName(actual) + "'" +
+                      castHint(function->second.parameters[i], actual));
             }
         }
         return function->second.returnType;
@@ -1024,10 +1071,11 @@ private:
             const bool literalInRange = numericLiteral && literalFits(effectiveType, node.left->value);
             if (numericLiteral && !literalInRange) {
                 error(*node.left, "числовой литерал вне диапазона типа '" + typeName(effectiveType) + "'");
-            } else if (!inferType && actual != "<error>" && !compatible(node.varType, actual) && !literalInRange) {
+            } else if (!inferType && actual != "<error>" && !compatible(node.varType, actual) &&
+                       !literalInRange && !constantFits(*node.left, node.varType)) {
                 error(node, "переменная '" + node.varName + "' имеет тип '" +
                       typeName(effectiveType) + "', но инициализируется значением типа '"+
-                      typeName(actual) + "'");
+                      typeName(actual) + "'" + castHint(effectiveType, actual));
             }
             // Variable with initializer is considered initialized
             bool dynArrayInit = false;
@@ -1062,8 +1110,9 @@ private:
                     value.value.find_first_of(".eE") == std::string::npos &&
                     elementIsInteger;
                 actual = contextualIntegerLiteral ? element : expression(value);
-                if (actual != "<error>" && !compatible(element, actual))
-                    error(value, "элемент массива должен иметь тип '" + typeName(element) + "'");
+                if (actual != "<error>" && !compatible(element, actual) && !constantFits(value, element))
+                    error(value, "элемент массива должен иметь тип '" + typeName(element) + "'" +
+                          castHint(element, actual));
             }
             unsigned length = node.args.size();
             sc::Type arrayType = sc::Type::arrayTy(sc::Type::from(element), length);
@@ -1180,8 +1229,10 @@ private:
                         : isInteger(expected) && literalFits(expected, literal->value);
                 }
             }
-            if (actual != "<error>" && !compatible(expected, actual) && !literalArithmeticFits)
-                error(node, "нельзя присвоить '" + typeName(actual) + "' значению типа '" + typeName(expected) + "'");
+            if (actual != "<error>" && !compatible(expected, actual) && !literalArithmeticFits &&
+                !(node.left && constantFits(*node.left, expected)))
+                error(node, "нельзя присвоить '" + typeName(actual) + "' значению типа '" + typeName(expected) + "'" +
+                      castHint(expected, actual));
             else
                 markInitialized(node.varName);
             break;
@@ -1290,9 +1341,10 @@ private:
                 literalFits(expectedReturnType, node.left->value);
             if (node.left->type == NODE_NUMBER && isInteger(expectedReturnType) && !fittingLiteral)
                 error(node, "числовой литерал возврата вне диапазона типа '" + typeName(expectedReturnType) + "'");
-            else if (actual != "<error>" && !compatible(expectedReturnType, actual) && !fittingLiteral)
+            else if (actual != "<error>" && !compatible(expectedReturnType, actual) && !fittingLiteral &&
+                     !constantFits(*node.left, expectedReturnType))
                 error(node, "функция должна вернуть '" + typeName(returnTypes_.back()) +
-                      "', получено '" + typeName(actual) + "'");
+                      "', получено '" + typeName(actual) + "'" + castHint(expectedReturnType, actual));
             break;
         }
         case NODE_FUNC_CALL:
