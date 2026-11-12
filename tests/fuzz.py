@@ -6,7 +6,7 @@ Usage: tests/fuzz.py SC_BIN N SEED OUTDIR
 Строит N входов детерминированно из SEED (мутации примеров репозитория, случайные
 байты, глубокие/длинные конструкции, случайные программы по грамматике) и
 компилирует каждый. Чистый исход — код 0, или 1/2 с текстом ошибки в stderr.
-Всё остальное (код 3, сигнал, зависание > 10 с, ошибка без текста, отчёт
+Всё остальное (код 3, сигнал, зависание > 60 с, ошибка без текста, отчёт
 ASan/UBSan, необработанное исключение) — провал: вход сохраняется в OUTDIR, код выхода 1.
 """
 import glob
@@ -20,6 +20,12 @@ from multiprocessing import Pool
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SC, N, SEED, OUT = os.path.abspath(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), sys.argv[4]
+# Зависание — это бесконечная работа, а не «медленно». Самый тяжёлый вход (литерал
+# массива из 100000 элементов) локально идёт 1,5–1,8 с, но на раннере CI под ASan
+# с 4 процессами на 2 ядрах однажды превысил 10 с (PR #64). 60 с отделяет зависание
+# от медленной машины; процессов — по числу ядер.
+TIMEOUT_SECONDS = 60
+WORKERS = max(1, min(4, os.cpu_count() or 1))
 
 
 def load_corpus():
@@ -169,7 +175,7 @@ def make_inputs():
 
 def classify(status, err):
     if status is None:
-        return 'зависание дольше 10 с'
+        return 'зависание дольше %d с' % TIMEOUT_SECONDS
     if 'Sanitizer' in err or 'runtime error:' in err or 'terminate called' in err:
         return 'санитайзер/исключение: ' + err.strip().splitlines()[0][:120]
     if status == 3:
@@ -191,7 +197,7 @@ def run_one(job):
                    UBSAN_OPTIONS='halt_on_error=1')
         try:
             done = subprocess.run([SC, path], cwd=work, stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.PIPE, timeout=10, env=env)
+                                  stderr=subprocess.PIPE, timeout=TIMEOUT_SECONDS, env=env)
             status, err = done.returncode, done.stderr.decode('utf-8', 'replace')
         except subprocess.TimeoutExpired:
             status, err = None, ''
@@ -201,7 +207,7 @@ def run_one(job):
 def main():
     os.makedirs(OUT, exist_ok=True)
     failures = []
-    with Pool(4) as pool:
+    with Pool(WORKERS) as pool:
         for index, data, problem in pool.imap_unordered(run_one, make_inputs(), chunksize=4):
             if problem:
                 saved = os.path.join(OUT, '%05d.svx' % index)
