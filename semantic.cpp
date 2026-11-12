@@ -602,6 +602,9 @@ private:
                 const std::string modeType = expression(*node.right);
                 if (modeType != "str" && modeType != "<error>")
                     error(*node.right, "режим открытия файла должен иметь тип str");
+            } else {
+                // D-011: режим обязателен — раньше open(путь) молча открывал на запись ("w").
+                error(node, "open: укажите режим открытия вторым аргументом: open(путь, \"r\"), \"w\" или \"a\"");
             }
             return "file";
         }
