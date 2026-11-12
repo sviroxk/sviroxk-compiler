@@ -1,10 +1,10 @@
-tip Pair { int x = 0; int y = 0; }
-fn int change(tip Pair value) {
+struct Pair { int x = 0; int y = 0; }
+fn int change(Pair value) {
     value.x = value.x + 10;
     return value.x + value.y;
 }
-fn void show(tip Pair value) { print(value.x); }
-svi tip Pair lor original = { x = 3; y = 4; };
+fn void show(Pair value) { print(value.x); }
+Pair original = { x = 3; y = 4; };
 print(change(original));
 print(original.x);
 print(original.y);

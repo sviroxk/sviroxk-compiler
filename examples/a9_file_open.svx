@@ -1,4 +1,4 @@
 str path = "sc-a9.tmp";
-file output = atk(path, "a");
-zak(output);
+file output = open(path, "a");
+close(output);
 print(1);

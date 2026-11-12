@@ -1,6 +1,6 @@
-tip Player {
+struct Player {
     int health = 100;
     int speed;
 }
 
-svi tip Player lor hero;
+Player hero;

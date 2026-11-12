@@ -1,8 +1,8 @@
-tip Player {
+struct Player {
     int health = 100;
     int speed = 5;
 }
 
-svi tip Player lor hero;
+Player hero;
 hero.health = 80;
 print(hero.health);

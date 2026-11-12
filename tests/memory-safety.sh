@@ -54,12 +54,12 @@ check_case() {
 }
 
 check_case heap-release clean 'after' 1 <<'SC'
-ptr text = rep("before", "before", "after");
+ptr text = replace("before", "before", "after");
 print(text);
 del text;
 SC
 check_case dynamic-grow-release clean $'5\n10\n50\n4' 1 <<'SC'
-ptr values = nw int[0];
+ptr values = new int[0];
 values.push(10); values.push(20); values.push(30);
 values.push(40); values.push(50);
 print(values.len()); print(values[0]); print(values[4]);
@@ -67,48 +67,48 @@ values.pop(); print(values.len());
 del values;
 SC
 check_case empty-release clean '0' 1 <<'SC'
-ptr values = nw int[0];
+ptr values = new int[0];
 print(values.len());
 del values;
 SC
-# pro() returns owning heap strings that SC cannot yet release: leaks disabled here only.
+# read() returns owning heap strings that SC cannot yet release: leaks disabled here only.
 check_case file-roundtrip-eof clean $'first\n\nsecond\n0\nfirst\n' <<'SC'
-file output = atk("roundtrip.txt", "w");
-zap(output, "first\nsecond"); zak(output);
-file input = atk("roundtrip.txt", "r");
-str first = pro(input); str second = pro(input); str eof = pro(input);
-print(first); print(second); print(ar(eof)); print(first);
-zak(input);
+file output = open("roundtrip.txt", "w");
+write(output, "first\nsecond"); close(output);
+file input = open("roundtrip.txt", "r");
+str first = read(input); str second = read(input); str eof = read(input);
+print(first); print(second); print(len(eof)); print(first);
+close(input);
 SC
 check_case dynamic-negative-read runtime 'SC runtime error: array index out of bounds' <<'SC'
-ptr values = nw int[2];
+ptr values = new int[2];
 int index = -1;
 print(values[index]);
 SC
 check_case dynamic-upper-write runtime 'SC runtime error: array index out of bounds' <<'SC'
-ptr values = nw int[2];
+ptr values = new int[2];
 i64 index = values.len();
 values[index] = 9;
 SC
 check_case missing-file runtime "SC runtime error: cannot open file 'missing/file.txt'" <<'SC'
-file input = atk("missing/file.txt", "r");
-str line = pro(input);
+file input = open("missing/file.txt", "r");
+str line = read(input);
 print(line);
 SC
 # Self-tests deliberately exercise the current lack of ownership/lifetime checks.
 # Future checked pointers may replace these with controlled SC diagnostics.
 check_case use-after-delete detector heap-use-after-free <<'SC'
-ptr values = nw int[2];
+ptr values = new int[2];
 del values;
 print(values[0]);
 SC
 check_case double-delete detector attempting\ double-free <<'SC'
-ptr values = nw int[2];
+ptr values = new int[2];
 del values;
 del values;
 SC
 check_case raw-pointer-overrun detector heap-buffer-overflow <<'SC'
-ptr text = rep("abc", "z", "q");
+ptr text = replace("abc", "z", "q");
 print(text[1]);
 del text;
 SC

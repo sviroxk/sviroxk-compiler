@@ -1,14 +1,14 @@
-tip Point {
+struct Point {
     i32 x = 0;
     i32 y = 0;
 }
 
-tip Rect {
+struct Rect {
     Point top_left = { x = 1; y = 2; };
     Point bottom_right = { x = 3; y = 4; };
 }
 
-svi tip Rect lor rect = {
+Rect rect = {
     top_left = { x = 1; y = 2; },
     bottom_right = { x = 3; y = 4; }
 };

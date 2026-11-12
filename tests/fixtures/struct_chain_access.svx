@@ -1,14 +1,14 @@
-tip Point {
+struct Point {
     i32 x = 0;
     i32 y = 0;
 }
 
-tip Rect {
+struct Rect {
     Point top_left = { x = 1; y = 2; };
     Point bottom_right = { x = 3; y = 4; };
 }
 
-svi tip Rect lor rect = {
+Rect rect = {
     top_left = { x = 1; y = 2; },
     bottom_right = { x = 3; y = 4; }
 };
@@ -19,24 +19,24 @@ print(rect.bottom_right.x);
 print(rect.bottom_right.y);
 
 // Дополнительные тесты вложенного доступа
-tip Inner {
+struct Inner {
     i32 val = 0;
 }
-tip Outer {
+struct Outer {
     Inner inner = { val = 42 };
 }
-svi tip Outer lor outer;
+Outer outer;
 print(outer.inner.val);
 
 // Цепной доступ через именованные поля
-tip A {
+struct A {
     i32 x = 0;
 }
-tip B {
+struct B {
     A a = { x = 5 };
 }
-tip C {
+struct C {
     B b = { a = { x = 7 } };
 }
-svi tip C lor c;
+C c;
 print(c.b.a.x);

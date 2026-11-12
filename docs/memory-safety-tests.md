@@ -8,7 +8,7 @@
 
 | Режим | Случаи | Успех |
 |---|---|---|
-| clean | heap `rep`/`del`, рост dynamic array с сохранением данных и `pop` statement, пустой array/`del`, file write/read/EOF/close | Точный stdout, exit 0, пустой stderr |
+| clean | heap `replace`/`del`, рост dynamic array с сохранением данных и `pop` statement, пустой array/`del`, file write/read/EOF/close | Точный stdout, exit 0, пустой stderr |
 | runtime | отрицательный dynamic index при чтении, index == length при записи, отсутствующий файл | SC runtime diagnostic, exit 1, без sanitizer report |
 | detector | чтение dynamic array после `del`, повторный `del`, выход за выделение через raw ptr | Только ожидаемый класс AddressSanitizer и exit 86 |
 
@@ -16,7 +16,7 @@
 Компиляция и каждый запуск ограничены таймаутом. Signal/crash/timeout без нужного
 sanitizer report никогда не считается успешной отрицательной проверкой.
 У 3 корректных heap lifecycle cases включён `detect_leaks=1`.
-У file read и аварийных завершений — `detect_leaks=0`: строки `pro()` пока нельзя
+У file read и аварийных завершений — `detect_leaks=0`: строки `read()` пока нельзя
 освободить через `del`, а аварийный exit не выполняет cleanup. Это исключение
 не распространяется на compiler/API tests под ASan/UBSan/LeakSanitizer.
 

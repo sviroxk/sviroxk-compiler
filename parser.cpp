@@ -1,3 +1,4 @@
+#include <set>
 #include <map>
 #include "parser.h"
 #include "diagnostics.h"
@@ -25,6 +26,7 @@ static constexpr unsigned kMaxFailCalls = 10000;
 unsigned failCalls = 0;
 bool parseStopped = false;
 std::vector<Token> gtokens;
+std::set<std::string> structNames;  // имена, объявленные через struct
 template <typename... Args>
 std::shared_ptr<Node> makeNode(Args&&... args) {
     return std::make_shared<Node>(std::forward<Args>(args)...);
@@ -182,7 +184,7 @@ std::string canonicalType(const std::string& type) {
 // PR22 spelling: `tip Name` in parameter and nested-field type positions.
 std::string declaredType(const Token& token) {
     if (token.type == TIP)
-        return expect(IDENTIFIER, "имя структуры после 'tip'").value;
+        return expect(IDENTIFIER, "имя структуры после 'struct'").value;
     return canonicalType(token.value);
 }
 
@@ -205,6 +207,37 @@ Node compoundValue(const Token& operation, const Node& target, const Node& value
     binary.left = makeNode(target);
     binary.right = makeNode(value);
     return binary;
+}
+
+Node parseStructInstance(const Token& declarationToken, const std::string& structName,
+                         const std::string& varName) {
+    Node node;
+    node.line = declarationToken.line;
+    node.column = declarationToken.column;
+    node.file = declarationToken.file;
+    node.type = NODE_STRUCT_INSTANCE;
+    node.varType = structName;
+    node.varName = varName;
+    if (peek().type == EQUALS && peek(1).type == LBRACE) {
+        consume();
+        expect(LBRACE);
+        while (peek().type != RBRACE && peek().type != END) {
+            Node init;
+            if (isNameToken(peek().type) && peek(1).type == EQUALS) {
+                init.varName = consume().value;
+                consume();
+                init.left = makeNode(parseExpr());
+            } else {
+                init.left = makeNode(parseExpr());
+            }
+            node.children.push_back(init);
+            if (peek().type == COMMA || peek().type == SEMICOLON)
+                consume();
+        }
+        expect(RBRACE);
+    }
+    expect(SEMICOLON);
+    return node;
 }
 
 Node parseStructLiteral() {
@@ -297,7 +330,7 @@ Node parsePrimary() {
     if (peek().type == VV_S) {
         consume();
         Node left; left.type = NODE_INPUT;
-        left.varType = "cos";
+        left.varType = "str";
         expect(LPAREN);
         left.value = consume().value;
         expect(RPAREN);
@@ -360,7 +393,7 @@ Node parsePrimary() {
         left.value = t.value;
         left.varType = "char";
     }
-    else if (t.type == STRING) { left.type = NODE_STRING; left.value = t.value; left.varType = "cos"; }
+    else if (t.type == STRING) { left.type = NODE_STRING; left.value = t.value; left.varType = "str"; }
     else if (t.type == COP) {
         left.type = NODE_FUNC_CALL;
         left.varName = consume().value;
@@ -390,7 +423,7 @@ Node parsePrimary() {
             consume();
             Token field = consume();
             // Array methods: arr.push(x), arr.pop(), arr.resize(n), arr.len(), arr.cap()
-            if (field.type == IDENTIFIER && field.value == "push") {
+            if (field.value == "push") {
                 left.type = NODE_ARRAY_PUSH;
                 left.varName = t.value;
                 left.line = field.line;
@@ -399,7 +432,7 @@ Node parsePrimary() {
                 expect(LPAREN);
                 left.left = makeNode(parseExpr());
                 expect(RPAREN);
-            } else if (field.type == IDENTIFIER && field.value == "pop") {
+            } else if (field.value == "pop") {
                 left.type = NODE_ARRAY_POP;
                 left.varName = t.value;
                 left.line = field.line;
@@ -407,7 +440,7 @@ Node parsePrimary() {
                 left.file = field.file;
                 expect(LPAREN);
                 expect(RPAREN);
-            } else if (field.type == IDENTIFIER && field.value == "resize") {
+            } else if (field.value == "resize") {
                 left.type = NODE_ARRAY_RESIZE;
                 left.varName = t.value;
                 left.line = field.line;
@@ -416,7 +449,7 @@ Node parsePrimary() {
                 expect(LPAREN);
                 left.left = makeNode(parseExpr());
                 expect(RPAREN);
-            } else if (field.type == IDENTIFIER && field.value == "len") {
+            } else if (field.value == "len") {
                 left.type = NODE_ARRAY_LEN;
                 left.varName = t.value;
                 left.line = field.line;
@@ -424,7 +457,7 @@ Node parsePrimary() {
                 left.file = field.file;
                 expect(LPAREN);
                 expect(RPAREN);
-            } else if (field.type == IDENTIFIER && field.value == "cap") {
+            } else if (field.value == "cap") {
                 left.type = NODE_ARRAY_CAP;
                 left.varName = t.value;
                 left.line = field.line;
@@ -697,6 +730,11 @@ void parseDeclBody(Node& node, bool isArray) {
 }
 
 Node parseOne() {
+    // P p; / P p = { ... }; — переменная-структура
+    if (peek().type == IDENTIFIER && structNames.count(peek().value) && peek(1).type == IDENTIFIER) {
+        Token declarationToken = consume();
+        return parseStructInstance(declarationToken, declarationToken.value, consume().value);
+    }
     // Short variable and constant declarations.
     if (peek().type == LET || peek().type == CONST_T) {
         Token declarationToken = consume();
@@ -748,41 +786,14 @@ Node parseOne() {
         parseDeclBody(node, isArray);
         return node;
     }
-    // svi
+    // svi (удалено, разбирается для подсказки)
     if (peek().type == SVI) {
         Token declarationToken = consume();
         if (peek().type == TIP) {
             consume();
             std::string structName = consume().value;
             expect(LOR);
-            std::string varName = consume().value;
-            Node node;
-            node.line = declarationToken.line;
-            node.column = declarationToken.column;
-            node.file = declarationToken.file;
-            node.type = NODE_STRUCT_INSTANCE;
-            node.varType = structName;
-            node.varName = varName;
-            if (peek().type == EQUALS && peek(1).type == LBRACE) {
-                consume();
-                expect(LBRACE);
-                while (peek().type != RBRACE && peek().type != END) {
-                    Node init;
-                    if (isNameToken(peek().type) && peek(1).type == EQUALS) {
-                        init.varName = consume().value;
-                        consume();
-                        init.left = makeNode(parseExpr());
-                    } else {
-                        init.left = makeNode(parseExpr());
-                    }
-                    node.children.push_back(init);
-                    if (peek().type == COMMA || peek().type == SEMICOLON)
-                        consume();
-                }
-                expect(RBRACE);
-            }
-            expect(SEMICOLON);
-            return node;
+            return parseStructInstance(declarationToken, structName, consume().value);
         }
         Token declaredType = consume();
         if (!isTypeName(declaredType.value))
@@ -841,7 +852,7 @@ Node parseOne() {
         node.column = peek().column;
         node.file = peek().file;
         consume();
-        node.varType = "rox";
+        node.varType = "i32";
         if (peek().type == VOID_T) {
             consume();
             node.varType = "void";
@@ -866,9 +877,10 @@ Node parseOne() {
         expect(LPAREN);
         while (peek().type != RPAREN && peek().type != END) {
             Token typeToken = consume();
-            if (typeToken.type != TIP && !isTypeToken(typeToken.type))
+            const bool structType = typeToken.type == IDENTIFIER;  // имя структуры; существование проверит семантика
+            if (typeToken.type != TIP && !structType && !isTypeToken(typeToken.type))
                 failAt(typeToken, "ожидался тип параметра функции");
-            if (typeToken.type != TIP && !isTypeName(typeToken.value))
+            if (typeToken.type != TIP && !structType && !isTypeName(typeToken.value))
                 failAt(typeToken, "неизвестный тип параметра '" + typeToken.value + "'");
             std::string ptype = declaredType(typeToken);
             Token parameterName = peek();
@@ -944,7 +956,7 @@ Node parseOne() {
     if (peek().type == VV_S) {
         consume();
         Node node; node.type = NODE_INPUT;
-        node.varType = "cos"; // строка
+        node.varType = "str"; // строка
         expect(LPAREN);
         node.value = consume().value;
         expect(RPAREN);
@@ -1123,7 +1135,7 @@ Node parseOne() {
     if (peek().type == IDENTIFIER && peek(1).type == DOT) {
         Token name = peek();
         Token field = peek(2);
-        if (field.type == IDENTIFIER &&
+        if ((field.type == IDENTIFIER || field.type == AR) &&
             (field.value == "push" || field.value == "pop" ||
              field.value == "resize" || field.value == "len" || field.value == "cap")) {
             consume(); // identifier
@@ -1333,9 +1345,10 @@ Node parseOne() {
     // cert
     if (peek().type == CERT) {
         Node node;
-        consume();
-        Token kind = consume();
-        node.type = (kind.type == CEH) ? NODE_LOOP_N : NODE_LOOP_W;
+        Token loopToken = consume();
+        node.line = loopToken.line; node.column = loopToken.column; node.file = loopToken.file;
+        if (loopToken.value == "repeat") node.type = NODE_LOOP_N;  // repeat (n) { ... }
+        else node.type = (consume().type == CEH) ? NODE_LOOP_N : NODE_LOOP_W;
         expect(LPAREN);
         node.left = makeNode(parseExpr());
         expect(RPAREN);
@@ -1375,6 +1388,7 @@ Node parseOne() {
         node.column = peek().column;
         consume();
         node.varName = consume().value;
+        structNames.insert(node.varName);
         expect(LBRACE);
         while (peek().type != RBRACE && peek().type != END) {
             Node field; field.type = NODE_VAR_DECL;
@@ -1407,6 +1421,9 @@ void reportRemovedWords() {
         {"eles", "if"}, {"sele", "else"}, {"brk", "break"}, {"cont", "continue"},
         {"rox", "int"}, {"rox64", "long"}, {"dor", "float"}, {"cos", "string"},
         {"bue", "bool"}, {"chr", "char"},
+        {"tip", "struct"}, {"nw", "new"}, {"atk", "open"}, {"zap", "write"}, {"pro", "read"},
+        {"zak", "close"}, {"vd", "input_int"}, {"vv_s", "input_str"}, {"flo", "floor"},
+        {"cel", "ceil"}, {"ron", "round"}, {"ran", "rand"}, {"ar", "len"}, {"rep", "replace"},
     };
     for (size_t i = 0; i < gtokens.size(); ++i) {
         const Token& token = gtokens[i];
@@ -1419,6 +1436,12 @@ void reportRemovedWords() {
             message = "слово 'cop' удалено: вызов функции пишется без него, 'f(...)'";
         else if (token.type == CERT && i + 1 < gtokens.size() && gtokens[i + 1].type == USY)
             message = "форма 'cert usy (...)' удалена: пишите 'while (...)'";
+        else if (token.type == CERT && token.value == "cert")
+            message = "форма 'cert ceh (n)' удалена: пишите 'repeat (n)'";
+        else if (token.type == SVI)
+            message = "форма 'svi T lor x' удалена: пишите 'T x = …;' (для структуры 'P x;')";
+        else if (token.type == SER)
+            message = "слово 'ser' удалено: строки сравниваются через 'a == b'";
         if (message.empty()) continue;
         ++parseErrorCount;
         sc::reportDiagnostic(token.file, token.line, token.column, "syntax", message);

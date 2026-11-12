@@ -6,17 +6,17 @@
 
 **Варианты:**
 1. Ввести сразу `use math` и квалифицированные `math.abs`.
-2. Использовать относительный `imp "path/file.svx"` и именованные функции с префиксом модуля.
+2. Использовать относительный `import "path/file.svx"` и именованные функции с префиксом модуля.
 
-**Выбор:** вариант 2 до появления per-module AST/symbol tables. Сейчас `imp` рекурсивно склеивает токены в общий compilation unit, поэтому `use`/qualified lookup потребовали бы поверхностной подстановки имён и создали бы конфликты. Путь и API явно отражают реальное поведение: `stdlib/math/math.svx`, `math_abs(...)`.
+**Выбор:** вариант 2 до появления per-module AST/symbol tables. Сейчас `import` рекурсивно склеивает токены в общий compilation unit, поэтому `use`/qualified lookup потребовали бы поверхностной подстановки имён и создали бы конфликты. Путь и API явно отражают реальное поведение: `stdlib/math/math.svx`, `math_abs(...)`.
 
 **Последствия:** старый синтаксис сохраняется; namespace call syntax отложен до реализации symbol resolution. Не документировать `use math` как поддерживаемый API.
 
-## D-002. Возврат результата `rep`
+## D-002. Возврат результата `replace`
 
 **Статус:** текущий legacy-контракт.
 
-**Выбор:** `rep(source, needle, replacement)` заменяет первое вхождение, выделяет новый `ptr`; вызывающий обязан вызвать `del`. На allocation failure/size overflow backend сейчас завершает процесс через `abort`.
+**Выбор:** `replace(source, needle, replacement)` заменяет первое вхождение, выделяет новый `ptr`; вызывающий обязан вызвать `del`. На allocation failure/size overflow backend сейчас завершает процесс через `abort`.
 
 **Причина:** в текущем языке нет string-with-length и Result/OOM error contract. Fixed-size stack buffer был небезопасен; heap result без скрытого владения хотя бы имеет явный release.
 
@@ -38,8 +38,8 @@
 ## D-005. Перенос структур по значению из PR22 (шаг 4б)
 
 **Источник поведения:** закрытый PR22 `edcaacf`, stage 5 `5cfce47`.
-Параметр `tip Name value` — aggregate copy в локальный слот функции; скалярные
-и вложенные value-поля независимы от исходной переменной. `tip Inner field`
+Параметр `Name value` — aggregate copy в локальный слот функции; скалярные
+и вложенные value-поля независимы от исходной переменной. `Inner field`
 добавлен как историческая запись типа вложенного поля; bare `Inner field` сохранён.
 Типы структур регистрируются до LLVM function signatures, параметр получает
 metadata для lookup полей. Существующий load aggregate переменной уже подходит

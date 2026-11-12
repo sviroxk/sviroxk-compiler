@@ -1,2 +1,2 @@
-svi int[] lor values = [1, 2];
+int[] values = [1, 2];
 print(values[2]);

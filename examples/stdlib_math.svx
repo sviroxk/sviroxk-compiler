@@ -1,4 +1,4 @@
-imp "../stdlib/math/math.svx";
+import "../stdlib/math/math.svx";
 
 let absolute: long = math_abs(-17);
 let lower: long = math_min(absolute, 12);

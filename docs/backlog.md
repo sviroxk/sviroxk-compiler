@@ -4,7 +4,7 @@
 
 ## План переноса PR22 (по указанию владельца)
 - [x] 4а — объявления функций без тела (#27).
-- [x] 4б — структуры по значению: `tip Name` параметры, `tip Inner field`, preregistration LLVM types, lookup полей параметра. 4 output cases + 6 semantic errors проверены; `examples/struct_by_value.svx`.
+- [x] 4б — структуры по значению: `struct Name` параметры, `Inner field`, preregistration LLVM types, lookup полей параметра. 4 output cases + 6 semantic errors проверены; `examples/struct_by_value.svx`.
 - [x] 4в — `defer`: LIFO, ранний return, if/else, все формы циклов, break/continue и lexical bindings. 8 output + 8 diagnostic cases; временно только обычные операции/вызовы (D-006).
 - [x] Техническая уборка между 4в/4г: README с проверенными примерами и авторами, каноническая Apache 2.0, fixtures в tests/examples, локальная .vscode исключена.
 - [ ] 4г — `drop`: при переносе исправить double-drop и чтение после drop из PR22.
@@ -23,7 +23,7 @@
 - [~] Shared diagnostics показывают source excerpt/caret; parser собирает несколько syntax errors с синхронизацией по `;`/`}`; lexer recovery и richer diagnostic codes ещё отсутствуют.
 - [ ] Проверка definite assignment и return analysis для вложенных control-flow.
 - [ ] Корректность LLVM IR при ранних return, вложенных циклах, break/continue.
-  - [x] Исправлен PHI в выражении `pop()`: `ptr v = nw rox[0]; v.push(1); print(v.pop());` теперь печатает `1` вместо compiler exit 3. Проверены рост, пустой массив, LIFO/длина, несколько pop в выражении, if и floating-point zero; 4 regression cases входят в обычный и ASan-прогон.
+  - [x] Исправлен PHI в выражении `pop()`: `ptr v = new int[0]; v.push(1); print(v.pop());` теперь печатает `1` вместо compiler exit 3. Проверены рост, пустой массив, LIFO/длина, несколько pop в выражении, if и floating-point zero; 4 regression cases входят в обычный и ASan-прогон.
 - [ ] Namespace modules, visibility, stable symbol resolution.
 
 ## P2 — библиотека и инструментальная цепочка

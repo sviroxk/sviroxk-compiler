@@ -36,9 +36,9 @@
 - Следующий приоритет: улучшить parser recovery / устранить глобальное состояние, либо сделать целочисленные касты checked runtime operation.
 
 ## Цикл 3 — безопасная замена строк
-- Воспроизведён дефект legacy `rep`: фиксированный 512-byte stack buffer переполнялся на длинной строке; при совпадении результат был исходной строкой с replacement, дописанным в конец, а не заменой фрагмента.
+- Воспроизведён дефект legacy `replace`: фиксированный 512-byte stack buffer переполнялся на длинной строке; при совпадении результат был исходной строкой с replacement, дописанным в конец, а не заменой фрагмента.
 - Backend переписан: вычисляет длины, ищет первое совпадение, checked-add размера, heap alloc точного объёма, memcpy prefix/replacement/tail; отсутствие совпадения возвращает отдельную heap copy. Результат имеет тип `ptr`; caller должен `del`.
-- Семантика проверяет все три аргумента `rep` как `str`; отрицательный test на integer argument.
+- Семантика проверяет все три аргумента `replace` как `str`; отрицательный test на integer argument.
 - Добавлен integration example с заменой в середине строки, отсутствующим needle и строкой больше прежнего лимита; обе возвращённые строки освобождаются.
 - Обычный `./test.sh`: прошёл. ASan/UBSan + LeakSanitizer `detect_leaks=1`: прошёл.
 - OOM и размерный overflow в текущем generated code завершаются `abort`, не Result/diagnostic; semantics заменяет первое совпадение. Это документировано как остаточное ограничение.
@@ -95,7 +95,7 @@
 
 ## Цикл 9 — динамические массивы: length/capacity и runtime bounds check
 - Добавлен в `Symbol` учёт `isDynArray`, `dynArrayElementType`, `dynArrayLength`, `dynArrayCapacity`.
-- `NODE_DYN_ARRAY` (`nw T[n]`) в семантике возвращает `ptr`; дескриптор `{ptr data; i64 length; i64 capacity}` выделяется через `malloc` в codegen.
+- `NODE_DYN_ARRAY` (`new T[n]`) в семантике возвращает `ptr`; дескриптор `{ptr data; i64 length; i64 capacity}` выделяется через `malloc` в codegen.
 - `emitArrayBoundsCheck` переписан на динамическую длину (i64), статические массивы передают `getInt64(n)`.
 - Добавлены runtime bounds checks для динамического array access/assign (negative и `>= length` → diagnostic + exit).
 - OOM при `malloc` ведёт к `abort()` (допуск: не Result/diagnostic).
@@ -108,7 +108,7 @@
 - `compatible()` в Checker теперь делегирует напрямую в `sc::Type::compatible()` — исторические исключения `char <-> u8`, `ptr <-> array/dynarray` перенесены в сам тип.
 - `fitsNumericLiteral()` переписан через `sc::Type::fitsLiteral()` + `fitsArithmeticLiteral()` (отвергает узкие типы narrower 32 бит и float-литералы для целевых типов).
 - `binary()` арифметического promotion делегирует в `sc::Type::commonType()` — устранена дублирующая логика смешанной signedness; несовместимые пары теперь дают контролируемую semantic-ошибку вместо silent `i32`.
-- `sc::Type::from()` нормализует все синонимы (`int/i32/rox`, `uint/u32`, `byte/u8`, `array<...>` → Array, `dyn<...>` → DynArray, неизвестное → Struct).
+- `sc::Type::from()` нормализует все синонимы (`int/i32`, `uint/u32`, `byte/u8`, `array<...>` → Array, `dyn<...>` → DynArray, неизвестное → Struct).
 - `Type::toString()` даёт каноническое представление; `isConvertibleTo()`, `promote()`, `isScalar()`/`isNumeric()` — вспомогательные предикаты для semantic/codegen.
 - `./test.sh`: все 68 примеров + CLI + 28 негативных fixture + импорт/циклы — зелёно.
 - `CXXFLAGS='-Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer' ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1 ./test.sh`: прошёл.
@@ -131,7 +131,7 @@
 - Коммит `171c14d`. Stage 3 (переменные, константы, выражения, definite assignment) — 100%.
 
 ## Stage 4 — динамические массивы: push/pop/resize/len/cap
-- `nw T[n]` в codegen выставлял `length = 0`, `capacity = n`. **Изменено на шаге 3:** `nw T[n]` создаёт n обнулённых элементов (`length = capacity = n`, как `new T[n]()` в C++ и `make([]T, n)` в Go); пустой массив — `nw T[0]`, затем `push`.
+- `new T[n]` в codegen выставлял `length = 0`, `capacity = n`. **Изменено на шаге 3:** `new T[n]` создаёт n обнулённых элементов (`length = capacity = n`, как `new T[n]()` в C++ и `make([]T, n)` в Go); пустой массив — `new T[0]`, затем `push`.
 - Добавлен `NODE_ARRAY_POP` в `genNode`: уменьшает length на 1 при ненулевой длине, без side-effect в противном случае.
 - `NODE_ARRAY_POP` также поддерживается в `genExpr` (возвращает последний элемент).
 - `NODE_ARRAY_PUSH` / `NODE_ARRAY_RESIZE` в `genNode` используют `growDynArray` с умножением capacity (минимум 1).
@@ -161,7 +161,7 @@
 
 
 ## Исправление pop() expression — PHI predecessors
-- Baseline `1ec686b`: сначала добавлены 4 regression cases в `test.sh`; первый (`nw rox[0]`, `push(1)`, `print(v.pop())`) провалился с compiler exit 3, `PHI node entries do not match predecessors`.
+- Baseline `1ec686b`: сначала добавлены 4 regression cases в `test.sh`; первый (`new int[0]`, `push(1)`, `print(v.pop())`) провалился с compiler exit 3, `PHI node entries do not match predecessors`.
 - В `genExpr(NODE_ARRAY_POP)` сохранён блок перед условным переходом. Именно из него идёт empty-array ветка в `pop_done`; раньше PHI неверно ссылался на сам `pop_done`. Statement lowering и контракт empty pop = typed zero не менялись.
 - Regression coverage: pop после роста, повторный pop пустого массива, LIFO/длина и два pop в одном выражении, pop внутри if, f64 значение/нулевой результат. Все 4 cases проходят и попадают в ASan-прогон.
 - LLVM 18.1.8: strict build, полный `test.sh` (97 программ под ASan + 10 memory-safety cases), отдельный conformance 3/3, полный ASan/UBSan/LeakSanitizer suite прошли. Termux/ARM64 и allocator/OOM paths не проверялись.
@@ -170,7 +170,7 @@
 ## Шаг 4б — структуры по значению из закрытого PR22
 - Сопоставлены PR22 `edcaacf`/stage5 `5cfce47` и main `d578daa`. Существующие nested literals/read, aggregate assignment и структуры внутри функций (#25) сохранены без переписывания; недостижимая дополнительная materialization не перенесена.
 - До правки добавлены 4 output regressions и 6 expected-errors с текстом. На отдельной сборке чистой базы все 10 новых ожиданий проваливаются (parser exit 1); полный test.sh также воспроизвёл отказ на первом новом случае.
-- Добавлены только `tip Name` в параметрах/вложенных полях, preregistration struct types перед LLVM function signatures и field lookup для параметров-структур. Положительные cases проверяют копию, nested aggregate replacement/read, forward declaration/mixed arguments, u8/f64 layout.
+- Добавлены только `struct Name` в параметрах/вложенных полях, preregistration struct types перед LLVM function signatures и field lookup для параметров-структур. Положительные cases проверяют копию, nested aggregate replacement/read, forward declaration/mixed arguments, u8/f64 layout.
 - LLVM 18.1.8: strict build, полный test.sh (101 программа под ASan + 10 memory-safety cases), conformance 3/3 и полный ASan/UBSan/LeakSanitizer прошли. Ошибки проверяют неизвестные типы/поля, неверный аргумент, несовпадение forward signature и рекурсию.
 - `defer`/`drop`, struct returns, anonymous struct arguments, ownership/clone ABI и checked casts не добавлялись. Termux/ARM64 и внешний ABI не проверялись. Следующий шаг плана — `defer`.
 

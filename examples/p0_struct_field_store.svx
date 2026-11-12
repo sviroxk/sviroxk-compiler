@@ -1,6 +1,6 @@
-tip Item {
+struct Item {
     i64 id = 1;
 }
-svi tip Item lor item;
+Item item;
 item.id = 9223372036854775806;
 print(item.id);

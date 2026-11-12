@@ -1,5 +1,5 @@
-tip Item {
+struct Item {
     i64 id = 1;
 }
-svi tip Item lor item;
+Item item;
 print(item.id);

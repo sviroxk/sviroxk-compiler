@@ -1,8 +1,8 @@
-svi int lor x = 5;
-svi float lor y = 3.14;
-svi bool lor ok = true;
-svi int[] lor arr = [10, 20, 30];
-svi int lor i = 0;
+int x = 5;
+float y = 3.14;
+bool ok = true;
+int[] arr = [10, 20, 30];
+int i = 0;
 
 if (x > 3) {
     print("x больше 3");
@@ -10,7 +10,7 @@ if (x > 3) {
     print("иначе");
 }
 
-cert ceh (2) {
+repeat (2) {
     print("цикл");
 }
 
@@ -18,5 +18,5 @@ fn add(int a, int b) {
     return a + b;
 }
 
-svi int lor sum = add(5, 3);
+int sum = add(5, 3);
 print(sum);
