@@ -939,6 +939,14 @@ Node parseOne() {
         Node node; node.type = NODE_CONTINUE;
         return node;
     }
+    // PR22: defer schedules one statement in the enclosing lexical scope.
+    if (peek().type == DEFER) {
+        const Token token = consume();
+        Node node; node.type = NODE_DEFER;
+        node.line = token.line; node.column = token.column; node.file = token.file;
+        node.left = makeNode(parseOne());
+        return node;
+    }
     // del — удалить массив
     if (peek().type == DEL) {
         Node node; node.type = NODE_DELETE;

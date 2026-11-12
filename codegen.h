@@ -19,10 +19,18 @@ class CodeGen {
         std::map<std::string, unsigned> arrayLengths;
         std::map<std::string, llvm::Type*> arrayElementTypes;
         std::map<std::string, std::string> structTypesByVariable;
+        std::map<std::string, llvm::Value*> dynArrays;
+        std::map<std::string, llvm::Type*> dynArrayElementTypes;
+        std::map<std::string, llvm::Type*> pointeeTypes;
     };
 
     ScopeSnapshot saveScope() const;
     void restoreScope(const ScopeSnapshot& scope);
+    struct Deferred { const Node* statement; ScopeSnapshot bindings; };
+    std::vector<Deferred> deferred_;
+    size_t loopDeferredBase_ = 0;
+    void emitDeferred(size_t base);
+    void genScope(const std::vector<Node>& statements);
 
 public:
     llvm::LLVMContext context;

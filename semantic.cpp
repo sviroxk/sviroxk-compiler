@@ -1197,6 +1197,30 @@ private:
         case NODE_STRUCT_DEF:
         case NODE_IMPORT:
             break;
+        case NODE_DEFER: {
+            switch (node.left->type) {
+            case NODE_RETURN: case NODE_BREAK: case NODE_CONTINUE:
+            case NODE_VAR_DECL: case NODE_ARRAY_DECL: case NODE_STRUCT_INSTANCE:
+            case NODE_FUNC_DEF: case NODE_STRUCT_DEF: case NODE_IMPORT:
+                error(node, "defer: переходы управления и объявления пока запрещены");
+                break;
+            case NODE_ASSIGN: case NODE_ARRAY_ASSIGN: case NODE_DEREF_ASSIGN:
+            case NODE_STRUCT_FIELD_ASSIGN: case NODE_FUNC_CALL: case NODE_SLOV:
+            case NODE_DELETE: case NODE_FILE_WRITE: case NODE_FILE_CLOSE:
+            case NODE_ARRAY_PUSH: case NODE_ARRAY_POP: case NODE_ARRAY_RESIZE:
+            case NODE_INPUT: {
+                // Validate now, but do not make delayed assignment effective now.
+                const auto savedScopes = scopes_;
+                checkNode(*node.left);
+                scopes_ = savedScopes;
+                break;
+            }
+            default:
+                error(node, "defer: ожидается обычная операция или вызов");
+                break;
+            }
+            break;
+        }
         case NODE_DELETE: {
             const Symbol* symbol = lookup(node.varName);
             if (!symbol) error(node, "неизвестное имя '" + node.varName + "'");

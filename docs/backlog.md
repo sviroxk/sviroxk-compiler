@@ -5,7 +5,7 @@
 ## План переноса PR22 (по указанию владельца)
 - [x] 4а — объявления функций без тела (#27).
 - [x] 4б — структуры по значению: `tip Name` параметры, `tip Inner field`, preregistration LLVM types, lookup полей параметра. 4 output cases + 6 semantic errors проверены; `examples/struct_by_value.svx`.
-- [ ] 4в — `defer`: обратный порядок, ранний return, циклы.
+- [x] 4в — `defer`: LIFO, ранний return, if/else, все формы циклов, break/continue и lexical bindings. 8 output + 8 diagnostic cases; временно только обычные операции/вызовы (D-006).
 - [ ] 4г — `drop`: при переносе исправить double-drop и чтение после drop из PR22.
 - Checked casts отложены владельцем; поведение при выходе за диапазон пока не выбиралось.
 

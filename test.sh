@@ -901,6 +901,24 @@ printf '%s\n' 'file f = atk("no-such-dir/missing.txt", "r");' 'str t = pro(f);' 
 expect_runtime_error "open-missing-file" "$RUNTIME_DIR/missing_file.svx" "cannot open file 'no-such-dir/missing.txt' at line 1, column 10"
 expect_compile_error "push-string-into-int-array" $'ptr v = nw rox[3];\nv.push("hello");' "элемент массива ожидает тип"
 
+# Step 4c: lexical scope cleanup, LIFO, return and loop exits.
+expect_program_output "defer-lifo-late-evaluation" "$(cat examples/defer.svx)" $'0\n2\n3'
+expect_program_output "defer-branch-return" $'fn int choose(bool early) { defer print(10); if (early) { defer print(20); return 1; } else { defer print(30); } return 2; }\nprint(choose(true)); print(choose(false));' $'20\n10\n1\n30\n10\n2'
+expect_program_output "defer-shadow-binding" $'fn void run() { int value = 1; defer print(value); if (true) { int value = 2; defer print(value); return; } }\nrun();' $'2\n1'
+expect_program_output "defer-return-in-loop" $'fn int run() { defer print(9); for i in 0..3 { defer print(i); if (i == 1) { return 7; } } return 0; }\nprint(run());' $'0\n1\n9\n7'
+expect_program_output "defer-loop-forms" $'int n = 0; while (n < 2) { n = n + 1; defer print(n); }\ncert ceh (2) { defer print(3); }\ncert usy (n < 3) { n = n + 1; defer print(n); }\nfor i in 4..6 { defer print(i); }\nsvi rox[] lor values = [6, 7]; for item in values { defer print(item); }' $'1\n2\n3\n3\n3\n4\n5\n6\n7'
+expect_program_output "defer-break-continue" $'defer print(9); for i in 0..4 { defer print(i); if (i == 0) { continue; } if (i == 2) { break; } print(8); }' $'0\n8\n1\n2\n9'
+expect_program_output "defer-nested-loop" $'for i in 1..3 { defer print(i); loop { defer print(7); break; } print(8); }' $'7\n8\n1\n7\n8\n2'
+expect_program_output "defer-call-and-assignment" $'fn void show(int n) { print(n); }\nfn int run() { int n = 1; defer show(n); defer n = 4; return n; }\nprint(run());' $'4\n4'
+expect_compile_error "defer-return-forbidden" 'fn int run() { defer return 1; return 0; }' 'defer: переходы управления и объявления пока запрещены'
+expect_compile_error "defer-break-forbidden" 'loop { defer break; break; }' 'defer: переходы управления и объявления пока запрещены'
+expect_compile_error "defer-continue-forbidden" 'loop { defer continue; break; }' 'defer: переходы управления и объявления пока запрещены'
+expect_compile_error "defer-declaration-forbidden" 'defer int value = 1;' 'defer: переходы управления и объявления пока запрещены'
+expect_compile_error "defer-nested-forbidden" 'defer defer print(1);' 'defer: ожидается обычная операция или вызов'
+expect_compile_error "defer-control-forbidden" 'defer if (true) { print(1); }' 'defer: ожидается обычная операция или вызов'
+expect_compile_error "defer-unknown-name" 'defer print(missing);' "неизвестное имя 'missing'"
+expect_compile_error "defer-invalid-delete" 'int value = 1; defer del value;' 'освободить можно только динамический массив или ptr'
+
 # Step 4b: PR22 struct parameters are aggregate copies, not aliases.
 expect_program_output "struct-by-value-copy" "$(cat examples/struct_by_value.svx)" $'17\n3\n4\n3'
 expect_program_output "struct-by-value-nested" $'tip Inner { int x = 2; }\ntip Outer { tip Inner inner = { x = 7; }; int y = 3; }\nfn int change(tip Outer value) { svi tip Inner lor replacement = { x = 9; }; value.inner = replacement; return value.inner.x + value.y; }\nsvi tip Outer lor original = { inner = { x = 5; }; y = 4; };\nprint(change(original)); print(original.inner.x);' $'13\n5'

@@ -173,3 +173,11 @@
 - Добавлены только `tip Name` в параметрах/вложенных полях, preregistration struct types перед LLVM function signatures и field lookup для параметров-структур. Положительные cases проверяют копию, nested aggregate replacement/read, forward declaration/mixed arguments, u8/f64 layout.
 - LLVM 18.1.8: strict build, полный test.sh (101 программа под ASan + 10 memory-safety cases), conformance 3/3 и полный ASan/UBSan/LeakSanitizer прошли. Ошибки проверяют неизвестные типы/поля, неверный аргумент, несовпадение forward signature и рекурсию.
 - `defer`/`drop`, struct returns, anonymous struct arguments, ownership/clone ABI и checked casts не добавлялись. Termux/ARM64 и внешний ABI не проверялись. Следующий шаг плана — `defer`.
+
+
+## Шаг 4в — defer из PR22
+- Источник: `fa7e9ce` из закрытого PR22; main `8157599`. До кода добавлены 8 output + 8 text-diagnostic cases: все 16 ожиданий провалились на baseline. Отдельная рабочая ветка теперь постоянная `dev` по новому правилу владельца.
+- Перенесены syntax/lexical scope/LIFO, позднее вычисление и cleanup до return expression. Генерация по путям CFG не теряет cleanup sibling-веток; break/continue очищают только покидаемые loop scopes. Bindings сохраняются при регистрации, значения читаются при выполнении; shadow case усилен ранним void return.
+- По согласованному временному ограничению допустимы только обычные операции/вызовы. Объявления, return/break/continue, вложенные defer и control-flow внутри defer дают semantic-ошибку (D-006); `drop` и `.github` не изменены.
+- LLVM 18.1.8: warning-clean build в полном test.sh, обычный и полный compiler ASan/UBSan/LeakSanitizer suite прошли (109 ASan programs + 10 memory-safety cases, conformance 3/3 внутри каждого прогона). Проверены все формы циклов, return из ветки/цикла, LIFO, shadow и delayed assignment/call. Termux/ARM64, OOM и аварийное завершение не проверялись; cleanup при abort/exit не гарантирован.
+- Далее по запросу владельца отдельный housekeeping PR (README, LICENSE, fixtures), затем языковой шаг `drop`.
