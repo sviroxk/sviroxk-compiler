@@ -1293,6 +1293,20 @@ else
     echo "SKIP: clang cannot build with -fsanitize=address here; ASan check of compiled programs skipped"
 fi
 
+# Аудит 07a/07b: размер new T[n] / resize(n) — отрицательный или огромный даёт SC runtime error, а не abort/segfault.
+printf '%s\n' 'int n = -1;' 'ptr v = new int[n];' 'print(v.len());' > "$RUNTIME_DIR/new_negative.svx"
+printf '%s\n' 'ptr v = new int[2];' 'v.resize(-1);' 'print(v.len());' > "$RUNTIME_DIR/resize_negative.svx"
+printf '%s\n' 'i64 n = 4611686018427387904;' 'ptr v = new int[n];' 'print(v.len());' > "$RUNTIME_DIR/new_huge.svx"
+printf '%s\n' 'i64 n = 4611686018427387904;' 'ptr v = new int[2];' 'v.resize(n);' 'print(v.len());' > "$RUNTIME_DIR/resize_huge.svx"
+printf '%s\n' 'u64 n = 18446744073709551615;' 'ptr v = new int[n];' 'print(v.len());' > "$RUNTIME_DIR/new_u64_max.svx"
+expect_runtime_error "new-negative-size" "$RUNTIME_DIR/new_negative.svx" "SC runtime error: negative array size at line 2, column 9"
+expect_runtime_error "resize-negative" "$RUNTIME_DIR/resize_negative.svx" "SC runtime error: negative array size at line 2, column 1"
+expect_runtime_error "new-huge-size" "$RUNTIME_DIR/new_huge.svx" "SC runtime error: out of memory at line 2, column 9"
+expect_runtime_error "resize-huge" "$RUNTIME_DIR/resize_huge.svx" "SC runtime error: out of memory at line 3, column 1"
+expect_runtime_error "new-u64-max" "$RUNTIME_DIR/new_u64_max.svx" "SC runtime error: array size too large at line 2, column 9"
+expect_program_output "resize-zero-fill" $'ptr v = new int[2];\nv[0] = 5;\nv[1] = 7;\nv.resize(1);\nv.resize(3);\nprint(v[0]);\nprint(v[1]);\nprint(v[2]);\nprint(v.len());' $'5\n0\n0\n3'
+expect_program_output "new-zero-then-push" $'ptr v = new int[0];\nv.push(3);\nv.push(4);\nv.push(5);\nprint(v[2]);\nprint(v.len());' $'5\n3'
+
 # Ввод читает строку целиком (D-007, аудит 07d/07e): без обрезки до 255 байт и не по словам.
 expect_program_output "input-line-whole" $'int n = input_int("");\nstring s = input_str("");\nprint(n * 2);\nprint(s);\nprint(len(s));' $'42\nhello world\n11' $'  21  \nhello world\n'
 expect_program_output "input-line-crlf" $'string s = input_str("");\nprint(len(s));' '2' $'ab\r\n'

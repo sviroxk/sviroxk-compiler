@@ -76,6 +76,7 @@ llvm::Function* CodeGen::runtimeFunction(const std::string& name) {
         {"snprintf", {i32, {ptr, i64, ptr}, true}},
         {"free",    {voidTy, {ptr}, false}},
         {"memcpy",  {ptr, {ptr, ptr, i64}, false}},
+        {"memset",  {ptr, {ptr, i32, i64}, false}},
         {"strlen",  {i64, {ptr}, false}},
         {"strcmp",  {i32, {ptr, ptr}, false}},
         {"strstr",  {ptr, {ptr, ptr}, false}},
@@ -414,7 +415,21 @@ llvm::StructType* CodeGen::dynArrayType() {
     return type;
 }
 
-void CodeGen::growDynArray(const std::string& varName, llvm::Value* newCapacity) {
+// Размер для new T[n] / resize(n): в i64 с учётом знака; отрицательный — ошибка выполнения.
+llvm::Value* CodeGen::emitArraySize(const Node& sizeExpr, const Node& location) {
+    llvm::Value* size = genExpr(sizeExpr);
+    const bool isUnsigned = isUnsignedExpr(sizeExpr);
+    if (size->getType()->getIntegerBitWidth() < 64)
+        size = isUnsigned ? builder.CreateZExt(size, builder.getInt64Ty())
+                          : builder.CreateSExt(size, builder.getInt64Ty());
+    // u64 больше INT64_MAX тоже не может быть длиной: длина хранится как i64.
+    emitRuntimeFailureIf(builder.CreateICmpSLT(size, builder.getInt64(0)),
+                         isUnsigned ? "array size too large" : "negative array size", location);
+    return size;
+}
+
+void CodeGen::growDynArray(const std::string& varName, llvm::Value* newCapacity,
+                           const Node& location) {
     auto found = dynArrays.find(varName);
     if (found == dynArrays.end()) return;
     llvm::StructType* descType = dynArrayType();
@@ -424,9 +439,12 @@ void CodeGen::growDynArray(const std::string& varName, llvm::Value* newCapacity)
     llvm::Value* dataPtr = builder.CreateLoad(builder.getPtrTy(),
         builder.CreateStructGEP(descType, desc, 0));
     llvm::Function* mallocF = runtimeFunction("malloc");
-    llvm::Value* bytes = builder.CreateMul(newCapacity,
-        builder.getInt64(elementType->getPrimitiveSizeInBits() / 8));
+    llvm::Value* product = builder.CreateBinaryIntrinsic(llvm::Intrinsic::umul_with_overflow,
+        newCapacity, builder.getInt64(elementType->getPrimitiveSizeInBits() / 8));
+    emitRuntimeFailureIf(builder.CreateExtractValue(product, 1), "out of memory", location);
+    llvm::Value* bytes = builder.CreateExtractValue(product, 0);
     llvm::Value* newData = builder.CreateCall(mallocF, {bytes});
+    emitRuntimeFailureIf(builder.CreateIsNull(newData), "out of memory", location);
     llvm::Value* oldLength = builder.CreateLoad(builder.getInt64Ty(),
         builder.CreateStructGEP(descType, desc, 1));
     // Copy existing elements into the new buffer.
@@ -1371,23 +1389,14 @@ void CodeGen::genNode(const Node& node) {
         if (node.left->type == NODE_DYN_ARRAY) {
             const Node& alloc = *node.left;
             llvm::Type* elementType = svType(alloc.varType);
-            llvm::Value* size = genExpr(*alloc.left);
-            size = builder.CreateSExt(size, builder.getInt64Ty());
+            llvm::Value* size = emitArraySize(*alloc.left, alloc);
             // nw T[n]: длина n, элементы обнулены (как new T[n]() в C++ и make([]T, n) в Go).
             // calloc(0) может вернуть NULL, поэтому выделяется минимум один элемент.
             llvm::Value* count = builder.CreateSelect(
                 builder.CreateICmpEQ(size, builder.getInt64(0)), builder.getInt64(1), size);
             llvm::Value* data = builder.CreateCall(runtimeFunction("calloc"), {count,
                 builder.getInt64(elementType->getPrimitiveSizeInBits() / 8)});
-            llvm::Function* function = builder.GetInsertBlock()->getParent();
-            llvm::BasicBlock* trap = llvm::BasicBlock::Create(context, "dyn_oom", function);
-            llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "dyn_alloc", function);
-            builder.CreateCondBr(builder.CreateICmpEQ(
-                data, llvm::ConstantPointerNull::get(builder.getPtrTy())), trap, next);
-            builder.SetInsertPoint(trap);
-            builder.CreateCall(abortFunc, {});
-            builder.CreateUnreachable();
-            builder.SetInsertPoint(next);
+            emitRuntimeFailureIf(builder.CreateIsNull(data), "out of memory", alloc);
             llvm::StructType* descType = dynArrayType();
             llvm::Value* desc = createStorage(descType, node.varName);
             builder.CreateStore(data,
@@ -1627,7 +1636,7 @@ void CodeGen::genNode(const Node& node) {
             builder.getInt64(1),
             builder.CreateMul(capacity, builder.getInt64(2))
         );
-        growDynArray(node.varName, newCapacity);
+        growDynArray(node.varName, newCapacity, node);
         builder.CreateBr(afterGrowBlock);
 
         // No grow path
@@ -1654,8 +1663,9 @@ void CodeGen::genNode(const Node& node) {
         llvm::StructType* descType = dynArrayType();
         llvm::Value* desc = found->second;
 
-        llvm::Value* newSize = genExpr(*node.left);
-        newSize = builder.CreateSExt(newSize, builder.getInt64Ty());
+        llvm::Value* newSize = emitArraySize(*node.left, node);
+        llvm::Value* oldLength = builder.CreateLoad(builder.getInt64Ty(),
+            builder.CreateStructGEP(descType, desc, 1));
 
         llvm::Value* capacity = builder.CreateLoad(builder.getInt64Ty(),
             builder.CreateStructGEP(descType, desc, 2));
@@ -1670,10 +1680,24 @@ void CodeGen::genNode(const Node& node) {
 
         builder.SetInsertPoint(growBlock);
         // Grow to at least newSize (round up to next power of 2 for efficiency)
-        growDynArray(node.varName, newSize);
+        growDynArray(node.varName, newSize, node);
         builder.CreateBr(noGrowBlock);
 
+        // Новые элементы — нули, как у new T[n]; иначе после resize читался бы мусор.
         builder.SetInsertPoint(noGrowBlock);
+        llvm::BasicBlock* zeroBlock = llvm::BasicBlock::Create(context, "resize_zero", function);
+        llvm::BasicBlock* doneBlock = llvm::BasicBlock::Create(context, "resize_done", function);
+        builder.CreateCondBr(builder.CreateICmpUGT(newSize, oldLength), zeroBlock, doneBlock);
+        builder.SetInsertPoint(zeroBlock);
+        llvm::Type* elementType = dynArrayElementTypes[node.varName];
+        if (!elementType) elementType = builder.getInt32Ty();
+        llvm::Value* data = builder.CreateLoad(builder.getPtrTy(), builder.CreateStructGEP(descType, desc, 0));
+        llvm::Value* elementBytes = builder.getInt64(elementType->getPrimitiveSizeInBits() / 8);
+        builder.CreateCall(runtimeFunction("memset"),
+            {builder.CreateGEP(elementType, data, {oldLength}), builder.getInt32(0),
+             builder.CreateMul(builder.CreateSub(newSize, oldLength), elementBytes)});
+        builder.CreateBr(doneBlock);
+        builder.SetInsertPoint(doneBlock);
         builder.CreateStore(newSize, builder.CreateStructGEP(descType, desc, 1));
     }
     else if (node.type == NODE_STRUCT_DEF) {

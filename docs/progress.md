@@ -261,3 +261,8 @@
 - Было: диагностика выполнения печаталась в stdout (`puts`/`printf`) и смешивалась с выводом программы.
 - Стало: одна точка `emitRuntimeFailureIf` печатает через `dprintf(2, …)`; проверка границ массива больше не дублирует её своим `puts`.
 - Тесты: `expect_runtime_error` и `tests/memory-safety.sh` (режим runtime) теперь требуют сообщение в stderr и его отсутствие в stdout; новый `runtime-error-stderr` (stdout ровно `before`). `file-read-lines` пишет временный файл в `$TMP_DIR`, а не в корень репозитория.
+
+## Аудит 07a/07b: размер `new T[n]` и `resize(n)`
+- Воспроизведено на main (LLVM 23.1.5): `new int[-1]` — abort (134), `v.resize(-1)` — segfault (139), `new int[2^62]` — abort, `resize(2^62)` — молча длина 2^62, `resize(INT64_MAX)` — segfault, `u64` максимум в `new` — abort; `resize` вверх после уменьшения читал мусор (`21868`).
+- Исправлено: `emitArraySize` (знак/беззнаковость, отрицательный → `negative array size`, u64 > INT64_MAX → `array size too large`); `growDynArray` проверяет переполнение `n * размер` и `malloc == NULL` → `out of memory`; `new` больше не зовёт `abort`; `resize` вверх обнуляет новые элементы (spec §7).
+- Тесты: `new-negative-size`, `resize-negative`, `new-huge-size`, `resize-huge`, `new-u64-max`, `resize-zero-fill`, `new-zero-then-push`.
