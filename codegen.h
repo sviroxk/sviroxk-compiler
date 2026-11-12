@@ -73,7 +73,7 @@ public:
     std::map<const Node*, llvm::Value*> precomputed_;
     bool structFieldAddressOnly_ = false;
     std::map<std::string, bool> unsignedElements;  // массив -> беззнаковые элементы
-    bool fieldIsUnsigned(const std::string& variable, const std::string& path) const;
+    bool fieldIsUnsigned(const std::string& variable, std::string_view path) const;
     // Запись в более узкий целый тип (x += 1 для u8): значение вне диапазона — ошибка выполнения.
     void checkNarrowStore(llvm::Value* value, const Node& valueNode, llvm::Type* target,
                           bool targetUnsigned, const Node& location);  // NODE_STRUCT_FIELD: вернуть адрес поля, не загружать
@@ -82,7 +82,7 @@ public:
 
     CodeGen() : builder(context), module("SC", context) {}
 
-    llvm::Value* getStringPtr(const std::string& str);
+    llvm::Value* getStringPtr(llvm::StringRef str);
 
     llvm::Type* svType(const std::string& name);
     static llvm::Type* storageType(llvm::Value* storage);
@@ -90,7 +90,7 @@ public:
     llvm::Function* runtimeFunction(std::string_view name);
     llvm::Value* castTo(llvm::Value* val, llvm::Type* ty, bool sourceUnsigned = false);
     llvm::Value* toBool(llvm::Value* val);
-    void emitRuntimeFailureIf(llvm::Value* failed, const std::string& message,
+    void emitRuntimeFailureIf(llvm::Value* failed, std::string_view message,
                               const Node& location, llvm::Value* detail = nullptr);
     llvm::Value* allocateStringBuffer(llvm::Value* bytes, const Node& location);
     llvm::Function* readLineFunction();

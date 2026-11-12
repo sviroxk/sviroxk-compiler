@@ -149,7 +149,7 @@ void CodeGen::genScope(const std::vector<Node>& statements) {
     deferred_.resize(base);
 }
 
-llvm::Value* CodeGen::getStringPtr(const std::string& str) {
+llvm::Value* CodeGen::getStringPtr(llvm::StringRef str) {
     llvm::GlobalVariable* gv = builder.CreateGlobalString(str);
     return builder.CreateInBoundsGEP(gv->getValueType(), gv,
         {builder.getInt32(0), builder.getInt32(0)});
@@ -251,15 +251,16 @@ bool CodeGen::cachedUnsigned(const std::shared_ptr<Node>& child) const {
 
 // Ошибка выполнения: если failed истинно, печатает "SC runtime error: <message> at line L, column C"
 // и завершает программу с кодом 1. detail (строка C) подставляется вместо %s в message.
-void CodeGen::emitRuntimeFailureIf(llvm::Value* failed, const std::string& message,
+void CodeGen::emitRuntimeFailureIf(llvm::Value* failed, std::string_view message,
                                    const Node& location, llvm::Value* detail) {
     llvm::Function* function = builder.GetInsertBlock()->getParent();
     llvm::BasicBlock* fail = llvm::BasicBlock::Create(context, "runtime_error", function);
     llvm::BasicBlock* ok = llvm::BasicBlock::Create(context, "runtime_ok", function);
     builder.CreateCondBr(failed, fail, ok);
     builder.SetInsertPoint(fail);
-    const std::string text = "SC runtime error: " + message + " at line " +
-        std::to_string(location.line) + ", column " + std::to_string(location.column);
+    std::string text = "SC runtime error: ";
+    text.append(message).append(" at line ").append(std::to_string(location.line))
+        .append(", column ").append(std::to_string(location.column));
     // Диагностика — в stderr (D-007), stdout программы остаётся чистым.
     llvm::Function* report = runtimeFunction("dprintf");
     llvm::Value* stderrFd = builder.getInt32(2);
@@ -478,25 +479,26 @@ void CodeGen::growDynArray(const std::string& varName, llvm::Value* newCapacity,
     builder.CreateStore(newCapacity, builder.CreateStructGEP(descType, desc, 2));
 }
 
-bool CodeGen::fieldIsUnsigned(const std::string& variable, const std::string& path) const {
+bool CodeGen::fieldIsUnsigned(const std::string& variable, std::string_view path) const {
     auto structName = structTypesByVariable.find(variable);
     if (structName == structTypesByVariable.end()) return false;
-    std::string current = structName->second;
-    std::string type;
-    size_t pos = 0;
-    while (true) {
-        const size_t dot = path.find('.', pos);
-        const std::string name = path.substr(pos, dot == std::string::npos ? std::string::npos : dot - pos);
-        auto def = structDefs.find(current);
+    // Обход пути `a.b.c` по string_view и указателям на имена типов — без
+    // копии каждого сегмента и каждого имени типа.
+    const std::string* current = &structName->second;
+    const std::string* type = nullptr;
+    for (std::string_view rest = path;;) {
+        const size_t dot = rest.find('.');
+        const std::string_view name = rest.substr(0, dot);
+        auto def = structDefs.find(*current);
         if (def == structDefs.end()) return false;
-        type.clear();
-        for (const auto& field : def->second) if (field.name == name) type = field.type;
-        if (type.empty()) return false;
-        if (dot == std::string::npos) break;
+        type = nullptr;
+        for (const auto& field : def->second) if (field.name == name) type = &field.type;
+        if (!type || type->empty()) return false;
+        if (dot == std::string_view::npos) break;
         current = type;
-        pos = dot + 1;
+        rest.remove_prefix(dot + 1);
     }
-    const sc::Type t = sc::Type::from(type);
+    const sc::Type t = sc::Type::from(*type);
     return t.isUnsigned() || t.isChar();
 }
 
