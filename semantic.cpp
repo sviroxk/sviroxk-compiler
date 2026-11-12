@@ -1568,10 +1568,24 @@ private:
         case NODE_FUNC_CALL:
             call(node);
             break;
-        case NODE_SLOV:
-            if (node.left && expression(*node.left) == "void")
+        case NODE_SLOV: {
+            const std::string printed = node.left ? expression(*node.left) : "<error>";
+            if (printed == "void") {
                 error(*node.left, "print: функция без результата (void) не возвращает значения");
+                break;
+            }
+            // Массив, структура и файл печатью не выводятся: раньше codegen падал (массив)
+            // или печатал мусор (поле структуры, байты FILE*, адрес динамического массива).
+            const Symbol* named = node.left->type == NODE_IDENTIFIER ? lookup(node.left->value) : nullptr;
+            const sc::Type printedTy = ty(printed);
+            if ((named && named->isDynArray) || printedTy.isArray() || printedTy.isDynArray() ||
+                printedTy.isStruct() || printedTy.isFile())
+                error(*node.left, "print: " + (named && named->isDynArray ? std::string("динамический массив")
+                                    : printedTy.isArray() ? std::string("массив")
+                                    : "значение типа '" + typeName(printed) + "'") +
+                      " напечатать нельзя: печатайте элементы или поля");
             break;
+        }
         case NODE_IF: {
             std::string condition = expression(*node.left);
             if (condition != "bool" && !isInteger(condition) && condition != "<error>")
