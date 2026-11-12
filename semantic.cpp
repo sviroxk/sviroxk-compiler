@@ -1390,7 +1390,11 @@ private:
             break;
         }
         case NODE_ASSIGN: {
-            const Symbol* symbol = use(node, node.varName);
+            Symbol* released = lookupMutable(node.varName);
+            const bool afterDel = released && released->droppedLine &&
+                                  std::string_view(released->releasedBy) == "del";
+            if (afterDel) released->droppedLine = 0;  // p = new …: имя снова пригодно
+            const Symbol* symbol = afterDel ? released : use(node, node.varName);
             if (!symbol) {
                 error(node, "присваивание неизвестному имени '" + node.varName + "'");
                 expression(*node.left);
@@ -1776,13 +1780,23 @@ private:
             }
             break;
         case NODE_DELETE: {
-            const Symbol* symbol = use(node, node.varName);
+            // После del память из new недоступна по этому имени, как после drop
+            // (решение владельца № 6); новое присваивание имени снова делает его пригодным.
+            size_t index = 0;
+            Symbol* symbol = lookupMutable(node.varName, &index);
             if (!symbol) error(node, "неизвестное имя '" + node.varName + "'");
+            else if (symbol->droppedLine)
+                error(node, "повторный del '" + node.varName + "' (уже освобождено в строке " +
+                      std::to_string(symbol->droppedLine) + ")");
             else if (symbol->ty.isArray() && !symbol->isDynArray)
                 error(node, "освобождать нечего: массив '" + node.varName +
                       "' не создан через new (его память освобождается сама)");
             else if (!symbol->isDynArray && !symbol->ty.isPtr())
                 error(node, "освободить можно только динамический массив или ptr");
+            else if (index >= dropBarrier_) {  // del внешнего имени внутри цикла/функции — без отметки
+                symbol->droppedLine = node.line;
+                symbol->releasedBy = "del";
+            }
             break;
         }
         case NODE_ARRAY_PUSH: {

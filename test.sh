@@ -1013,6 +1013,9 @@ expect_program_output "user-fn-builtin-name" $'fn int len(str s) { return 100; }
 expect_compile_error "user-fn-builtin-name-message" $'fn int max(int a) { return a; }\nprint(max(1, 2));' "'max'"
 expect_compile_error "delete-static-array" $'int[] a = [1, 2];\ndel a;' ":2:1: error[semantic]: освобождать нечего: массив 'a' не создан через new"
 expect_compile_error "defer-delete-static-array" 'int[] a = [1, 2]; defer del a;' "освобождать нечего: массив 'a' не создан через new"
+expect_compile_error "use-after-del" $'ptr v = new int[2];\ndel v;\nprint(v[0]);' ":3:7: error[semantic]: 'v' используется после del (строка 2)"
+expect_compile_error "double-del" $'ptr v = new int[2];\ndel v;\ndel v;' ":3:1: error[semantic]: повторный del 'v' (уже освобождено в строке 2)"
+expect_program_output "del-then-reassign" $'ptr v = new int[1];\nv[0] = 1;\ndel v;\nv = new int[1];\nv[0] = 7;\nprint(v[0]);\ndel v;\nint i = 0;\nptr w = new int[1];\nwhile (i < 3) { del w; w = new int[1]; i += 1; }\ndel w;\nprint(i);' $'7\n3'
 expect_program_output "defer-return-in-loop" $'fn int run() { defer print(9); for i in 0..3 { defer print(i); if (i == 1) { return 7; } } return 0; }\nprint(run());' $'0\n1\n9\n7'
 expect_program_output "defer-loop-forms" $'int n = 0; while (n < 2) { n = n + 1; defer print(n); }\nrepeat (2) { defer print(3); }\nwhile (n < 3) { n = n + 1; defer print(n); }\nfor i in 4..6 { defer print(i); }\nint[] values = [6, 7]; for item in values { defer print(item); }' $'1\n2\n3\n3\n3\n4\n5\n6\n7'
 expect_program_output "defer-break-continue" $'defer print(9); for i in 0..4 { defer print(i); if (i == 0) { continue; } if (i == 2) { break; } print(8); }' $'0\n8\n1\n2\n9'

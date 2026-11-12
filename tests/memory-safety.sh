@@ -97,17 +97,20 @@ file input = open("missing/file.txt", "r");
 str line = read(input);
 print(line);
 SC
-# Self-tests deliberately exercise the current lack of ownership/lifetime checks.
-# Future checked pointers may replace these with controlled SC diagnostics.
+# Self-tests of the ASan detector. Direct use after del / double del is a compile
+# error (test.sh: use-after-del, double-del); a second name for the same memory is
+# not tracked, so these still reach run time.
 check_case use-after-delete detector heap-use-after-free <<'SC'
-ptr values = new int[2];
-del values;
-print(values[0]);
+ptr text = replace("abc", "b", "q");
+ptr alias = text;
+del text;
+print(alias[0]);
 SC
 check_case double-delete detector attempting\ double-free <<'SC'
-ptr values = new int[2];
-del values;
-del values;
+ptr text = replace("abc", "b", "q");
+ptr alias = text;
+del text;
+del alias;
 SC
 check_case raw-pointer-overrun detector heap-buffer-overflow <<'SC'
 ptr text = replace("abc", "z", "q");
