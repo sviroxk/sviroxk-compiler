@@ -9,25 +9,64 @@ permissions:
   contents: read
 
 jobs:
-  build-and-test:
-    runs-on: ubuntu-latest
+  llvm:
+    name: LLVM ${{ matrix.llvm }}${{ matrix.sanitizers && ' + ASan/UBSan' || '' }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - llvm: 23
+            sanitizers: true
+          - llvm: 22
+          - llvm: 21
+          - llvm: 20
+          - llvm: 19
+          - llvm: 18
+            sanitizers: true
     steps:
       - uses: actions/checkout@v4
-      - name: Install LLVM toolchain
+      - name: Install LLVM ${{ matrix.llvm }}
         run: |
+          set -euxo pipefail
           sudo apt-get update
-          sudo apt-get install -y clang llvm lld
+          if [ "${{ matrix.llvm }}" != "18" ]; then
+            wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /etc/apt/trusted.gpg.d/apt.llvm.org.asc
+            echo "deb http://apt.llvm.org/noble/ llvm-toolchain-noble-${{ matrix.llvm }} main" | sudo tee /etc/apt/sources.list.d/llvm.list
+            sudo apt-get update
+          fi
+          sudo apt-get install -y llvm-${{ matrix.llvm }}-dev clang-${{ matrix.llvm }} libclang-rt-${{ matrix.llvm }}-dev
+          echo "/usr/lib/llvm-${{ matrix.llvm }}/bin" >> "$GITHUB_PATH"
+      - name: Show versions
+        run: |
+          llvm-config --version
+          clang++ --version
+          test "$(llvm-config --version | cut -d. -f1)" = "${{ matrix.llvm }}"
       - name: Build with warnings as errors
         env:
           CXX: clang++
           CXXFLAGS: -Wall -Wextra -Werror
         run: ./build.sh
-      - name: Run conformance and regression tests
+      - name: Run regression tests
         run: ./test.sh
+      - name: Run conformance tests
+        run: ./test-conformance.sh
       - name: Run ASan and UBSan tests
+        if: matrix.sanitizers
         env:
           CXX: clang++
           CXXFLAGS: -Wall -Wextra -Werror -fsanitize=address,undefined -fno-omit-frame-pointer
           ASAN_OPTIONS: detect_leaks=1
           UBSAN_OPTIONS: print_stacktrace=1
         run: ./test.sh
+
+  # Правило защиты ветки main требует проверку с именем build-and-test.
+  # Эта задача зелёная только если прошли все версии LLVM выше.
+  build-and-test:
+    name: build-and-test
+    if: always()
+    needs: llvm
+    runs-on: ubuntu-24.04
+    steps:
+      - name: All LLVM versions passed
+        run: test "${{ needs.llvm.result }}" = "success"
