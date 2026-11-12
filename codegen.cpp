@@ -1366,7 +1366,7 @@ llvm::Value* CodeGen::genCallExpr(const Node& node) {
                 if (i < ptypes.size()) {
                     checkNarrowStore(v, node.args[i], svType(ptypes[i]), unsignedTypeName(ptypes[i]),
                                      node.args[i]);
-                    v = castTo(v, svType(ptypes[i]));
+                    v = castTo(v, svType(ptypes[i]), isUnsignedExpr(node.args[i]));
                 }
                 argVals.push_back(v);
             }
@@ -1858,7 +1858,7 @@ void CodeGen::genNode(const Node& node) {
                 if (i < ptypes.size()) {
                     checkNarrowStore(v, node.args[i], svType(ptypes[i]), unsignedTypeName(ptypes[i]),
                                      node.args[i]);
-                    v = castTo(v, svType(ptypes[i]));
+                    v = castTo(v, svType(ptypes[i]), isUnsignedExpr(node.args[i]));
                 }
                 argVals.push_back(v);
             }
