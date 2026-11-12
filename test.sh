@@ -965,6 +965,12 @@ expect_compile_error "print-void-call" $'fn void f() { print(1); }\nprint(f());'
 expect_program_output "static-array-len-cap" $'int[] a = [1, 2, 3];\nprint(a.len());\nprint(a.cap());\nint[] e = [];\nprint(e.len());\nfor i in 0..a.len() { print(a[i]); }' $'3\n3\n0\n1\n2\n3'
 expect_compile_error "static-array-pop-expression" $'int[] a = [1, 2];\nprint(a.pop());' "pop поддерживается только для динамических массивов"
 expect_program_output "math-integer-arguments" $'print(pow(2, 10));\ni64 b = 3;\nprint(pow(b, 30));\nprint(sqrt(2));\nprint(floor(7));\nprint(ceil(7));\nprint(round(7));\nf64 r = sqrt(16);\nprint(r);\nprint(pow(2.0, 3));' $'1024\n205891132094649\n1.414214\n7.000000\n7.000000\n7.000000\n4.000000\n8.000000'
+expect_compile_error "deref-assign-float-to-int" $'int x = 1;\nptr p = &x;\n*p = 3.5;' "'p' указывает на тип 'int/i32', записать значение типа 'double/f64' нельзя"
+expect_compile_error "deref-assign-string-to-int" $'int x = 1;\nptr p = &x;\n*p = "hello";' "'p' указывает на тип 'int/i32'"
+expect_compile_error "ptr-index-assign-float" $'int x = 1;\nptr p = &x;\np[0] = 2.5;' "'p' указывает на тип 'int/i32'"
+expect_compile_error "ptr-retarget-other-type" $'int x = 1;\nf64 y = 2.0;\nptr p = &x;\np = &y;' "присвоить ему адрес значения типа 'double/f64' нельзя"
+expect_compile_error "ptr-assign-other-pointee" $'int x = 1;\nf64 y = 2.0;\nptr p = &x;\nptr q = &y;\np = q;' "присвоить ему адрес значения типа 'double/f64' нельзя"
+expect_program_output "ptr-typed-access" $'i64 x = 5000000000;\nptr p = &x;\nprint(p[0]);\np[0] = 6000000000;\nprint(x);\nint a = 1;\nint b = 2;\nptr q = &a;\nq = &b;\n*q = 7;\nprint(b);\nf64 d = 1.5;\nptr r = &d;\n*r = 2;\nprint(d);' $'5000000000\n6000000000\n7\n2.000000'
 expect_program_output "defer-return-in-loop" $'fn int run() { defer print(9); for i in 0..3 { defer print(i); if (i == 1) { return 7; } } return 0; }\nprint(run());' $'0\n1\n9\n7'
 expect_program_output "defer-loop-forms" $'int n = 0; while (n < 2) { n = n + 1; defer print(n); }\nrepeat (2) { defer print(3); }\nwhile (n < 3) { n = n + 1; defer print(n); }\nfor i in 4..6 { defer print(i); }\nint[] values = [6, 7]; for item in values { defer print(item); }' $'1\n2\n3\n3\n3\n4\n5\n6\n7'
 expect_program_output "defer-break-continue" $'defer print(9); for i in 0..4 { defer print(i); if (i == 0) { continue; } if (i == 2) { break; } print(8); }' $'0\n8\n1\n2\n9'

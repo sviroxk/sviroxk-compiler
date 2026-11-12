@@ -199,6 +199,20 @@ private:
         return sc::Type::from(type);
     }
 
+    // Тип, на который указывает ptr: из `ptr p = &x`, иначе i32 (так читает *p).
+    static std::string pointeeOf(const Symbol& pointer) {
+        return pointer.pointee.empty() ? "i32" : normalize(pointer.pointee);
+    }
+
+    // Запись значения через указатель: тип должен подходить к тому, на что он указывает.
+    void checkPointeeStore(const Node& at, const std::string& name, const Symbol& pointer,
+                           const Node& valueNode, const std::string& value) {
+        const std::string element = pointeeOf(pointer);
+        if (value != "<error>" && !compatible(element, value) && !constantFits(valueNode, element))
+            error(at, "'" + name + "' указывает на тип '" + typeName(element) +
+                  "', записать значение типа '" + typeName(value) + "' нельзя" + castHint(element, value));
+    }
+
     bool compatible(const std::string& expectedRaw, const std::string& actualRaw) const {
         const sc::Type expected = sc::Type::from(expectedRaw);
         const sc::Type actual = sc::Type::from(actualRaw);
@@ -483,7 +497,7 @@ private:
                 return symbol->ty.element->toString();
             if (symbol->isDynArray)
                 return symbol->dynArrayElementType.empty() ? "i32" : symbol->dynArrayElementType;
-            if (symbol->ty.isPtr()) return "i32";
+            if (symbol->ty.isPtr()) return pointeeOf(*symbol);
             error(node, "значение '" + node.varName + "' не является массивом");
             return "<error>";
         }
@@ -1323,6 +1337,19 @@ private:
                 expression(*node.left);
                 break;
             }
+            // p = &y / p = q: тип, на который указывает p, задан при объявлении и не меняется.
+            if (symbol->ty.isPtr() && !symbol->isDynArray &&
+                (node.left->type == NODE_ADDR || node.left->type == NODE_IDENTIFIER)) {
+                const bool address = node.left->type == NODE_ADDR;
+                const Symbol* source = lookup(address ? node.left->varName : node.left->value);
+                std::string target;
+                if (source && address) target = normalize(source->type);
+                else if (source && source->ty.isPtr() && !source->isDynArray) target = pointeeOf(*source);
+                if (!target.empty() && target != pointeeOf(*symbol))
+                    error(node, "'" + node.varName + "' указывает на тип '" + typeName(pointeeOf(*symbol)) +
+                          "', присвоить ему адрес значения типа '" + typeName(target) +
+                          "' нельзя; объявите отдельный указатель: ptr q = &…");
+            }
             // Check for struct assignment with owning fields (dyn array, ptr, etc.)
             sc::Type destTy = symbol->ty;
             if (destTy.isStruct() && structs_.contains(destTy.structName)) {
@@ -1462,14 +1489,17 @@ private:
                 if (value != "<error>" && !element.empty() && !compatible(element, value) &&
                     !constantFits(*node.right, element) && !narrowCompound(self, *node.right, element, value))
                     error(node, "элемент массива ожидает тип '" + typeName(element) + "'" + castHint(element, value));
-            } else if (array && !array->ty.isPtr()) error(node, "значение не является массивом");
+            } else if (array && array->ty.isPtr()) {
+                checkPointeeStore(node, node.varName, *array, *node.right, value);
+            } else if (array) error(node, "значение не является массивом");
             break;
         }
         case NODE_DEREF_ASSIGN: {
             const Symbol* pointer = use(node, node.varName);
             if (!pointer) error(node, "неизвестный указатель '" + node.varName + "'");
             else if (!pointer->ty.isPtr()) error(node, "запись через разыменование требует тип ptr");
-            expression(*node.left);
+            const std::string value = expression(*node.left);
+            if (pointer && pointer->ty.isPtr()) checkPointeeStore(node, node.varName, *pointer, *node.left, value);
             break;
         }
         case NODE_RETURN: {

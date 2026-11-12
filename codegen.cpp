@@ -754,9 +754,10 @@ llvm::Value* CodeGen::genOtherExpr(const Node& node) {
             llvm::Value* ptr = nullChecked(builder.CreateLoad(
                 builder.getPtrTy(), vars[node.varName]), node);
             llvm::Value* idx = genExpr(*node.left);
-            llvm::Value* gep = builder.CreateGEP(
-                builder.getInt32Ty(), ptr, {idx});
-            return builder.CreateLoad(builder.getInt32Ty(), gep);
+            auto pointee = pointeeTypes.find(node.varName);  // p[i] читает тип x из ptr p = &x
+            llvm::Type* elementType = pointee != pointeeTypes.end() ? pointee->second : builder.getInt32Ty();
+            llvm::Value* gep = builder.CreateGEP(elementType, ptr, {idx});
+            return builder.CreateLoad(elementType, gep);
         }
         if (arrays.contains(node.varName)) {
             llvm::Value* arr = arrays[node.varName];
@@ -1570,12 +1571,13 @@ void CodeGen::genNode(const Node& node) {
                 llvm::Value* ptr = nullChecked(builder.CreateLoad(
                     builder.getPtrTy(), vars[node.varName]), node);
                 llvm::Value* idx = genExpr(*node.left);
-                llvm::Value* gep = builder.CreateGEP(
-                    builder.getInt32Ty(), ptr, {idx});
+                auto pointee = pointeeTypes.find(node.varName);
+                llvm::Type* elementType = pointee != pointeeTypes.end() ? pointee->second : builder.getInt32Ty();
+                llvm::Value* gep = builder.CreateGEP(elementType, ptr, {idx});
                 if (node.op == "compound") precomputed_[node.right->left->left.get()] = idx;
                 llvm::Value* value = genExpr(*node.right);
                 precomputed_.clear();
-                builder.CreateStore(value, gep);
+                builder.CreateStore(castTo(value, elementType, isUnsignedExpr(*node.right)), gep);
             } else if (arrays.contains(node.varName)) {
                 llvm::Value* arr = arrays[node.varName];
                 unsigned n = arrayLengths[node.varName];
@@ -1600,8 +1602,8 @@ void CodeGen::genNode(const Node& node) {
             llvm::Value* ptr = nullChecked(builder.CreateLoad(builder.getPtrTy(), alloca), node);
             auto pointee = pointeeTypes.find(node.varName);
             llvm::Value* value = genExpr(*node.left);
-            if (pointee != pointeeTypes.end())
-                value = castTo(value, pointee->second, isUnsignedExpr(*node.left));
+            value = castTo(value, pointee != pointeeTypes.end() ? pointee->second : builder.getInt32Ty(),
+                           isUnsignedExpr(*node.left));
             builder.CreateStore(value, ptr);
         }
     }
