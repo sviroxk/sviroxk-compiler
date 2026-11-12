@@ -19,12 +19,9 @@ LLVM_COMPILE_FLAGS=()
 for ((i = 0; i < ${#LLVM_CXXFLAG_ARRAY[@]}; ++i)); do
     flag=${LLVM_CXXFLAG_ARRAY[i]}
     if [[ "$flag" == -I* ]]; then
-        include_dir=${flag#-I}
-        if [[ "$include_dir" == *llvm* ]]; then
-            LLVM_COMPILE_FLAGS+=("-isystem" "$include_dir")
-        else
-            LLVM_COMPILE_FLAGS+=("$flag")
-        fi
+        # Every include dir from llvm-config holds LLVM headers: keep their
+        # warnings out of -Werror whatever the install path is called.
+        LLVM_COMPILE_FLAGS+=("-isystem" "${flag#-I}")
     else
         LLVM_COMPILE_FLAGS+=("$flag")
     fi
