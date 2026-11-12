@@ -24,7 +24,12 @@
 - [ ] Проверка definite assignment и return analysis для вложенных control-flow.
 - [ ] Корректность LLVM IR при ранних return, вложенных циклах, break/continue.
   - [x] Исправлен PHI в выражении `pop()`: `ptr v = new int[0]; v.push(1); print(v.pop());` теперь печатает `1` вместо compiler exit 3. Проверены рост, пустой массив, LIFO/длина, несколько pop в выражении, if и floating-point zero; 4 regression cases входят в обычный и ASan-прогон.
-- [ ] Namespace modules, visibility, stable symbol resolution.
+- [ ] Namespace modules, visibility, stable symbol resolution (имена модулей для своих библиотек; см. «Библиотеки» ниже и D-001).
+
+## Библиотеки (решение владельца 2026-11-12; после аудита, C++20 и рефакторинга ядра)
+- [ ] Вызов внешнего кода: объявление внешней функции C (набросок `extern fn int puts(ptr s);`) и способ указать, с чем линковать. Даёт libc, SDL, raylib, sqlite, curl; библиотеки C++ — через тонкую обёртку `extern "C"`. Классы и шаблоны C++ напрямую не поддерживаются.
+- [ ] Свои библиотеки как механизм: имена модулей вместо склейки токенов (набросок `import "mylib/vec.svx" as vec; vec.length(v)`), видимость, поиск по папке.
+- Синтаксис решает владелец: сначала дизайн-документ с 2–3 вариантами, реализация — после ответа. Новые библиотеки (содержимое stdlib) пока не писать.
 
 ## P2 — библиотека и инструментальная цепочка
 - [~] Math module: `math_abs` безопасно обрабатывает INT_MIN через i64 return; min/max/is_even принимают i64. Остальные math API ещё отсутствуют.

@@ -1173,6 +1173,11 @@ private:
                     value.varType.empty() &&
                     value.value.find_first_of(".eE") == std::string::npos &&
                     elementIsInteger;
+                if (contextualIntegerLiteral && !literalFits(element, value.value)) {
+                    error(value, "элемент массива " + value.value + " вне диапазона типа '" +
+                          typeName(element) + "'");
+                    continue;
+                }
                 actual = contextualIntegerLiteral ? element : expression(value);
                 if (actual != "<error>" && !compatible(element, actual) && !constantFits(value, element))
                     error(value, "элемент массива должен иметь тип '" + typeName(element) + "'" +

@@ -892,6 +892,11 @@ expect_program_output "block-local-vs-global" $'if (1) { let inner: int = 3; pri
 expect_program_output "globals-named-like-runtime" $'let printf = 3;\nlet puts = 4;\nfn int f() { return printf + puts; }\nprint(f());' '7'
 expect_program_output "struct-in-fn" $'struct P { int x = 4; }\nfn int f() { P p; return p.x; }\nprint(f());' '4'
 expect_program_output "ar-and-rep-together" $'print(len("abc"));\nprint(replace("hello world", "world", "SC"));' $'3\nhello SC'
+# Аудит, класс 5: литерал в объявлении массива вне диапазона типа элемента молча обрезался.
+expect_compile_error "array-literal-i32-range" 'int[] a = [1, 2147483648];' "элемент массива 2147483648 вне диапазона типа 'int/i32'"
+expect_compile_error "array-literal-u8-range" 'u8[] b = [300];' "элемент массива 300 вне диапазона типа"
+expect_compile_error "array-literal-u8-negative" 'u8[] b = [1, -1];' "элемент массива -1 вне диапазона типа"
+expect_program_output "array-literal-edges" $'u8[] b = [0, 255];\nint[] a = [-2147483648, 2147483647];\nprint(b[1]);\nprint(a[0]);\nprint(a[1]);' $'255\n-2147483648\n2147483647'
 # Аудит, класс 2: ветви тернарного оператора разной ширины давали неверный IR (код 3).
 expect_program_output "ternary-mixed-int-width" $'short s = 1;\nprint(true ? 5 : s);\nprint(false ? 5 : s);\ni64 big = 5000000000;\nint k = 2;\nprint(k > 1 ? big : k);' $'5\n1\n5000000000'
 expect_program_output "ternary-f32-f64" $'f32 s = 1.5;\nprint(true ? 5.0 : s);\nprint(false ? 5.0 : s);' $'5.000000\n1.500000'
