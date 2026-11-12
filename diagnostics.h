@@ -6,12 +6,14 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace sc {
 
-inline std::map<std::string, std::vector<std::string>>& sourceFiles() {
-    static std::map<std::string, std::vector<std::string>> files;
+// std::less<> — поиск по string_view без временной std::string.
+inline std::map<std::string, std::vector<std::string>, std::less<>>& sourceFiles() {
+    static std::map<std::string, std::vector<std::string>, std::less<>> files;
     return files;
 }
 
@@ -26,11 +28,11 @@ inline void registerSource(const std::string& filename, const std::string& text)
 // Диагностика собирается в одну строку и пишется одним вызовом: std::cerr без
 // буфера, и посимвольный вывод отступа под `^` на строке в 1 МБ — это миллион
 // системных вызовов (секунды, а под ASan в CI — больше 10 с).
-inline void reportDiagnostic(const std::string& filename, int line, int column,
-                             const std::string& category, const std::string& message) {
-    const std::string displayName = filename.empty() ? "<source>" : filename;
-    std::string text = displayName + ':' + std::to_string(line) + ':' + std::to_string(column) +
-                       ": error[" + category + "]: " + message + '\n';
+inline void reportDiagnostic(std::string_view filename, int line, int column,
+                             std::string_view category, std::string_view message) {
+    std::string text(filename.empty() ? "<source>" : filename);
+    text.append(":").append(std::to_string(line)).append(":").append(std::to_string(column));
+    text.append(": error[").append(category).append("]: ").append(message).append("\n");
 
     auto source = sourceFiles().find(filename);
     if (source != sourceFiles().end() && line >= 1 &&
@@ -53,17 +55,17 @@ struct CompileFailure {
     int exitCode = 1;
 };
 
-[[noreturn]] inline void failAt(const std::string& filename, int line, int column,
-                                const std::string& category, const std::string& message,
+[[noreturn]] inline void failAt(std::string_view filename, int line, int column,
+                                std::string_view category, std::string_view message,
                                 int exitCode = 1) {
     reportDiagnostic(filename, line, column, category, message);
     throw CompileFailure{exitCode};
 }
 
 // Ошибка без позиции в тексте (например, не открылся исходный файл).
-[[noreturn]] inline void failFile(const std::string& filename, const std::string& category,
-                                  const std::string& message) {
-    std::cerr << (filename.empty() ? "<source>" : filename) << ": error[" << category
+[[noreturn]] inline void failFile(std::string_view filename, std::string_view category,
+                                  std::string_view message) {
+    std::cerr << (filename.empty() ? std::string_view("<source>") : filename) << ": error[" << category
               << "]: " << message << '\n';
     throw CompileFailure{1};
 }

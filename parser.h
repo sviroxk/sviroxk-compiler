@@ -90,6 +90,5 @@ struct ParseResult {
 };
 
 ParseResult parse(const std::vector<Token>& tokens);
-bool checkSemantics(const Node& program, const std::string& filename);
 
 #endif
