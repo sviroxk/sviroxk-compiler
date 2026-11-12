@@ -1024,6 +1024,18 @@ private:
                 }
                 return resultTy.toString();
             }
+            if ((node.varName == "max" || node.varName == "min") && argumentTypes.size() == 2) {
+                // Как сравнение `<`: знаковое с беззнаковым без приведения не смешиваются
+                // (std::max в C++ и max в Rust тоже требуют один тип). Литерал, который
+                // помещается в тип другого аргумента, допустим: max(u, 3).
+                const sc::Type a = ty(argumentTypes[0]);
+                const sc::Type b = ty(argumentTypes[1]);
+                if (a.isInteger() && b.isInteger() && a.isUnsigned() != b.isUnsigned() &&
+                    !constantFits(node.args[0], argumentTypes[1]) && !constantFits(node.args[1], argumentTypes[0])) {
+                    error(node, node.varName + ": нельзя смешивать signed- и unsigned-типы без явного преобразования");
+                    return "<error>";
+                }
+            }
             if (node.varName == "abs" || node.varName == "max" || node.varName == "min") {
                 sc::Type resultTy = sc::Type::from(argumentTypes.empty() ? "i32" : argumentTypes.front());
                 for (size_t index = 1; index < argumentTypes.size(); ++index) {
