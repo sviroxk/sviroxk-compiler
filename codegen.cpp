@@ -6,7 +6,9 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/IR/GlobalVariable.h>
+#include <algorithm>
 #include <map>
+#include <string_view>
 #include <vector>
 #include <iostream>
 #include <cstdint>
@@ -57,52 +59,54 @@ llvm::AllocaInst* CodeGen::entryAlloca(llvm::Type* type, const char* name) {
 }
 
 // Единая таблица функций C-рантайма: одно имя — одна сигнатура.
-llvm::Function* CodeGen::runtimeFunction(const std::string& name) {
-    if (llvm::Function* existing = module.getFunction(name)) return existing;
-    llvm::Type* i32 = builder.getInt32Ty();
-    llvm::Type* i64 = builder.getInt64Ty();
-    llvm::Type* ptr = builder.getPtrTy();
-    llvm::Type* f64 = builder.getDoubleTy();
-    llvm::Type* voidTy = builder.getVoidTy();
-    struct Signature { llvm::Type* result; std::vector<llvm::Type*> params; bool variadic; };
-    const std::map<std::string, Signature> table = {
-        {"puts",    {i32, {ptr}, false}},
-        {"printf",  {i32, {ptr}, true}},
-        {"dprintf", {i32, {i32, ptr}, true}},
-        {"scanf",   {i32, {ptr}, true}},
-        {"abort",   {voidTy, {}, false}},
-        {"exit",    {voidTy, {i32}, false}},
-        {"malloc",  {ptr, {i64}, false}},
-        {"calloc",  {ptr, {i64, i64}, false}},
-        {"snprintf", {i32, {ptr, i64, ptr}, true}},
-        {"free",    {voidTy, {ptr}, false}},
-        {"memcpy",  {ptr, {ptr, ptr, i64}, false}},
-        {"memset",  {ptr, {ptr, i32, i64}, false}},
-        {"strlen",  {i64, {ptr}, false}},
-        {"strcmp",  {i32, {ptr, ptr}, false}},
-        {"strstr",  {ptr, {ptr, ptr}, false}},
-        {"fopen",   {ptr, {ptr, ptr}, false}},
-        {"fgets",   {ptr, {ptr, i32, ptr}, false}},
-        {"fgetc",   {i32, {ptr}, false}},
-        {"getchar", {i32, {}, false}},
-        {"realloc", {ptr, {ptr, i64}, false}},
-        {"strtoll", {i64, {ptr, ptr, i32}, false}},
-        {"fputs",   {i32, {ptr, ptr}, false}},
-        {"fclose",  {i32, {ptr}, false}},
-        {"rand",    {i32, {}, false}},
-        {"pow",     {f64, {f64, f64}, false}},
-        {"sqrt",    {f64, {f64}, false}},
-        {"floor",   {f64, {f64}, false}},
-        {"ceil",    {f64, {f64}, false}},
-        {"round",   {f64, {f64}, false}},
+namespace {
+// Сигнатуры функций C, которые вызывает сгенерированный код. Коды типов:
+// i — i32, l — i64, p — ptr, d — double, v — void. Таблица constexpr: раньше
+// std::map из 29 записей строился заново при каждом вызове runtimeFunction.
+struct RuntimeSignature {
+    std::string_view name;
+    char result;
+    std::string_view params;
+    bool variadic;
+};
+constexpr RuntimeSignature kRuntimeFunctions[] = {
+    {"puts", 'i', "p", false},       {"printf", 'i', "p", true},
+    {"dprintf", 'i', "ip", true},    {"scanf", 'i', "p", true},
+    {"abort", 'v', "", false},       {"exit", 'v', "i", false},
+    {"malloc", 'p', "l", false},     {"calloc", 'p', "ll", false},
+    {"snprintf", 'i', "plp", true},  {"free", 'v', "p", false},
+    {"memcpy", 'p', "ppl", false},   {"memset", 'p', "pil", false},
+    {"strlen", 'l', "p", false},     {"strcmp", 'i', "pp", false},
+    {"strstr", 'p', "pp", false},    {"fopen", 'p', "pp", false},
+    {"fgets", 'p', "pip", false},    {"fgetc", 'i', "p", false},
+    {"getchar", 'i', "", false},     {"realloc", 'p', "pl", false},
+    {"strtoll", 'l', "ppi", false},  {"fputs", 'i', "pp", false},
+    {"fclose", 'i', "p", false},     {"rand", 'i', "", false},
+    {"pow", 'd', "dd", false},       {"sqrt", 'd', "d", false},
+    {"floor", 'd', "d", false},      {"ceil", 'd', "d", false},
+    {"round", 'd', "d", false},
+};
+} // namespace
+
+llvm::Function* CodeGen::runtimeFunction(std::string_view name) {
+    if (llvm::Function* existing = module.getFunction(llvm::StringRef(name))) return existing;
+    const auto* entry = std::ranges::find(kRuntimeFunctions, name, &RuntimeSignature::name);
+    if (entry == std::ranges::end(kRuntimeFunctions))
+        throw std::logic_error("внутренняя ошибка codegen: функция рантайма '" +
+                               std::string(name) + "' отсутствует в таблице");
+    auto llvmTy = [&](char code) -> llvm::Type* {
+        switch (code) {
+        case 'i': return builder.getInt32Ty();
+        case 'l': return builder.getInt64Ty();
+        case 'p': return builder.getPtrTy();
+        case 'd': return builder.getDoubleTy();
+        default:  return builder.getVoidTy();
+        }
     };
-    auto entry = table.find(name);
-    if (entry == table.end())
-        throw std::logic_error("внутренняя ошибка codegen: функция рантайма '" + name +
-                               "' отсутствует в таблице");
-    llvm::FunctionType* type = llvm::FunctionType::get(
-        entry->second.result, entry->second.params, entry->second.variadic);
-    return llvm::Function::Create(type, llvm::Function::ExternalLinkage, name, module);
+    std::vector<llvm::Type*> params;
+    for (char code : entry->params) params.push_back(llvmTy(code));
+    llvm::FunctionType* type = llvm::FunctionType::get(llvmTy(entry->result), params, entry->variadic);
+    return llvm::Function::Create(type, llvm::Function::ExternalLinkage, llvm::StringRef(name), module);
 }
 
 CodeGen::ScopeSnapshot CodeGen::saveScope() const {
