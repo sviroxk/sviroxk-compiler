@@ -12,6 +12,7 @@ for tool in timeout llvm-as llc clang; do
 done
 
 ./build.sh
+tests/build-flags.sh
 ./test-conformance.sh
 SC_BIN="$PWD/sc"
 

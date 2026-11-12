@@ -1,3 +1,4 @@
+#include <llvm/Config/llvm-config.h>
 #include <llvm/IR/Intrinsics.h>
 #include "codegen.h"
 #include "type.h"
@@ -922,7 +923,11 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
                 node.op == "+" ? (unsignedArith ? llvm::Intrinsic::uadd_with_overflow : llvm::Intrinsic::sadd_with_overflow) :
                 node.op == "-" ? (unsignedArith ? llvm::Intrinsic::usub_with_overflow : llvm::Intrinsic::ssub_with_overflow) :
                                  (unsignedArith ? llvm::Intrinsic::umul_with_overflow : llvm::Intrinsic::smul_with_overflow);
+#if LLVM_VERSION_MAJOR >= 20
+            llvm::Function* checked = llvm::Intrinsic::getOrInsertDeclaration(&module, id, {common});
+#else
             llvm::Function* checked = llvm::Intrinsic::getDeclaration(&module, id, {common});
+#endif
             llvm::Value* pair = builder.CreateCall(checked, {L, R});
             emitRuntimeFailureIf(builder.CreateExtractValue(pair, 1), "integer overflow", node);
             return builder.CreateExtractValue(pair, 0);

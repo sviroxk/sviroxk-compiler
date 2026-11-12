@@ -5,13 +5,14 @@
 ## Сборка и тесты
 
 ```bash
-CXX=clang++ CXXFLAGS="-Wall -Wextra -Werror" ./build.sh   # нужен только llvm-config (LLVM 18)
+CXX=clang++ CXXFLAGS="-Wall -Wextra -Werror" ./build.sh   # нужен только llvm-config (LLVM 18–23)
 ./test.sh                                                  # все тесты; код 0 = всё прошло
 ./test-conformance.sh
 ```
 
-- Сборка остаётся `./build.sh` + `llvm-config`, без CMake и новых зависимостей: компилятор собирают в Termux на телефоне.
-- Эталонная версия LLVM — 18 (так же в CI).
+- Сборка остаётся `./build.sh` + `llvm-config`, без CMake и новых зависимостей.
+- Эталонная версия LLVM — 23.1.5. Кроме неё компилятор обязан собираться с `-Wall -Wextra -Werror` и проходить `./test.sh` и `./test-conformance.sh` на популярных версиях. Проверены вручную: 18.1.8, 19.1.7, 20.1.8, 21.1.8, 22.1.8, 23.1.5. Различия API LLVM — через `#if LLVM_VERSION_MAJOR`.
+- CI сейчас ставит LLVM из пакетов Ubuntu (18) и проверяет только её. Матрица 18–23 готова, но вставляет её владелец: агент не может менять `.github/workflows/*`. Пока она не вставлена, не писать, что CI проверяет другие версии.
 - Каждый ручной запуск компилятора — только с таймаутом: `timeout 10 ./sc file.svx > out.ll`. Зависание = баг компилятора, а не повод ждать дольше.
 - Запуск программы: `./sc file.svx > out.ll && lli out.ll`.
 
