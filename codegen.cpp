@@ -1427,8 +1427,8 @@ void CodeGen::genNode(const Node& node) {
             } else if (val->getType()->isDoubleTy()) {
                 llvm::Value* fmt = getStringPtr("%f\n");
                 builder.CreateCall(printfFunc, {fmt, val});
-            } else if (node.left->type == NODE_IDENTIFIER &&
-                       charVars.contains(node.left->value) && charVars[node.left->value]) {
+            } else if (node.varType == "char" || (node.left->type == NODE_IDENTIFIER &&
+                       charVars.contains(node.left->value) && charVars[node.left->value])) {
                 llvm::Value* promoted = builder.CreateZExt(val, builder.getInt32Ty());
                 llvm::Value* fmt = getStringPtr("%c\n");
                 builder.CreateCall(printfFunc, {fmt, promoted});
