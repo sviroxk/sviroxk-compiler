@@ -1246,9 +1246,16 @@ llvm::Value* CodeGen::genCallExpr(const Node& node) {
                 if (val->getType()->isFloatTy())
                     val = builder.CreateFPExt(val, builder.getDoubleTy());
                 fmt = getStringPtr("%f");
+            } else if (val->getType()->isPointerTy()) {
+                fmt = getStringPtr("%s");  // str(строка) — копия строки
             } else if (val->getType()->isIntegerTy(64)) {
                 fmt = getStringPtr(isUnsignedExpr(node.args[0]) ? "%llu" : "%lld");
             } else {
+                // Узкие целые в vararg-вызове расширяются до int, как в C: раньше i8 -5 давал 251.
+                if (val->getType()->getIntegerBitWidth() < 32)
+                    val = isUnsignedExpr(node.args[0]) || val->getType()->isIntegerTy(1)
+                        ? builder.CreateZExt(val, builder.getInt32Ty())
+                        : builder.CreateSExt(val, builder.getInt32Ty());
                 fmt = getStringPtr(isUnsignedExpr(node.args[0]) ? "%u" : "%d");
             }
             // Точный размер: snprintf(NULL, 0, ...) возвращает длину без '\0'.

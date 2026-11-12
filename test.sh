@@ -982,6 +982,9 @@ expect_compile_error "print-struct" $'struct P { int a = 1; }\nP p;\nprint(p);' 
 expect_compile_error "print-file" $'file f = open("print-file.txt", "w");\nprint(f);' "напечатать нельзя"
 expect_compile_error "addr-static-array" $'int[] a = [1, 2];\nptr p = &a;' "адрес массива 'a' взять нельзя"
 expect_compile_error "addr-dyn-array" $'ptr d = new int[2];\nptr p = &d;' "адрес массива 'd' взять нельзя"
+expect_program_output "str-argument-types" $'print(str("abc"));\nu8 a = 200;\nprint(str(a));\ni8 b = -5;\nprint(str(b));\nu16 c = 60000;\nprint(str(c));\ni16 d = -300;\nprint(str(d));\nprint(str(3 > 5));' $'abc\n200\n-5\n60000\n-300\n0'
+expect_compile_error "str-of-pointer" $'int x = 1;\nptr p = &x;\nprint(str(p));' "str: значение типа 'ptr' в строку не преобразуется"
+expect_compile_error "str-of-struct" $'struct P { int a = 1; }\nP p;\nprint(str(p));' "в строку не преобразуется"
 expect_program_output "defer-return-in-loop" $'fn int run() { defer print(9); for i in 0..3 { defer print(i); if (i == 1) { return 7; } } return 0; }\nprint(run());' $'0\n1\n9\n7'
 expect_program_output "defer-loop-forms" $'int n = 0; while (n < 2) { n = n + 1; defer print(n); }\nrepeat (2) { defer print(3); }\nwhile (n < 3) { n = n + 1; defer print(n); }\nfor i in 4..6 { defer print(i); }\nint[] values = [6, 7]; for item in values { defer print(item); }' $'1\n2\n3\n3\n3\n4\n5\n6\n7'
 expect_program_output "defer-break-continue" $'defer print(9); for i in 0..4 { defer print(i); if (i == 0) { continue; } if (i == 2) { break; } print(8); }' $'0\n8\n1\n2\n9'
