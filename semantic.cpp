@@ -543,6 +543,11 @@ private:
                 error(node, "невозможно получить адрес неизвестного имени '" + node.varName + "'");
                 return "<error>";
             }
+            // &a для массива: codegen падал (статический) или давал адрес описателя (динамический).
+            if (symbol->ty.isArray() || symbol->isDynArray) {
+                error(node, "адрес массива '" + node.varName + "' взять нельзя: указатель на массив пока не поддержан");
+                return "<error>";
+            }
             return "ptr";
         }
         case NODE_DEREF: {
