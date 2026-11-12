@@ -762,6 +762,10 @@ void parseDeclBody(Node& node, bool isArray) {
         while (peek().type != RBRACKET && peek().type != END) {
             node.args.push_back(parseExpr());
             if (peek().type == COMMA) consume();
+            else if (peek().type != RBRACKET) {  // [1 2 3] раньше молча принимался
+                failAt(peek(), "ожидалась ',' между элементами массива");
+                break;
+            }
         }
         expect(RBRACKET);
     } else {
@@ -861,6 +865,10 @@ Node parseOne() {
             while (peek().type != RBRACKET && peek().type != END) {
                 node.args.push_back(parseExpr());
                 if (peek().type == COMMA) consume();
+                else if (peek().type != RBRACKET) {
+                    failAt(peek(), "ожидалась ',' между элементами массива");
+                    break;
+                }
             }
             expect(RBRACKET);
             expect(SEMICOLON);
