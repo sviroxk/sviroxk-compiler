@@ -12,9 +12,35 @@
 namespace {
 class Parser {
 public:
-    explicit Parser(const std::vector<Token>& tokens) : gtokens(tokens) {}
+    explicit Parser(const std::vector<Token>& tokens) : gtokens(tokens) { renameUserBuiltins(); }
 
 private:
+// Своя функция с именем встроенной (spec §15, D-013) заменяет встроенную во всей
+// программе: её определение и вызовы `имя(` получают внутреннее имя с суффиксом
+// sc::kUserBuiltinSuffix (в имени SC точки быть не может), и семантика с кодогенерацией
+// видят обычную функцию пользователя. В сообщениях суффикс не печатается.
+void renameUserBuiltins() {
+    static const std::set<std::string> builtins = {
+        "sqrt", "abs", "pow", "max", "min", "floor", "ceil", "round",
+        "rand", "len", "replace", "str"
+    };
+    std::set<std::string> defined;
+    for (size_t i = 0; i + 2 < gtokens.size(); ++i) {
+        if (gtokens[i].type != FUCN) continue;
+        size_t name = i + 1;
+        if (gtokens[name + 1].type != LPAREN) ++name;
+        if (name + 1 < gtokens.size() && gtokens[name + 1].type == LPAREN &&
+            builtins.contains(gtokens[name].value))
+            defined.insert(gtokens[name].value);
+    }
+    if (defined.empty()) return;
+    for (size_t i = 0; i + 1 < gtokens.size(); ++i) {
+        if (gtokens[i + 1].type != LPAREN || !defined.contains(gtokens[i].value)) continue;
+        if (i > 0 && gtokens[i - 1].type == DOT) continue;  // метод массива a.len()
+        gtokens[i].type = IDENTIFIER;
+        gtokens[i].value += sc::kUserBuiltinSuffix;
+    }
+}
 int pos = 0;
 unsigned parseErrorCount = 0;
 int lastErrorPos = 0;
