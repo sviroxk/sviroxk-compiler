@@ -314,3 +314,4 @@
 - `docs/handoff.md` переписан целиком (правило кредитов): состояние после #65, решения владельца, очередь с первым шагом (новый полный аудит первым).
 - C++20 по файлам, шаг 1: `map.count(x)` в условиях → `contains(x)` (codegen, parser, semantic, main), `rfind("array<", 0) == 0` → `starts_with` (type.cpp); лишняя проверка `count` перед `erase` убрана. Поведение не меняется.
 - C++20 по файлам, шаг 2: `Type::from`, `normalizeName`, `Type::structTy` принимают `std::string_view` (разбор `array<...>` без копии подстроки); мёртвое `Type::isConvertibleTo` (нигде не вызывалось) удалено. Поведение не меняется.
+- C++20 по файлам, шаг 3: в lexer.cpp цепочка `if (word == "...")` (101 сравнение) заменена `constexpr` таблицей `kKeywords` + `std::ranges::find`; мёртвая ветка `str → STR` (перекрыта `str → IDENTIFIER`) не перенесена. Тест `tests/lexer-keywords.cpp` (104 слова) проходит и на прежнем лексере, и на новом. Поведение не меняется.

@@ -3,6 +3,123 @@
 #include <iostream>
 #include <cctype>
 #include <cstdlib>
+#include <algorithm>
+#include <string_view>
+#include <utility>
+
+namespace {
+
+// Ключевые слова и встроенные имена → тип токена. Порядок и состав
+// совпадают с прежней цепочкой if/else (первое совпадение выигрывало).
+constexpr std::pair<std::string_view, TokenType> kKeywords[] = {
+    {"let", LET},
+    {"const", CONST_T},
+    {"for", FOR_T},
+    {"while", WHILE_T},
+    {"loop", LOOP_T},
+    {"in", IN_T},
+    {"struct", TIP},
+    {"new", NW},
+    {"repeat", CERT},
+    {"import", IMP},
+    {"open", ATK},
+    {"write", ZAP},
+    {"read", PRO},
+    {"close", ZAK},
+    {"input_int", VD},
+    {"input_str", VV_S},
+    {"floor", FLO},
+    {"ceil", CEL},
+    {"round", RON},
+    {"rand", RAN},
+    {"len", AR},
+    {"replace", REP},
+    {"svi", SVI},
+    {"lor", LOR},
+    {"int", ROX},
+    {"float", DOR},
+    {"string", COS},
+    {"bool", BUE},
+    {"void", VOID_T},
+    {"i8", FIXED_TYPE},
+    {"i16", FIXED_TYPE},
+    {"i32", FIXED_TYPE},
+    {"i64", FIXED_TYPE},
+    {"u8", FIXED_TYPE},
+    {"u16", FIXED_TYPE},
+    {"u32", FIXED_TYPE},
+    {"u64", FIXED_TYPE},
+    {"f32", FIXED_TYPE},
+    {"f64", FIXED_TYPE},
+    {"uint", IDENTIFIER},
+    {"short", IDENTIFIER},
+    {"ushort", IDENTIFIER},
+    {"long", IDENTIFIER},
+    {"ulong", IDENTIFIER},
+    {"byte", IDENTIFIER},
+    {"double", IDENTIFIER},
+    {"str", IDENTIFIER},
+    {"char", IDENTIFIER},
+    {"rox", ROX},
+    {"dor", DOR},
+    {"cos", COS},
+    {"bue", BUE},
+    {"if", ELES},
+    {"else", SELE},
+    {"eles", ELES},
+    {"sele", SELE},
+    {"cert", CERT},
+    {"ceh", CEH},
+    {"usy", USY},
+    {"fn", FUCN},
+    {"return", REV},
+    {"print", SLOV},
+    {"fucn", FUCN},
+    {"rev", REV},
+    {"cop", COP},
+    {"tip", TIP},
+    {"slov", SLOV},
+    {"ptr", PTR},
+    {"atk", ATK},
+    {"zap", ZAP},
+    {"pro", PRO},
+    {"zak", ZAK},
+    {"file", FILE_T},
+    {"sqrt", SQRT},
+    {"abs", ABS},
+    {"pow", POW},
+    {"max", MAX},
+    {"min", MIN},
+    {"flo", FLO},
+    {"cel", CEL},
+    {"ron", RON},
+    {"ran", RAN},
+    {"vd", VD},
+    {"nw", NW},
+    {"del", DEL},
+    {"defer", DEFER},
+    {"drop", DROP},
+    {"brk", BRK},
+    {"break", BRK},
+    {"imp", IMP},
+    {"cont", CONT},
+    {"continue", CONT},
+    {"ar", AR},
+    {"ser", SER},
+    {"rep", REP},
+    {"vv_s", VV_S},
+    {"chr", CHR},
+    {"rox64", ROX64},
+    {"true", TRUE_T},
+    {"false", FALSE_T},
+};
+
+TokenType keywordType(std::string_view word) {
+    const auto it = std::ranges::find(kKeywords, word, &std::pair<std::string_view, TokenType>::first);
+    return it == std::end(kKeywords) ? IDENTIFIER : it->second;
+}
+
+} // namespace
 
 std::vector<Token> tokenize(const std::string& code, const std::string& filename) {
     std::vector<Token> tokens;
@@ -78,94 +195,7 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
                 word += code[i++];
                 column++;
             }
-            if      (word == "let")  add(LET,  word, tokLine, tokCol);
-            else if (word == "const") add(CONST_T, word, tokLine, tokCol);
-            else if (word == "for") add(FOR_T, word, tokLine, tokCol);
-            else if (word == "while") add(WHILE_T, word, tokLine, tokCol);
-            else if (word == "loop") add(LOOP_T, word, tokLine, tokCol);
-            else if (word == "in") add(IN_T, word, tokLine, tokCol);
-            else if (word == "struct") add(TIP, word, tokLine, tokCol);
-            else if (word == "new")    add(NW,  word, tokLine, tokCol);
-            else if (word == "repeat") add(CERT, word, tokLine, tokCol);
-            else if (word == "import") add(IMP, word, tokLine, tokCol);
-            else if (word == "open")   add(ATK, word, tokLine, tokCol);
-            else if (word == "write")  add(ZAP, word, tokLine, tokCol);
-            else if (word == "read")   add(PRO, word, tokLine, tokCol);
-            else if (word == "close")  add(ZAK, word, tokLine, tokCol);
-            else if (word == "input_int") add(VD, word, tokLine, tokCol);
-            else if (word == "input_str") add(VV_S, word, tokLine, tokCol);
-            else if (word == "floor")  add(FLO, word, tokLine, tokCol);
-            else if (word == "ceil")   add(CEL, word, tokLine, tokCol);
-            else if (word == "round")  add(RON, word, tokLine, tokCol);
-            else if (word == "rand")   add(RAN, word, tokLine, tokCol);
-            else if (word == "len")    add(AR,  word, tokLine, tokCol);
-            else if (word == "replace") add(REP, word, tokLine, tokCol);
-            else if (word == "svi")  add(SVI,  word, tokLine, tokCol);
-            else if (word == "lor")  add(LOR,  word, tokLine, tokCol);
-            else if (word == "int")  add(ROX,  word, tokLine, tokCol);
-            else if (word == "float") add(DOR,  word, tokLine, tokCol);
-            else if (word == "string") add(COS, word, tokLine, tokCol);
-            else if (word == "bool") add(BUE,  word, tokLine, tokCol);
-            else if (word == "void") add(VOID_T, word, tokLine, tokCol);
-            else if (word == "i8" || word == "i16" || word == "i32" || word == "i64" ||
-                     word == "u8" || word == "u16" || word == "u32" || word == "u64" ||
-                     word == "f32" || word == "f64") add(FIXED_TYPE, word, tokLine, tokCol);
-            else if (word == "uint" || word == "short" || word == "ushort" ||
-                     word == "long" || word == "ulong" || word == "byte" ||
-                     word == "double" || word == "str" || word == "char")
-                add(IDENTIFIER, word, tokLine, tokCol);
-            else if (word == "rox")  add(ROX,  word, tokLine, tokCol);
-            else if (word == "dor")  add(DOR,  word, tokLine, tokCol);
-            else if (word == "cos")  add(COS,  word, tokLine, tokCol);
-            else if (word == "bue")  add(BUE,  word, tokLine, tokCol);
-            else if (word == "if")   add(ELES, word, tokLine, tokCol);
-            else if (word == "else") add(SELE, word, tokLine, tokCol);
-            else if (word == "eles") add(ELES, word, tokLine, tokCol);
-            else if (word == "sele") add(SELE, word, tokLine, tokCol);
-            else if (word == "cert") add(CERT, word, tokLine, tokCol);
-            else if (word == "ceh")  add(CEH,  word, tokLine, tokCol);
-            else if (word == "usy")  add(USY,  word, tokLine, tokCol);
-            else if (word == "fn")   add(FUCN, word, tokLine, tokCol);
-            else if (word == "return") add(REV, word, tokLine, tokCol);
-            else if (word == "print") add(SLOV, word, tokLine, tokCol);
-            else if (word == "fucn") add(FUCN, word, tokLine, tokCol);
-            else if (word == "rev")  add(REV,  word, tokLine, tokCol);
-            else if (word == "cop")  add(COP,  word, tokLine, tokCol);
-            else if (word == "tip")  add(TIP,  word, tokLine, tokCol);
-            else if (word == "slov") add(SLOV, word, tokLine, tokCol);
-            else if (word == "ptr")  add(PTR,  word, tokLine, tokCol);
-            else if (word == "atk")  add(ATK,  word, tokLine, tokCol);
-            else if (word == "zap")  add(ZAP,  word, tokLine, tokCol);
-            else if (word == "pro")  add(PRO,  word, tokLine, tokCol);
-            else if (word == "zak")  add(ZAK,  word, tokLine, tokCol);
-            else if (word == "file") add(FILE_T, word, tokLine, tokCol);
-            else if (word == "sqrt") add(SQRT, word, tokLine, tokCol);
-            else if (word == "abs")  add(ABS,  word, tokLine, tokCol);
-            else if (word == "pow")  add(POW,  word, tokLine, tokCol);
-            else if (word == "max")  add(MAX,  word, tokLine, tokCol);
-            else if (word == "min")  add(MIN,  word, tokLine, tokCol);
-            else if (word == "flo")  add(FLO,  word, tokLine, tokCol);
-            else if (word == "cel")  add(CEL,  word, tokLine, tokCol);
-            else if (word == "ron")  add(RON,  word, tokLine, tokCol);
-            else if (word == "ran")  add(RAN,  word, tokLine, tokCol);
-            else if (word == "vd")   add(VD,   word, tokLine, tokCol);
-            else if (word == "nw")   add(NW,   word, tokLine, tokCol);
-            else if (word == "del")  add(DEL,  word, tokLine, tokCol);
-            else if (word == "defer") add(DEFER, word, tokLine, tokCol);
-            else if (word == "drop") add(DROP, word, tokLine, tokCol);
-            else if (word == "brk" || word == "break") add(BRK, word, tokLine, tokCol);
-            else if (word == "imp")  add(IMP,  word, tokLine, tokCol);
-            else if (word == "cont" || word == "continue") add(CONT, word, tokLine, tokCol);
-            else if (word == "ar")   add(AR,   word, tokLine, tokCol);
-            else if (word == "ser")  add(SER,  word, tokLine, tokCol);
-            else if (word == "rep")  add(REP,  word, tokLine, tokCol);
-            else if (word == "vv_s") add(VV_S, word, tokLine, tokCol);
-            else if (word == "str")  add(STR,  word, tokLine, tokCol);
-            else if (word == "chr")  add(CHR,  word, tokLine, tokCol);
-            else if (word == "rox64") add(ROX64, word, tokLine, tokCol);
-            else if (word == "true")  add(TRUE_T, word, tokLine, tokCol);
-            else if (word == "false") add(FALSE_T, word, tokLine, tokCol);
-            else add(IDENTIFIER, word, tokLine, tokCol);
+            add(keywordType(word), word, tokLine, tokCol);
             continue;
         }
 
