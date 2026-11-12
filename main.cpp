@@ -43,6 +43,11 @@ static void appendModuleTokens(const fs::path& sourcePath,
     }
     if (loaded.count(canonicalPath)) return;
 
+    if (fs::exists(canonicalPath, ec) && !fs::is_regular_file(canonicalPath, ec)) {
+        std::cerr << "Ошибка: не удалось открыть модуль: " << canonicalPath.string()
+                  << " (это не обычный файл)" << std::endl;
+        std::exit(1);
+    }
     std::ifstream file(canonicalPath);
     if (!file.is_open()) {
         std::cerr << "Ошибка: не удалось открыть модуль: "
@@ -88,7 +93,7 @@ static void appendModuleTokens(const fs::path& sourcePath,
     loaded.insert(canonicalPath);
 }
 
-int main(int argc, char* argv[]) {
+static int run(int argc, char* argv[]) {
     if (argc == 2 && (std::string(argv[1]) == "--version" ||
                       std::string(argv[1]) == "-V")) {
         std::cout << "SC compiler " << SC_VERSION << '\n';
@@ -126,4 +131,17 @@ int main(int argc, char* argv[]) {
     codegen.print();
 
     return 0;
+}
+
+// spec §1: код 3 — внутренняя ошибка компилятора. Любое исключение — это она,
+// а не аварийное завершение (abort, код 134).
+int main(int argc, char* argv[]) {
+    try {
+        return run(argc, argv);
+    } catch (const std::exception& error) {
+        std::cerr << "Ошибка: внутренняя ошибка компилятора: " << error.what() << '\n';
+    } catch (...) {
+        std::cerr << "Ошибка: внутренняя ошибка компилятора: неизвестное исключение\n";
+    }
+    return 3;
 }

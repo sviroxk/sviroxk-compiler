@@ -1208,6 +1208,10 @@ expect_import_error() {
 }
 
 expect_import_error "missing-module" "не удалось открыть модуль" 'import "missing.svx";'
+# Аудит, класс 4: каталог или устройство вместо файла давали abort (код 134).
+expect_import_error "empty-path" "это не обычный файл" 'import "";'
+expect_import_error "directory" "это не обычный файл" 'import ".";'
+expect_import_error "device" "это не обычный файл" 'import "/dev/zero";'
 mkdir -p "$TMP_DIR/import-cycle"
 printf '%s\n' 'import "b.svx";' > "$TMP_DIR/import-cycle/a.svx"
 printf '%s\n' 'import "a.svx";' > "$TMP_DIR/import-cycle/b.svx"
