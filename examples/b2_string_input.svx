@@ -1,2 +1,2 @@
-svi cos lor text = vv_s("text: ");
+svi string lor text = vv_s("text: ");
 print(text);

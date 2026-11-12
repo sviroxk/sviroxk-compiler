@@ -1,5 +1,5 @@
 tip Node {
-    rox value;
+    int value;
     ptr next;
 }
 

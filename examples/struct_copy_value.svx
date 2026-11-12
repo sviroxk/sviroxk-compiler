@@ -1,6 +1,6 @@
 tip Point {
-    rox x = 0;
-    rox y = 0;
+    int x = 0;
+    int y = 0;
 }
 
 svi tip Point lor a;

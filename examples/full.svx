@@ -1,22 +1,22 @@
-svi rox lor x = 5;
-svi dor lor y = 3.14;
-svi bue lor ok = true;
-svi rox[] lor arr = [10, 20, 30];
-svi rox lor i = 0;
+svi int lor x = 5;
+svi float lor y = 3.14;
+svi bool lor ok = true;
+svi int[] lor arr = [10, 20, 30];
+svi int lor i = 0;
 
-eles (x > 3) {
-    slov("x больше 3");
-} sele {
-    slov("иначе");
+if (x > 3) {
+    print("x больше 3");
+} else {
+    print("иначе");
 }
 
 cert ceh (2) {
-    slov("цикл");
+    print("цикл");
 }
 
-fucn add(rox a, rox b) {
-    rev a + b;
+fn add(int a, int b) {
+    return a + b;
 }
 
-svi rox lor sum = cop add(5, 3);
-slov(sum);
+svi int lor sum = add(5, 3);
+print(sum);

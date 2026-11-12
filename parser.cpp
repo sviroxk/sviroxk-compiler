@@ -1,3 +1,4 @@
+#include <map>
 #include "parser.h"
 #include "diagnostics.h"
 #include <iostream>
@@ -1398,8 +1399,35 @@ Node parseOne() {
     return Node{};
 }
 
+// Одно слово на одно действие: старые синонимы новых слов удалены.
+// Лексер по-прежнему их узнаёт, чтобы дать ошибку с позицией и подсказкой.
+void reportRemovedWords() {
+    static const std::map<std::string, std::string> removed = {
+        {"fucn", "fn"}, {"rev", "return"}, {"slov", "print"},
+        {"eles", "if"}, {"sele", "else"}, {"brk", "break"}, {"cont", "continue"},
+        {"rox", "int"}, {"rox64", "long"}, {"dor", "float"}, {"cos", "string"},
+        {"bue", "bool"}, {"chr", "char"},
+    };
+    for (size_t i = 0; i < gtokens.size(); ++i) {
+        const Token& token = gtokens[i];
+        if (token.type == STRING || token.type == IDENTIFIER || token.type == END) continue;
+        std::string message;
+        auto found = removed.find(token.value);
+        if (found != removed.end())
+            message = "слово '" + token.value + "' удалено: пишите '" + found->second + "'";
+        else if (token.type == COP)
+            message = "слово 'cop' удалено: вызов функции пишется без него, 'f(...)'";
+        else if (token.type == CERT && i + 1 < gtokens.size() && gtokens[i + 1].type == USY)
+            message = "форма 'cert usy (...)' удалена: пишите 'while (...)'";
+        if (message.empty()) continue;
+        ++parseErrorCount;
+        sc::reportDiagnostic(token.file, token.line, token.column, "syntax", message);
+    }
+}
+
 public:
 ParseResult run() {
+    reportRemovedWords();
     Node program;
     program.type = NODE_PROGRAM;
     while (!parseStopped && peek().type != END) {

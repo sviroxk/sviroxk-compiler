@@ -1,7 +1,7 @@
 tip Point {
-    rox field = 1;
+    int field = 1;
 }
 svi tip Point lor point = { field = 9; };
-rox point_field = 42;
+int point_field = 42;
 print(point.field);
 print(point_field);

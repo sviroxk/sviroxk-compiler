@@ -1,6 +1,6 @@
 let bad: int = "x" + "y";
 int overflow = -2147483649;
-svi rox[] lor values = [1, 2];
-svi dor lor index = 0.5;
-slov(values[index]);
+svi int[] lor values = [1, 2];
+svi float lor index = 0.5;
+print(values[index]);
 sqrt();
