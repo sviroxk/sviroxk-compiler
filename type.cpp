@@ -7,7 +7,7 @@
 
 namespace sc {
 
-static Type normalizeName(const std::string& raw) {
+static Type normalizeName(std::string_view raw) {
     if (raw == "int" || raw == "i32" || raw == "rox") return Type::integer(32, true);
     if (raw == "uint" || raw == "u32") return Type::integer(32, false);
     if (raw == "short" || raw == "i16") return Type::integer(16, true);
@@ -25,13 +25,12 @@ static Type normalizeName(const std::string& raw) {
     if (raw == "void") return Type::voidTy();
     if (raw == "file") return Type::fileTy();
     if (raw.starts_with("array<")) {
-        std::string element = raw.substr(6, raw.size() - 7);
-        return Type::arrayTy(Type::from(element), 0);
+        return Type::arrayTy(Type::from(raw.substr(6, raw.size() - 7)), 0);
     }
     return Type::structTy(raw);
 }
 
-Type Type::from(const std::string& raw) {
+Type Type::from(std::string_view raw) {
     if (raw.empty() || raw == "<error>") return Type::error();
     return normalizeName(raw);
 }
@@ -84,33 +83,6 @@ Type Type::commonType(const Type& other) const {
         return Type::integer(std::max(width, other.width), signed_);
     }
     return Type::error();
-}
-
-bool Type::isConvertibleTo(const Type& target) const {
-    if (isError() || target.isError()) return true;
-    if (kind == target.kind) {
-        if (isStruct()) return structName == target.structName;
-        if (isArray() && target.isArray()) return element->compatible(*target.element);
-        if (isDynArray() && target.isDynArray()) return element->compatible(*target.element);
-        return true;
-    }
-    // char <-> u8 (historical alias)
-    if ((isChar() && target.isInteger() && target.width == 8 && !target.signed_) ||
-        (isInteger() && width == 8 && !signed_ && target.isChar()))
-        return true;
-    // ptr <-> array / dyn array
-    if (isPtr() && (target.isArray() || target.isDynArray())) return true;
-    if (target.isPtr() && (isArray() || isDynArray())) return true;
-    // f64 <- f32 (widening)
-    if (isFloat() && target.isFloat() && target.width >= width) return true;
-    // integer -> float
-    if (target.isFloat() && isInteger()) return true;
-    // integer widening/narrowing (cast) — same signedness
-    if (isInteger() && target.isInteger()) {
-        if (signed_ != target.signed_) return false;
-        return true;
-    }
-    return false;
 }
 
 Type Type::promote() const {

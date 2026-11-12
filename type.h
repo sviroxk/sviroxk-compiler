@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace llvm {
 class LLVMContext;
@@ -106,7 +107,7 @@ struct Type {
         t.kind = TypeKind::File;
         return t;
     }
-    static Type structTy(const std::string& name) {
+    static Type structTy(std::string_view name) {
         Type t;
         t.kind = TypeKind::Struct;
         t.structName = name;
@@ -127,7 +128,7 @@ struct Type {
     }
 
     // Parse a normalized type name ("i32", "f64", "array<i32>", "MyStruct", ...).
-    static Type from(const std::string& raw);
+    static Type from(std::string_view raw);
 
     bool isError()   const { return kind == TypeKind::Error; }
     bool isInteger() const { return kind == TypeKind::Integer; }
@@ -170,10 +171,6 @@ struct Type {
 
     // Тип результата бинарной операции (numeric promotion).
     Type commonType(const Type& other) const;
-
-    // Явное (cast) или неявное преобразование: может значение этого типа
-    // быть преобразовано к target без потери данных (widening) или с cast.
-    bool isConvertibleTo(const Type& target) const;
 
     // Арифметическое продвижение: целые narrower 32 бит -> i32,
     // f32/f64 остаются собой, bool/char -> i32.
