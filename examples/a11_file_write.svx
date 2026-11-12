@@ -1,4 +1,4 @@
-file output = open("sc-a11.tmp");
+file output = open("sc-a11.tmp", "w");
 write(output, "ok");
 close(output);
 print(1);
