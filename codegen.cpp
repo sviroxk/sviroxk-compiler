@@ -322,6 +322,16 @@ void CodeGen::growDynArray(const std::string& varName, llvm::Value* newCapacity)
 
 bool CodeGen::isUnsignedExpr(const Node& node) const {
     if (node.type == NODE_NUMBER) return false;
+    if (node.type == NODE_FUNC_CALL) {
+        auto found = funcReturnTypes.find(node.varName);
+        if (found == funcReturnTypes.end()) return false;
+        const sc::Type result = sc::Type::from(found->second);
+        return result.isUnsigned();
+    }
+    if (node.type == NODE_CAST) {
+        const sc::Type target = sc::Type::from(node.varType);
+        return target.isUnsigned() || target.isChar();
+    }
     if (node.type == NODE_IDENTIFIER) {
         auto found = unsignedVars.find(node.value);
         return found != unsignedVars.end() && found->second;
@@ -599,18 +609,52 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         llvm::Type* target = svType(node.varType);
         if (val->getType()->isFloatingPointTy() && target->isFloatingPointTy())
             return castTo(val, target);
-        if (val->getType()->isFloatingPointTy() && target->isIntegerTy())
-            return builder.CreateFPToSI(val, target);
+        const sc::Type targetType = sc::Type::from(node.varType);
+        const bool targetUnsigned = targetType.isUnsigned() || targetType.isChar();
+        if (val->getType()->isFloatingPointTy() && target->isIntegerTy()) {
+            // NaN, бесконечность и значения вне диапазона — ошибка выполнения.
+            const unsigned width = target->getIntegerBitWidth();
+            llvm::Value* x = val->getType()->isDoubleTy() ? val : builder.CreateFPExt(val, builder.getDoubleTy());
+            const double high = std::ldexp(1.0, static_cast<int>(targetUnsigned ? width : width - 1));
+            llvm::Value* aboveLow = targetUnsigned
+                ? builder.CreateFCmpOGT(x, llvm::ConstantFP::get(builder.getDoubleTy(), -1.0))
+                : builder.CreateFCmpOGE(x, llvm::ConstantFP::get(builder.getDoubleTy(), -high));
+            llvm::Value* inRange = builder.CreateAnd(aboveLow,
+                builder.CreateFCmpOLT(x, llvm::ConstantFP::get(builder.getDoubleTy(), high)));
+            emitRuntimeFailureIf(builder.CreateNot(inRange),
+                                 "value out of range for type '" + node.varType + "'", node);
+            return targetUnsigned ? builder.CreateFPToUI(x, target) : builder.CreateFPToSI(x, target);
+        }
         if (val->getType()->isIntegerTy() && target->isFloatingPointTy()) {
             llvm::Value* converted = isUnsignedExpr(*node.left)
                 ? builder.CreateUIToFP(val, target) : builder.CreateSIToFP(val, target);
             return converted;
         }
         if (val->getType()->isIntegerTy() && target->isIntegerTy()) {
-            if (val->getType()->getIntegerBitWidth() == target->getIntegerBitWidth()) return val;
+            // Значение должно помещаться в целевой тип: проверка в общем типе шире обоих на бит.
+            const bool sourceUnsigned = isUnsignedExpr(*node.left);
+            const unsigned sourceWidth = val->getType()->getIntegerBitWidth();
+            const unsigned targetWidth = target->getIntegerBitWidth();
+            const bool lossless = (sourceUnsigned == targetUnsigned && targetWidth >= sourceWidth) ||
+                                  (sourceUnsigned && !targetUnsigned && targetWidth > sourceWidth);
+            if (!lossless) {
+                const unsigned wide = std::max(sourceWidth, targetWidth) + 1;
+                llvm::Type* wideType = builder.getIntNTy(wide);
+                llvm::Value* v = sourceUnsigned ? builder.CreateZExt(val, wideType) : builder.CreateSExt(val, wideType);
+                llvm::APInt low = targetUnsigned ? llvm::APInt(wide, 0)
+                    : llvm::APInt::getSignedMinValue(targetWidth).sext(wide);
+                llvm::APInt high = targetUnsigned ? llvm::APInt::getMaxValue(targetWidth).zext(wide)
+                    : llvm::APInt::getSignedMaxValue(targetWidth).sext(wide);
+                llvm::Value* inRange = builder.CreateAnd(
+                    builder.CreateICmpSGE(v, builder.getInt(low)),
+                    builder.CreateICmpSLE(v, builder.getInt(high)));
+                emitRuntimeFailureIf(builder.CreateNot(inRange),
+                                     "value out of range for type '" + node.varType + "'", node);
+            }
+            if (sourceWidth == targetWidth) return val;
             if (val->getType()->getIntegerBitWidth() > target->getIntegerBitWidth())
                 return builder.CreateTrunc(val, target);
-            return isUnsignedExpr(*node.left)
+            return sourceUnsigned
                 ? builder.CreateZExt(val, target) : builder.CreateSExt(val, target);
         }
         codegenFailure(node, "невозможно преобразовать значение к типу '" + node.varType + "'");
@@ -1091,20 +1135,17 @@ void CodeGen::genNode(const Node& node) {
                 builder.CreateCall(printfFunc, {fmt, promoted});
             } else if (val->getType()->isIntegerTy() &&
                        val->getType()->getIntegerBitWidth() < 32) {
-                const bool isUnsigned = node.left->type == NODE_IDENTIFIER &&
-                    unsignedVars.count(node.left->value) && unsignedVars[node.left->value];
+                const bool isUnsigned = isUnsignedExpr(*node.left);
                 val = isUnsigned ? builder.CreateZExt(val, builder.getInt32Ty())
                                  : builder.CreateSExt(val, builder.getInt32Ty());
                 llvm::Value* fmt = getStringPtr("%d\n");
                 builder.CreateCall(printfFunc, {fmt, val});
             } else if (val->getType()->isIntegerTy(64)) {
-                const bool isUnsigned = node.left->type == NODE_IDENTIFIER &&
-                    unsignedVars.count(node.left->value) && unsignedVars[node.left->value];
+                const bool isUnsigned = isUnsignedExpr(*node.left);
                 llvm::Value* fmt = getStringPtr(isUnsigned ? "%llu\n" : "%lld\n");
                 builder.CreateCall(printfFunc, {fmt, val});
             } else {
-                const bool isUnsigned = node.left->type == NODE_IDENTIFIER &&
-                    unsignedVars.count(node.left->value) && unsignedVars[node.left->value];
+                const bool isUnsigned = isUnsignedExpr(*node.left);
                 llvm::Value* fmt = getStringPtr(isUnsigned ? "%u\n" : "%d\n");
                 builder.CreateCall(printfFunc, {fmt, val});
             }

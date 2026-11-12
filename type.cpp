@@ -42,6 +42,12 @@ bool Type::compatible(const Type& other) const {
         if (isStruct()) return structName == other.structName;
         if (isArray() && other.isArray()) return element->compatible(*other.element);
         if (isDynArray() && other.isDynArray()) return element->compatible(*other.element);
+        // Неявно — только без потерь: расширение той же знаковости или unsigned -> более широкий signed.
+        if (isInteger()) {
+            if (signed_ == other.signed_) return width >= other.width;
+            return signed_ && width > other.width;
+        }
+        if (isFloat()) return width >= other.width;
         return true;
     }
     // char <-> u8 (historical alias)
@@ -54,12 +60,8 @@ bool Type::compatible(const Type& other) const {
     // f64 <- f32 (widening)
     if (isFloat() && other.isFloat() && width >= other.width) return true;
     // integer widening only (same signedness, wider target)
-    if (isInteger() && other.isInteger()) {
-        if (signed_ != other.signed_) return false;
-        return width >= other.width;
-    }
-    // integer -> float
-    if (isFloat() && other.isInteger()) return true;
+    // integer -> float: в f64 любое целое, в f32 — только до 16 бит (точно представимо)
+    if (isFloat() && other.isInteger()) return width == 64 || other.width <= 16;
     return false;
 }
 

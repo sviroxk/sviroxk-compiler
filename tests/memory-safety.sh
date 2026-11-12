@@ -87,7 +87,7 @@ print(values[index]);
 SC
 check_case dynamic-upper-write runtime 'SC runtime error: array index out of bounds' <<'SC'
 ptr values = nw rox[2];
-int index = values.len();
+i64 index = values.len();
 values[index] = 9;
 SC
 check_case missing-file runtime "SC runtime error: cannot open file 'missing/file.txt'" <<'SC'
