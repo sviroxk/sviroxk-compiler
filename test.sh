@@ -44,6 +44,18 @@ if ! grep -Fq 'error[syntax]' "$TMP_DIR/parser-state.err"; then
     exit 1
 fi
 
+# Every AST node has a source position: examples, fixtures, stdlib and all spec programs.
+"${CXX:-clang++}" -std=c++17 "${PARSER_TEST_FLAGS[@]}" -I. \
+    tests/ast-positions.cpp lexer.cpp parser.cpp -o "$TMP_DIR/ast-positions"
+mkdir -p "$TMP_DIR/spec-programs"
+awk -v dir="$TMP_DIR/spec-programs" '
+    /^```/ { if (inside) { inside = 0; file = ""; next }
+             inside = 1; if (substr($0, 4) == "sc") file = dir "/" (++n) ".svx"; next }
+    inside && file != "" { print > file }
+' docs/spec.md
+timeout --signal=TERM 10s "$TMP_DIR/ast-positions" examples/*.svx tests/fixtures/*.svx \
+    stdlib/*/*.svx "$TMP_DIR"/spec-programs/*.svx
+
 sources=(
     "examples/hello.svx"
     "examples/legacy_square.svx"
@@ -1118,6 +1130,8 @@ expect_compile_error "unknown-type" 'mystery value = 1;'
 expect_compile_error "duplicate-variable" 'let result: int = 1; let result: int = 2;'
 expect_compile_error "break-outside-loop" 'break;'
 expect_compile_error "builtin-function-collision" 'fn int max(int left, int right) { return left + right; }'
+# Ошибка в инициализаторе поля указывает на само поле, а не на 1:1.
+expect_compile_error "struct-field-init-position" $'struct P { int a = 0; }\n\nP p = { a = "x"; };' ":3:9: error[semantic]: поле 'a' ожидает тип"
 expect_compile_error "nested-function" 'if (1) { fn int inner(int value) { return value; } }'
 expect_compile_error "unreachable-after-return" 'fn void dead() { return; print(2); }'
 expect_compile_error "unreachable-after-break" 'fn void dead() { repeat (2) { break; print(3); } }'

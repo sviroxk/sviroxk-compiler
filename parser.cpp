@@ -27,6 +27,12 @@ unsigned failCalls = 0;
 bool parseStopped = false;
 std::vector<Token> gtokens;
 std::set<std::string> structNames;  // имена, объявленные через struct
+static void setPos(Node& node, const Token& token) {
+    node.line = token.line;
+    node.column = token.column;
+    node.file = token.file;
+}
+
 template <typename... Args>
 std::shared_ptr<Node> makeNode(Args&&... args) {
     return std::make_shared<Node>(std::forward<Args>(args)...);
@@ -222,7 +228,8 @@ Node parseStructInstance(const Token& declarationToken, const std::string& struc
         consume();
         expect(LBRACE);
         while (peek().type != RBRACE && peek().type != END) {
-            Node init;
+            Node init; init.type = NODE_ASSIGN;  // поле = значение
+            setPos(init, peek());
             if (isNameToken(peek().type) && peek(1).type == EQUALS) {
                 init.varName = consume().value;
                 consume();
@@ -242,9 +249,10 @@ Node parseStructInstance(const Token& declarationToken, const std::string& struc
 
 Node parseStructLiteral() {
     Node node; node.type = NODE_STRUCT_LITERAL;
-    expect(LBRACE);
+    setPos(node, expect(LBRACE));
     while (peek().type != RBRACE && peek().type != END) {
-        Node init;
+        Node init; init.type = NODE_ASSIGN;  // поле = значение
+        setPos(init, peek());
         if (isNameToken(peek().type) && peek(1).type == EQUALS) {
             init.varName = consume().value;
             consume(); // =
@@ -292,7 +300,7 @@ Node parsePrimary() {
         Token token = consume();
         left.type = NODE_NUMBER; left.value = "0";
         left.varType = "bue";
-        left.line = token.line; left.column = token.column;
+        left.line = token.line; left.column = token.column; left.file = token.file;
         return left;
     }
     // математика
@@ -319,8 +327,7 @@ Node parsePrimary() {
     }
     // vd — ввод с клавиатуры
     if (peek().type == VD) {
-        consume();
-        Node left; left.type = NODE_INPUT;
+        Node left; left.type = NODE_INPUT; setPos(left, consume());
         expect(LPAREN);
         left.value = consume().value;
         expect(RPAREN);
@@ -328,8 +335,7 @@ Node parsePrimary() {
     }
     // vv_s — ввод строки (в выражении)
     if (peek().type == VV_S) {
-        consume();
-        Node left; left.type = NODE_INPUT;
+        Node left; left.type = NODE_INPUT; setPos(left, consume());
         left.varType = "str";
         expect(LPAREN);
         left.value = consume().value;
@@ -338,8 +344,7 @@ Node parsePrimary() {
     }
     // nw — создать динамический массив
     if (peek().type == NW) {
-        consume();
-        Node left; left.type = NODE_DYN_ARRAY;
+        Node left; left.type = NODE_DYN_ARRAY; setPos(left, consume());
         left.varType = consume().value; // тип (rox etc)
         expect(LBRACKET);
         left.left = makeNode(parseExpr()); // размер
@@ -352,6 +357,7 @@ Node parsePrimary() {
         Node left; left.type = NODE_FILE_OPEN;
         left.line = token.line;
         left.column = token.column;
+        left.file = token.file;
         expect(LPAREN);
         left.left = makeNode(parseExpr());
         if (peek().type == COMMA) {
@@ -363,8 +369,7 @@ Node parsePrimary() {
     }
     // pro — прочитать файл
     if (peek().type == PRO) {
-        consume();
-        Node left; left.type = NODE_FILE_READ;
+        Node left; left.type = NODE_FILE_READ; setPos(left, consume());
         expect(LPAREN);
         left.varName = consume().value;
         expect(RPAREN);
@@ -482,8 +487,7 @@ Node parsePrimary() {
             consume();
             auto access = makeNode();
             access->type = NODE_ARRAY_ACCESS;
-            access->line = t.line;
-            access->column = t.column;
+            setPos(*access, t);
             access->varName = t.value;
             access->left = makeNode(parseExpr());
             expect(RBRACKET);
@@ -503,9 +507,7 @@ Node parseUnary() {
             failAt(name, "после '&' ожидалось имя переменной");
         consume();
         Node node; node.type = NODE_ADDR;
-        node.line = address.line;
-        node.column = address.column;
-        node.file = address.file;
+        setPos(node, address);
         node.varName = name.value;
         return node;
     }
@@ -520,13 +522,14 @@ Node parseUnary() {
     if (peek().type == BANG) {
         Token op = consume();
         Node node; node.type = NODE_BINOP;
-        node.line = op.line; node.column = op.column;
+        node.line = op.line; node.column = op.column; node.file = op.file;
         node.op = "!";
         node.left = makeNode(parseUnary());
         node.right = makeNode();
         node.right->type = NODE_NUMBER;
         node.right->value = "0";
         node.right->varType = "bool";
+        setPos(*node.right, op);
         return node;
     }
     if (peek().type == MINUS) {
@@ -551,6 +554,7 @@ Node parseUnary() {
         n.left = makeNode();
         n.left->type = NODE_NUMBER;
         n.left->value = "0";
+        setPos(*n.left, minus);
         n.right = makeNode(parsePower());
         return n;
     }
@@ -572,15 +576,8 @@ Node parseMul() {
     Node left = parsePower();
     while (peek().type == STAR || peek().type == SLASH ||
            peek().type == INTEGER_DIV || peek().type == PERCENT) {
-        std::string op = consume().value;
-        auto b = makeNode();
-        b->type = NODE_BINOP;
-        b->op = op;
-        b->line = gtokens[static_cast<size_t>(pos - 1)].line;
-        b->column = gtokens[static_cast<size_t>(pos - 1)].column;
-        b->left = makeNode(left);
-        b->right = makeNode(parsePower());
-        left = *b;
+        Token op = consume();
+        left = makeBinary(left, op, parsePower());
     }
     return left;
 }
@@ -589,14 +586,7 @@ Node parseAdd() {
     Node left = parseMul();
     while (peek().type == PLUS || peek().type == MINUS) {
         Token op = consume();
-        auto b = makeNode();
-        b->type = NODE_BINOP;
-        b->line = op.line;
-        b->column = op.column;
-        b->op = op.value;
-        b->left = makeNode(left);
-        b->right = makeNode(parseMul());
-        left = *b;
+        left = makeBinary(left, op, parseMul());
     }
     return left;
 }
@@ -680,6 +670,7 @@ Node parseExpr() {
         ternary.type = NODE_TERNARY;
         ternary.line = question.line;
         ternary.column = question.column;
+        ternary.file = question.file;
         ternary.left = makeNode(left);
         ternary.right = makeNode(parseExpr());
         expect(COLON, "':'");
@@ -811,6 +802,7 @@ Node parseOne() {
             Node node; node.type = NODE_ARRAY_DECL;
             node.line = declarationToken.line;
             node.column = declarationToken.column;
+            node.file = declarationToken.file;
             node.varType = varType;
             node.varName = varName;
             expect(LBRACKET);
@@ -825,6 +817,7 @@ Node parseOne() {
             Node node; node.type = NODE_VAR_DECL;
             node.line = declarationToken.line;
             node.column = declarationToken.column;
+            node.file = declarationToken.file;
             node.varType = varType;
             node.varName = varName;
             node.left = makeNode(parseExpr());
@@ -912,7 +905,7 @@ Node parseOne() {
     // cop
     if (peek().type == COP) {
         Node node; node.type = NODE_FUNC_CALL;
-        node.line = peek().line; node.column = peek().column;
+        node.line = peek().line; node.column = peek().column; node.file = peek().file;
         consume();
         node.varName = consume().value;
         expect(LPAREN);
@@ -927,7 +920,7 @@ Node parseOne() {
     // rev
     if (peek().type == REV) {
         Node node; node.type = NODE_RETURN;
-        node.line = peek().line; node.column = peek().column;
+        node.line = peek().line; node.column = peek().column; node.file = peek().file;
         consume();
         if (peek().type != SEMICOLON)
             node.left = makeNode(parseExpr());
@@ -954,8 +947,7 @@ Node parseOne() {
     }
     // vv_s — ввод строки (оператор)
     if (peek().type == VV_S) {
-        consume();
-        Node node; node.type = NODE_INPUT;
+        Node node; node.type = NODE_INPUT; setPos(node, consume());
         node.varType = "str"; // строка
         expect(LPAREN);
         node.value = consume().value;
@@ -965,16 +957,14 @@ Node parseOne() {
     }
     // brk — выход из цикла
     if (peek().type == BRK) {
-        consume();
+        Node node; node.type = NODE_BREAK; setPos(node, consume());
         expect(SEMICOLON);
-        Node node; node.type = NODE_BREAK;
         return node;
     }
     // cont — следующая итерация
     if (peek().type == CONT) {
-        consume();
+        Node node; node.type = NODE_CONTINUE; setPos(node, consume());
         expect(SEMICOLON);
-        Node node; node.type = NODE_CONTINUE;
         return node;
     }
     // PR22: defer schedules one statement in the enclosing lexical scope.
@@ -1255,6 +1245,7 @@ Node parseOne() {
         node.varName = name.value;
         node.line = name.line;
         node.column = name.column;
+        node.file = name.file;
         Token operation = consume();
         Node right = parseExpr();
         if (operation.type != EQUALS) {
@@ -1272,6 +1263,7 @@ Node parseOne() {
             identifier.value = name.value;
             identifier.line = name.line;
             identifier.column = name.column;
+            identifier.file = name.file;
             binary.left = makeNode(identifier);
             binary.right = makeNode(right);
             node.left = makeNode(binary);
@@ -1286,6 +1278,7 @@ Node parseOne() {
         Node node; node.type = NODE_LOOP;
         node.line = token.line;
         node.column = token.column;
+        node.file = token.file;
         expect(LBRACE);
         node.children = parseBlock();
         expect(RBRACE);
@@ -1296,6 +1289,7 @@ Node parseOne() {
         Node node; node.type = NODE_WHILE;
         node.line = token.line;
         node.column = token.column;
+        node.file = token.file;
         expect(LPAREN);
         node.left = makeNode(parseExpr());
         expect(RPAREN);
@@ -1361,7 +1355,7 @@ Node parseOne() {
     // eles
     if (peek().type == ELES) {
         Node node; node.type = NODE_IF;
-        consume();
+        setPos(node, consume());
         expect(LPAREN);
         node.left = makeNode(parseCond());
         expect(RPAREN);
@@ -1386,6 +1380,7 @@ Node parseOne() {
         Node node; node.type = NODE_STRUCT_DEF;
         node.line = peek().line;
         node.column = peek().column;
+        node.file = peek().file;
         consume();
         node.varName = consume().value;
         structNames.insert(node.varName);
@@ -1393,6 +1388,7 @@ Node parseOne() {
         while (peek().type != RBRACE && peek().type != END) {
             Node field; field.type = NODE_VAR_DECL;
             Token fieldType = consume();
+            setPos(field, fieldType);
             if (fieldType.type != TIP && !isTypeName(fieldType.value) && fieldType.type != IDENTIFIER)
                 failAt(fieldType, "неизвестный тип поля '" + fieldType.value + "'");
             field.varType = declaredType(fieldType);
@@ -1463,8 +1459,7 @@ ParseResult run() {
             continue;
         }
         if (peek().type == IMP) {
-            consume();
-            Node node; node.type = NODE_IMPORT;
+            Node node; node.type = NODE_IMPORT; setPos(node, consume());
             node.value = consume().value; // имя файла
             expect(SEMICOLON);
             program.children.push_back(node);
