@@ -178,6 +178,13 @@ std::string canonicalType(const std::string& type) {
     return type;
 }
 
+// PR22 spelling: `tip Name` in parameter and nested-field type positions.
+std::string declaredType(const Token& token) {
+    if (token.type == TIP)
+        return expect(IDENTIFIER, "имя структуры после 'tip'").value;
+    return canonicalType(token.value);
+}
+
 Node parseStructLiteral() {
     Node node; node.type = NODE_STRUCT_LITERAL;
     expect(LBRACE);
@@ -833,11 +840,11 @@ Node parseOne() {
         expect(LPAREN);
         while (peek().type != RPAREN && peek().type != END) {
             Token typeToken = consume();
-            if (!isTypeToken(typeToken.type))
+            if (typeToken.type != TIP && !isTypeToken(typeToken.type))
                 failAt(typeToken, "ожидался тип параметра функции");
-            if (!isTypeName(typeToken.value))
+            if (typeToken.type != TIP && !isTypeName(typeToken.value))
                 failAt(typeToken, "неизвестный тип параметра '" + typeToken.value + "'");
-            std::string ptype = canonicalType(typeToken.value);
+            std::string ptype = declaredType(typeToken);
             Token parameterName = peek();
             if (!isNameToken(parameterName.type))
                 failAt(parameterName, "ожидалось имя параметра");
@@ -1294,9 +1301,9 @@ Node parseOne() {
         while (peek().type != RBRACE && peek().type != END) {
             Node field; field.type = NODE_VAR_DECL;
             Token fieldType = consume();
-            if (!isTypeName(fieldType.value) && fieldType.type != IDENTIFIER)
+            if (fieldType.type != TIP && !isTypeName(fieldType.value) && fieldType.type != IDENTIFIER)
                 failAt(fieldType, "неизвестный тип поля '" + fieldType.value + "'");
-            field.varType = canonicalType(fieldType.value);
+            field.varType = declaredType(fieldType);
             field.varName = consume().value;
             if (peek().type == EQUALS) {
                 consume(); // =

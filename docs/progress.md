@@ -165,3 +165,11 @@
 - В `genExpr(NODE_ARRAY_POP)` сохранён блок перед условным переходом. Именно из него идёт empty-array ветка в `pop_done`; раньше PHI неверно ссылался на сам `pop_done`. Statement lowering и контракт empty pop = typed zero не менялись.
 - Regression coverage: pop после роста, повторный pop пустого массива, LIFO/длина и два pop в одном выражении, pop внутри if, f64 значение/нулевой результат. Все 4 cases проходят и попадают в ASan-прогон.
 - LLVM 18.1.8: strict build, полный `test.sh` (97 программ под ASan + 10 memory-safety cases), отдельный conformance 3/3, полный ASan/UBSan/LeakSanitizer suite прошли. Termux/ARM64 и allocator/OOM paths не проверялись.
+
+
+## Шаг 4б — структуры по значению из закрытого PR22
+- Сопоставлены PR22 `edcaacf`/stage5 `5cfce47` и main `d578daa`. Существующие nested literals/read, aggregate assignment и структуры внутри функций (#25) сохранены без переписывания; недостижимая дополнительная materialization не перенесена.
+- До правки добавлены 4 output regressions и 6 expected-errors с текстом. На отдельной сборке чистой базы все 10 новых ожиданий проваливаются (parser exit 1); полный test.sh также воспроизвёл отказ на первом новом случае.
+- Добавлены только `tip Name` в параметрах/вложенных полях, preregistration struct types перед LLVM function signatures и field lookup для параметров-структур. Положительные cases проверяют копию, nested aggregate replacement/read, forward declaration/mixed arguments, u8/f64 layout.
+- LLVM 18.1.8: strict build, полный test.sh (101 программа под ASan + 10 memory-safety cases), conformance 3/3 и полный ASan/UBSan/LeakSanitizer прошли. Ошибки проверяют неизвестные типы/поля, неверный аргумент, несовпадение forward signature и рекурсию.
+- `defer`/`drop`, struct returns, anonymous struct arguments, ownership/clone ABI и checked casts не добавлялись. Termux/ARM64 и внешний ABI не проверялись. Следующий шаг плана — `defer`.

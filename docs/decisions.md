@@ -33,3 +33,16 @@
 **Статус:** runtime check только для статических массивов.
 
 Индекс проверяется перед inbounds GEP; ошибка печатает source line/column и завершает программу ненулевым кодом. Dynamic `ptr` arrays не хранят length, поэтому безопасная проверка невозможна без descriptor/allocator redesign.
+
+
+## D-005. Перенос структур по значению из PR22 (шаг 4б)
+
+**Источник поведения:** закрытый PR22 `edcaacf`, stage 5 `5cfce47`.
+Параметр `tip Name value` — aggregate copy в локальный слот функции; скалярные
+и вложенные value-поля независимы от исходной переменной. `tip Inner field`
+добавлен как историческая запись типа вложенного поля; bare `Inner field` сохранён.
+Типы структур регистрируются до LLVM function signatures, параметр получает
+metadata для lookup полей. Существующий load aggregate переменной уже подходит
+для аргумента, поэтому лишняя временная materialization из PR22 не требуется.
+Это не ownership ABI: pointer-поля копируют адрес, не выделение; clone/move,
+struct returns, `defer`/`drop` не входят в шаг. Новых решений о памяти не принято.

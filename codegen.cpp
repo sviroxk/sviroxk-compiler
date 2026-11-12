@@ -1413,6 +1413,7 @@ void CodeGen::genNode(const Node& node) {
                 builder.CreateAlloca(ty, nullptr, pname);
             builder.CreateStore(&arg, alloca);
             vars[pname] = alloca;
+            if (ty->isStructTy()) structTypesByVariable[pname] = ptype;
             unsignedVars[pname] = ptype == "u8" || ptype == "u16" ||
                 ptype == "u32" || ptype == "u64" || ptype == "char";
             charVars[pname] = ptype == "char";
@@ -1699,6 +1700,10 @@ void CodeGen::generate(const Node& program) {
     abortFunc = runtimeFunction("abort");
     printfFunc = runtimeFunction("printf");
 
+    // Aggregate parameter types must exist before function signatures are built.
+    for (const Node& node : program.children)
+        if (node.type == NODE_STRUCT_DEF) genNode(node);
+
     for (const Node& node : program.children) {
         if (node.type != NODE_FUNC_DEF || node.isForwardDecl) continue;
         std::vector<llvm::Type*> parameterTypes;
@@ -1721,8 +1726,7 @@ void CodeGen::generate(const Node& program) {
             functionType, llvm::Function::InternalLinkage, "sc.fn." + node.varName, module);
     }
 
-    // Сначала код верхнего уровня (main): он регистрирует структуры и создаёт
-    // глобальные переменные, которые затем видят тела функций.
+    // Сначала main создаёт глобальные переменные, которые затем видят тела функций.
     llvm::FunctionType* funcType =
         llvm::FunctionType::get(builder.getInt32Ty(), false);
     llvm::Function* mainFunc =
@@ -1734,7 +1738,7 @@ void CodeGen::generate(const Node& program) {
 
     globalStorage = true;
     for (const Node& node : program.children)
-        if (node.type != NODE_FUNC_DEF) genNode(node);
+        if (node.type != NODE_FUNC_DEF && node.type != NODE_STRUCT_DEF) genNode(node);
     globalStorage = false;
 
     builder.CreateRet(builder.getInt32(0));

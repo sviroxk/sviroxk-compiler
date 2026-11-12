@@ -2,6 +2,13 @@
 
 Порядок — по приоритету и зависимостям. Не отмечать выполненным без тестов.
 
+## План переноса PR22 (по указанию владельца)
+- [x] 4а — объявления функций без тела (#27).
+- [x] 4б — структуры по значению: `tip Name` параметры, `tip Inner field`, preregistration LLVM types, lookup полей параметра. 4 output cases + 6 semantic errors проверены; `examples/struct_by_value.svx`.
+- [ ] 4в — `defer`: обратный порядок, ранний return, циклы.
+- [ ] 4г — `drop`: при переносе исправить double-drop и чтение после drop из PR22.
+- Checked casts отложены владельцем; поведение при выходе за диапазон пока не выбиралось.
+
 ## P0 — корректность/безопасность
 - [x] Состояние parser принадлежит одному разбору; `ParseResult` хранит дерево и статус ошибок. Копии `Node` удерживают expression subtrees через `shared_ptr` без глобальной arena; lifetime и повторные разборы покрыты API regression под ASan/UBSan.
 - [~] ASan/UBSan/LeakSanitizer проверяет компилятор и копии AST; ASan сгенерированных программ дополнен 10 memory-safety cases (heap/del, рост и границы dynamic arrays, files/EOF, detector self-tests UAF/double-free/raw OOB). Для 3 корректных heap lifecycle cases включён LeakSanitizer. Контролируемая диагностика alias/UAF/double-free/closed-file и автоматическое освобождение строк требуют runtime metadata/ownership contract и остаются открытыми. См. `docs/memory-safety-tests.md`.

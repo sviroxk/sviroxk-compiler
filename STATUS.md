@@ -21,7 +21,7 @@ SC находится на ранней стадии разработки. На�
 | Операторы `+ - * /` с обычным приоритетом | ✅ |
 | Переменные, массивы, условия, циклы, функции | ✅ |
 | Указатели, файлы, импорт, ввод/вывод | ✅ |
-| Структуры + `p.field` | [~] отдельные scalar fields заменены на LLVM aggregate storage с проверенным layout/read/write; nested structs и struct call ABI ещё не завершены |
+| Структуры + `p.field` | [~] отдельные scalar fields заменены на LLVM aggregate storage с проверенным layout/read/write; nested aggregate reads/copies и передача `tip Name` параметров по значению проверены; struct return/ownership ABI не завершены |
 | Инициализация: `svi tip Player lor p = { health = 80; };` | ✅ |
 | `fucn dor имя(...)` — возврат `dor`/`cos`/и др. | ✅ |
 | Типы параметров в `fucn` | ✅ |
@@ -30,6 +30,8 @@ SC находится на ранней стадии разработки. На�
 - ASan generated-program suite включает 10 отдельных memory-safety cases для heap/del, dynamic arrays и файлов; 3 heap lifecycle cases проходят с LeakSanitizer. Unsafe detector self-tests подтверждают инструментирование, но не означают поддержку безопасных указателей. Контракт и исключения: `docs/memory-safety-tests.md`.
 
 - Исправлен LLVM PHI для `pop()` как выражения: после роста и на пустом динамическом массиве компиляция проходит; 4 regression cases проверяют результат, длину, control-flow и floating-point zero, включая ASan.
+
+- Шаг 4б PR22: параметры `tip Name value` передаются по значению; `tip Inner field` поддержан для вложенных полей. 4 output regressions и 6 ошибок с проверкой текста входят в suite; структуры внутри функций из #25 не переписывались. Далее по плану — `defer`.
 
 ## Следующие направления
 
