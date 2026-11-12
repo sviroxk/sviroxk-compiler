@@ -219,6 +219,15 @@ private:
             error(node, "нельзя изменять константный массив '" + node.varName + "'");
     }
 
+    // Выражение-символ по форме: литерал 'a', приведение (char), тернарный из символов.
+    static bool charLike(const Node& node) {
+        if (node.type == NODE_CHAR) return true;
+        if (node.type == NODE_CAST) return node.varType == "char";
+        if (node.type == NODE_TERNARY && node.right && node.extra)
+            return charLike(*node.right) && charLike(*node.extra);
+        return false;
+    }
+
     bool compatible(const std::string& expectedRaw, const std::string& actualRaw) const {
         const sc::Type expected = sc::Type::from(expectedRaw);
         const sc::Type actual = sc::Type::from(actualRaw);
@@ -961,6 +970,10 @@ private:
             error(node, "указатели можно сравнивать только между собой и с null через == и !=");
             return "<error>";
         }
+        // c == 'a': символ с символом (литерал 'a' имеет тип u8) сравнивается как в C++ и Rust.
+        if (comparison && (leftTy.isChar() || rightTy.isChar()) &&
+            (leftTy.isChar() || charLike(*node.left)) && (rightTy.isChar() || charLike(*node.right)))
+            return "bool";
         if (comparison) {
             if (!leftTy.isNumeric() || !rightTy.isNumeric()) {
                 error(node, "оператор сравнения принимает только числа");
@@ -1601,6 +1614,9 @@ private:
             break;
         case NODE_SLOV: {
             const std::string printed = node.left ? expression(*node.left) : "<error>";
+            // Символ печатается символом, а не кодом: char, литерал 'a', тернарный из символов
+            // (литерал 'a' имеет тип u8, поэтому смотрим и на форму выражения).
+            if (printed == "char" || (printed == "u8" && charLike(*node.left))) node.varType = "char";
             if (printed == "void") {
                 error(*node.left, "print: функция без результата (void) не возвращает значения");
                 break;
