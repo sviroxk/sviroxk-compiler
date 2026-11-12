@@ -1459,6 +1459,8 @@ expect_program_output "resize-zero-fill" $'ptr v = new int[2];\nv[0] = 5;\nv[1] 
 expect_program_output "new-zero-then-push" $'ptr v = new int[0];\nv.push(3);\nv.push(4);\nv.push(5);\nprint(v[2]);\nprint(v.len());' $'5\n3'
 
 # Ввод читает строку целиком (D-007, аудит 07d/07e): без обрезки до 255 байт и не по словам.
+expect_program_output "input-prompt-variable" $'string p = "Age: ";\nint n = input_int(p);\nstring q = "Name %d%s: ";\nstring s = input_str(q);\nprint(n);\nprint(s);' 'Age: Name %d%s: 7'$'\nBob' $'7\nBob\n'
+expect_compile_error "input-prompt-not-string" $'int n = input_int(5);' "подсказка ввода должна иметь тип str"
 expect_program_output "input-line-whole" $'int n = input_int("");\nstring s = input_str("");\nprint(n * 2);\nprint(s);\nprint(len(s));' $'42\nhello world\n11' $'  21  \nhello world\n'
 expect_program_output "input-line-crlf" $'string s = input_str("");\nprint(len(s));' '2' $'ab\r\n'
 expect_program_output "input-line-long" $'string s = input_str("");\nprint(len(s));' '100000' "$(printf 'x%.0s' $(seq 100000))"
