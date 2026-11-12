@@ -96,7 +96,8 @@ public:
     llvm::Value* emitReadLine(llvm::Value* file, const Node& location, bool eofIsError);
     void emitArrayBoundsCheck(llvm::Value* index, llvm::Value* length, const Node& location);
     llvm::StructType* dynArrayType();
-    void growDynArray(const std::string& varName, llvm::Value* newCapacity);
+    void growDynArray(const std::string& varName, llvm::Value* newCapacity, const Node& location);
+    llvm::Value* emitArraySize(const Node& sizeExpr, const Node& location);
     bool isUnsignedExpr(const Node& node) const;
     unsigned integerWidth(const Node& node) const;
     void initStructLiteral(llvm::Value* storage, llvm::StructType* aggregateType,
