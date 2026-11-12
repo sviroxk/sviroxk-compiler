@@ -266,3 +266,8 @@
 - Воспроизведено на main (LLVM 23.1.5): `new int[-1]` — abort (134), `v.resize(-1)` — segfault (139), `new int[2^62]` — abort, `resize(2^62)` — молча длина 2^62, `resize(INT64_MAX)` — segfault, `u64` максимум в `new` — abort; `resize` вверх после уменьшения читал мусор (`21868`).
 - Исправлено: `emitArraySize` (знак/беззнаковость, отрицательный → `negative array size`, u64 > INT64_MAX → `array size too large`); `growDynArray` проверяет переполнение `n * размер` и `malloc == NULL` → `out of memory`; `new` больше не зовёт `abort`; `resize` вверх обнуляет новые элементы (spec §7).
 - Тесты: `new-negative-size`, `resize-negative`, `new-huge-size`, `resize-huge`, `new-u64-max`, `resize-zero-fill`, `new-zero-then-push`.
+
+## Аудит 07c: использование файла после `close(f)` (D-007)
+- Воспроизведено на main (LLVM 23.1.5): `close(f); write(f, "x");` компилировалось (неопределённое поведение: запись в закрытый `FILE*`).
+- Исправлено в `semantic.cpp`: `close(f)` помечает файл освобождённым, как `drop f` (те же правила: ветки, повтор, файл снаружи цикла/функции). Текст ошибки называет, чем освобождено: «используется после close (строка N)».
+- Тесты: `close-then-write`, `close-then-read`, `close-twice`, `drop-after-close`, `close-after-branch`, `close-outer-in-loop`, положительный `close-in-loop-own-file`.

@@ -983,6 +983,15 @@ expect_compile_error "drop-raw-pointer" $'int x = 1;\nptr p = &x;\ndrop p;' 'dro
 expect_compile_error "drop-outer-in-loop" $'ptr v = new int[3];\nwhile (true) { drop v; }' "drop 'v' внутри цикла или функции"
 expect_compile_error "drop-global-in-function" $'ptr v = new int[3];\nfn void f() { drop v; }\nf();' "drop 'v' внутри цикла или функции"
 expect_compile_error "drop-without-name" 'drop 5;' 'после drop ожидалось имя переменной'
+# D-007 / аудит 07c: close(f) освобождает файл так же, как drop f.
+expect_compile_error "close-then-write" $'file f = open("c.txt", "w");\nclose(f);\nwrite(f, "x");' "'f' используется после close (строка 2)"
+expect_compile_error "close-then-read" $'file f = open("c.txt", "r");\nclose(f);\nprint(read(f));' "'f' используется после close (строка 2)"
+expect_compile_error "close-twice" $'file f = open("c.txt", "w");\nclose(f);\nclose(f);' "'f' используется после close (строка 2)"
+expect_compile_error "drop-after-close" $'file f = open("c.txt", "w");\nclose(f);\ndrop f;' "повторный drop 'f' (уже освобождено в строке 2)"
+expect_compile_error "close-after-branch" $'file f = open("c.txt", "w");\nif (true) { close(f); }\nwrite(f, "x");' "'f' используется после close (строка 2)"
+expect_compile_error "close-outer-in-loop" $'file f = open("c.txt", "w");\nwhile (true) { close(f); }' "close 'f' внутри цикла или функции"
+close_file="$TMP_DIR/close-ok.tmp"
+expect_program_output "close-in-loop-own-file" "int i = 0;"$'\nwhile (i < 2) {\n'"    file f = open(\"$close_file\", \"w\");"$'\n    write(f, "x");\n    close(f);\n    i = i + 1;\n}\nprint(i);' '2'
 expect_program_output "defer-drop-after-return-value" $'fn int f(int x) {\n  ptr v = new int[2];\n  defer drop v;\n  v[0] = x;\n  return v[0] + 1;\n}\nprint(f(4));' '5'
 expect_program_output "defer-after-return-call" $'fn int g() { print(1); return 3; }\nfn int f() { defer print(2); return g(); }\nprint(f());' $'1\n2\n3'
 expect_program_output "defer-assign-after-return-value" $'fn int f() { ptr v = new int[1]; v[0] = 4; defer v[0] = 100; return v[0]; }\nprint(f());' '4'
