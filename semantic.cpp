@@ -327,7 +327,9 @@ private:
                 ? normalize(node.varType)
                 : floatingLiteral ? "f64" : "i32";
             if (node.varType.empty() && !floatingLiteral) {
+                // spec §2: без контекста литерал — i32, а если не помещается — i64.
                 if (literalFits("i32", node.value)) literalType = "i32";
+                else if (literalFits("i64", node.value)) literalType = "i64";
                 else {
                     error(node, "числовой литерал " + node.value + " не помещается в тип i64 (long)");
                     return "<error>";
