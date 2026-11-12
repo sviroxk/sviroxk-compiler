@@ -775,7 +775,13 @@ private:
             if (*left != 0 && (*left * *right) / *left != *right) return std::nullopt;
             return bounded(*left * *right);
         }
-        if (node.op == "/" || node.op == "//") { if (*right == 0) return std::nullopt; return *left / *right; }
+        if (node.op == "/") { if (*right == 0) return std::nullopt; return *left / *right; }
+        if (node.op == "div") {  // округление вниз: -17 div 5 = -4
+            if (*right == 0) return std::nullopt;
+            __int128 q = *left / *right;
+            if (*left % *right != 0 && ((*left < 0) != (*right < 0))) --q;
+            return q;
+        }
         if (node.op == "%") { if (*right == 0) return std::nullopt; return *left % *right; }
         if (node.op == "**") {
             if (*right < 0) {  // целая степень с отрицательным показателем усекается к нулю
@@ -812,7 +818,7 @@ private:
     void checkConstantArithmetic(const Node& node, const std::string& resultType) const {
         const sc::Type result = ty(resultType);
         if (!result.isInteger() || !node.right) return;
-        const bool division = node.op == "/" || node.op == "//" || node.op == "%";
+        const bool division = node.op == "/" || node.op == "div" || node.op == "%";
         if (division) {
             const auto divisor = constantInteger(*node.right);
             if (divisor && *divisor == 0) {
@@ -870,7 +876,7 @@ private:
         if (!isInteger(normalize(targetType)) || !isInteger(actual)) return false;
         if (value.type != NODE_BINOP || !value.left) return false;
         if (value.op != "+" && value.op != "-" && value.op != "*" && value.op != "/" &&
-            value.op != "%" && value.op != "//") return false;
+            value.op != "%" && value.op != "div") return false;
         if (!sameTarget(*value.left, target)) return false;
         // Константа, не влезающая в тип цели (u8 x; x += 300), — ошибка компиляции.
         if (value.right && constantInteger(*value.right) && !constantFits(*value.right, targetType)) return false;
@@ -908,9 +914,9 @@ private:
         else if (node.right && fitsNumericLiteral(*node.right, left))
             right = left;
         if (left == "<error>" || right == "<error>") return "<error>";
-        if (node.op == "//") {
+        if (node.op == "div") {
             if (!ty(left).isInteger() || !ty(right).isInteger()) {
-                error(node, "оператор // требует целочисленные операнды");
+                error(node, "оператор div требует целочисленные операнды");
                 return "<error>";
             }
             if (ty(left).width == 64 || ty(right).width == 64)

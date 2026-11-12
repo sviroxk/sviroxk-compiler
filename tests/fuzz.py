@@ -127,7 +127,7 @@ def program(r):
         if t in ('str', 'ptr'):
             return expr(t, 4)
         ops = ['&&', '||'] if t == 'bool' else ['+', '-', '*', '/'] if t[0] == 'f' else \
-            ['+', '-', '*', '/', '%', '**', '//', '&', '|', '^', '<<', '>>']
+            ['+', '-', '*', '/', '%', '**', 'div', '&', '|', '^', '<<', '>>']
         k = r.randrange(4)
         if k == 0:
             return '(%s ? %s : %s)' % (expr('bool', d + 1), expr(t, d + 1), expr(r.choice(TYPES[:10]), d + 1))

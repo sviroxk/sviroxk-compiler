@@ -1139,7 +1139,7 @@ llvm::Value* CodeGen::genBinary(const Node& node, llvm::Value* L) {
             emitRuntimeFailureIf(builder.CreateExtractValue(pair, 1), "integer overflow", node);
             return builder.CreateExtractValue(pair, 0);
         }
-        if (node.op == "/" || node.op == "//" || node.op == "%") {
+        if (node.op == "/" || node.op == "div" || node.op == "%") {
             const unsigned width = common->getIntegerBitWidth();
             emitRuntimeFailureIf(builder.CreateICmpEQ(R, builder.getIntN(width, 0)),
                                  "division by zero", node);
@@ -1150,6 +1150,15 @@ llvm::Value* CodeGen::genBinary(const Node& node, llvm::Value* L) {
                 emitRuntimeFailureIf(builder.CreateAnd(minimum, minusOne), "integer overflow", node);
             }
             if (node.op == "%") return unsignedArith ? builder.CreateURem(L, R) : builder.CreateSRem(L, R);
+            if (node.op == "div" && !unsignedArith) {
+                // Округление вниз (D-010): частное уменьшается на 1, если остаток ненулевой
+                // и знаки операндов разные.
+                llvm::Value* quotient = builder.CreateSDiv(L, R);
+                llvm::Value* inexact = builder.CreateICmpNE(builder.CreateSRem(L, R), llvm::ConstantInt::get(common, 0));
+                llvm::Value* signsDiffer = builder.CreateICmpSLT(builder.CreateXor(L, R), llvm::ConstantInt::get(common, 0));
+                return builder.CreateSub(quotient,
+                    builder.CreateZExt(builder.CreateAnd(inexact, signsDiffer), common));
+            }
             return unsignedArith ? builder.CreateUDiv(L, R) : builder.CreateSDiv(L, R);
         }
         if (node.op == ">") return isUnsignedExpr(*node.left)

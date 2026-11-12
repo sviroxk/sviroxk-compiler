@@ -353,7 +353,7 @@ for source in "${sources[@]}"; do
             exit 1
         fi
     elif [[ "$source" == "examples/v1_integer_division.svx" ]]; then
-        expected=$'3\n-3'
+        expected=$'3\n-4\n-4\n-3\n7'
         if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
             echo "FAIL: integer division result mismatch" >&2
             cat "$work/output.txt" >&2
@@ -911,7 +911,8 @@ expect_program_output "struct-in-fn" $'struct P { int x = 4; }\nfn int f() { P p
 expect_program_output "ar-and-rep-together" $'print(len("abc"));\nprint(replace("hello world", "world", "SC"));' $'3\nhello SC'
 # Аудит, класс 3: % для дробных падал в codegen (assertion LLVM, код 134).
 expect_program_output "float-remainder" $'f64 x = 5.5;\nprint(x % 2.0);\nprint(-5.5 % 2.0);\nf32 y = 7.5;\nprint(y % 2.0);\nprint(x % 2);\nf64 z = 9.0;\nz %= 4.0;\nprint(z);' $'1.500000\n-1.500000\n1.500000\n1.500000\n1.000000'
-expect_compile_error "float-integer-division" 'f64 x = 7.5; print(x // 2.0);' "оператор // требует целочисленные операнды"
+expect_compile_error "float-integer-division" 'f64 x = 7.5; print(x div 2.0);' "оператор div требует целочисленные операнды"
+expect_program_output "double-slash-always-comment" $'int a = 17;\nprint(a // 5\n);\nint b = -17;\nint c = 5;\nprint(b div c);\nu32 u = 17;\nprint(u div 5);' $'17\n-4\n3'
 # Аудит, класс 6: литерал больше i32 без контекста — i64, а не ложная ошибка.
 expect_program_output "i64-min-expression" $'print(-9223372036854775807 - 1);\ni64 m = -9223372036854775807 - 1;\nprint(m);\nprint(2147483648 + 0);' $'-9223372036854775808\n-9223372036854775808\n2147483648'
 expect_compile_error "literal-beyond-i64" 'print(9223372036854775808);' "не помещается в тип i64"
@@ -1138,6 +1139,7 @@ int_runtime shift-range $'int a = 1;\nint s = 40;\nprint(a << s);' "shift amount
 int_runtime pow-overflow $'int a = 2;\nprint(pow(a, 31));' "integer overflow at line 2"
 int_runtime abs-min $'int m = -2147483647 - 1;\nprint(abs(m));' "integer overflow at line 2"
 int_runtime abs-min-i64 $'i64 m = -9223372036854775807 - 1;\nprint(abs(m));' "integer overflow at line 2"
+int_runtime div-word-zero $'int a = 5;\nint b = 0;\nprint(a div b);' "division by zero at line 3"
 int_runtime add-overflow $'int a = 2147483647;\nprint(a + 1);' "integer overflow at line 2, column 9"
 int_runtime sub-overflow $'int a = -2147483647;\nprint(a - 2);' "integer overflow at line 2, column 9"
 int_runtime mul-overflow-i64 $'i64 a = 4611686018427387904;\nprint(a * 2);' "integer overflow at line 2, column 9"
