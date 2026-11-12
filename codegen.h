@@ -6,6 +6,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <map>
+#include <unordered_map>
 #include <string>
 
 class CodeGen {
@@ -100,6 +101,13 @@ public:
     llvm::Value* emitArraySize(const Node& sizeExpr, const Node& location);
     bool isUnsignedExpr(const Node& node) const;
     unsigned integerWidth(const Node& node) const;
+    // Кэш свойств поддеревьев (ключ — узел AST в куче, left/right) на время одного
+    // оператора: без него каждый `+` цепочки `a + b + …` обходил бы всё левое
+    // поддерево (O(n²)). Сбрасывается в genNode: объявления меняют таблицы переменных.
+    mutable std::unordered_map<const Node*, bool> unsignedCache_;
+    mutable std::unordered_map<const Node*, unsigned> widthCache_;
+    bool cachedUnsigned(const std::shared_ptr<Node>& child) const;
+    unsigned cachedWidth(const std::shared_ptr<Node>& child) const;
     void initStructLiteral(llvm::Value* storage, llvm::StructType* aggregateType,
                            const std::string& structName, const Node& literal);
     llvm::Value* genExpr(const Node& node);

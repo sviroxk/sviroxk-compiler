@@ -28,6 +28,11 @@ bool parseStopped = false;
 // Лимит вложенности (блоки, скобки, унарные операторы), как -fbracket-depth=256
 // у clang: глубже — внятная синтаксическая ошибка, а не переполнение стека.
 static constexpr int kMaxNesting = 256;
+// Цепочка `a + b + …` разбирается циклом, но дерево у неё глубиной в длину цепочки,
+// а семантика и codegen обходят его рекурсивно: больше kMaxOperators бинарных
+// операторов в одной инструкции — синтаксическая ошибка, а не переполнение стека.
+static constexpr int kMaxOperators = 10000;
+int operatorsInStatement = 0;
 int nesting = -1;  // верхний уровень (само выражение или блок) не считается
 
 // RAII: один уровень вложенности; ok() == false — лимит превышен, ошибка уже выдана.
@@ -656,6 +661,11 @@ Node parseBitOr() {
 }
 
 Node makeBinary(Node left, const Token& op, Node right) {
+    if (++operatorsInStatement == kMaxOperators + 1 && !parseStopped) {
+        failAt(op, "слишком длинное выражение: больше " + std::to_string(kMaxOperators) +
+               " операторов в одной инструкции");
+        stopParsing();
+    }
     Node result;
     result.type = NODE_BINOP;
     result.line = op.line;
@@ -751,6 +761,7 @@ void parseDeclBody(Node& node, bool isArray) {
 }
 
 Node parseOne() {
+    operatorsInStatement = 0;  // выражения разных инструкций не вкладываются друг в друга
     // P p; / P p = { ... }; — переменная-структура
     if (peek().type == IDENTIFIER && structNames.count(peek().value) && peek(1).type == IDENTIFIER) {
         Token declarationToken = consume();

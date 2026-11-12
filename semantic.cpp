@@ -1,3 +1,4 @@
+#include <unordered_map>
 #include <optional>
 #include <cctype>
 #include "semantic.h"
@@ -658,8 +659,22 @@ private:
         return targetTy.fitsLiteral(node.value);
     }
 
+    // Кэш значений поддеревьев по адресу узла: проверка каждого `+` в цепочке
+    // `1 + 1 + …` иначе заново вычисляла бы всё левое поддерево (время O(n²)).
+    // Ключ — только узлы AST в куче (left/right): они живут всю проверку, а
+    // временные Node на стеке (Node self) в кэш не попадают.
+    mutable std::unordered_map<const Node*, std::optional<__int128>> constantCache_;
+
+    std::optional<__int128> cachedConstant(const std::shared_ptr<Node>& child) const {
+        if (auto found = constantCache_.find(child.get()); found != constantCache_.end())
+            return found->second;
+        const auto value = constantInteger(*child);
+        constantCache_.emplace(child.get(), value);
+        return value;
+    }
+
     // Значение целочисленного константного выражения (литералы и + - * / // % **).
-    static std::optional<__int128> constantInteger(const Node& node) {
+    std::optional<__int128> constantInteger(const Node& node) const {
         if (node.type == NODE_NUMBER) {
             if (node.value.find_first_of(".eE") != std::string::npos &&
                 node.value.rfind("0x", 0) != 0 && node.value.rfind("-0x", 0) != 0) return std::nullopt;
@@ -687,8 +702,8 @@ private:
             return negative ? -value : value;
         }
         if (node.type != NODE_BINOP || !node.left || !node.right) return std::nullopt;
-        const auto left = constantInteger(*node.left);
-        const auto right = constantInteger(*node.right);
+        const auto left = cachedConstant(node.left);
+        const auto right = cachedConstant(node.right);
         if (!left || !right) return std::nullopt;
         const __int128 limit = static_cast<__int128>(1) << 65;
         auto bounded = [&](__int128 v) -> std::optional<__int128> {
