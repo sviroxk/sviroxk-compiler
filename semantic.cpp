@@ -1167,6 +1167,11 @@ private:
                 node.left->value.find_first_of(".eE") == std::string::npos &&
                 isInteger(declaredType);
             std::string actual = contextualIntegerLiteral ? declaredType : expression(*node.left);
+            if (actual == "void") {  // let x = f(), где f ничего не возвращает: раньше крах компилятора
+                error(*node.left, "значение не возвращается: функция без результата (void) — '" +
+                      node.varName + "' нечем инициализировать");
+                actual = "<error>";
+            }
             const std::string effectiveType = inferType ? actual : declaredType;
             if (inferType && actual != "<error>") node.varType = actual;
             const bool numericLiteral = node.left->type == NODE_NUMBER &&
@@ -1508,7 +1513,8 @@ private:
             call(node);
             break;
         case NODE_SLOV:
-            if (node.left) expression(*node.left);
+            if (node.left && expression(*node.left) == "void")
+                error(*node.left, "print: функция без результата (void) не возвращает значения");
             break;
         case NODE_IF: {
             std::string condition = expression(*node.left);
