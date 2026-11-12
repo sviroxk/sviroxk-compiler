@@ -226,8 +226,22 @@ unsigned CodeGen::integerWidth(const Node& node) const {
     }
     if (node.type == NODE_NUMBER) return 32;
     if (node.type == NODE_BINOP && node.left && node.right)
-        return std::max(integerWidth(*node.left), integerWidth(*node.right));
+        return std::max(cachedWidth(node.left), cachedWidth(node.right));
     return 32;
+}
+
+unsigned CodeGen::cachedWidth(const std::shared_ptr<Node>& child) const {
+    if (auto found = widthCache_.find(child.get()); found != widthCache_.end()) return found->second;
+    const unsigned width = integerWidth(*child);
+    widthCache_.emplace(child.get(), width);
+    return width;
+}
+
+bool CodeGen::cachedUnsigned(const std::shared_ptr<Node>& child) const {
+    if (auto found = unsignedCache_.find(child.get()); found != unsignedCache_.end()) return found->second;
+    const bool isUnsigned = isUnsignedExpr(*child);
+    unsignedCache_.emplace(child.get(), isUnsigned);
+    return isUnsigned;
 }
 
 // Ошибка выполнения: если failed истинно, печатает "SC runtime error: <message> at line L, column C"
@@ -533,8 +547,8 @@ bool CodeGen::isUnsignedExpr(const Node& node) const {
     }
     if (node.type == NODE_BINOP && node.left && node.right) {
         if (node.op == ">" || node.op == "<" || node.op == "==" || node.op == "!=")
-            return isUnsignedExpr(*node.left);
-        return isUnsignedExpr(*node.left) || isUnsignedExpr(*node.right);
+            return cachedUnsigned(node.left);
+        return cachedUnsigned(node.left) || cachedUnsigned(node.right);
     }
     return false;
 }
@@ -1332,6 +1346,8 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
 }
 
 void CodeGen::genNode(const Node& node) {
+    if (!unsignedCache_.empty()) unsignedCache_.clear();
+    if (!widthCache_.empty()) widthCache_.clear();
     // Тела функций генерируются после завершённого main, поэтому для них
     // проверка «блок уже завершён» не применяется.
     if (node.type != NODE_FUNC_DEF && blockHasTerminator(builder.GetInsertBlock()))

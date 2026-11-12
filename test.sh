@@ -993,6 +993,16 @@ expect_program_output "nesting-256-parens" "int x = ${parens_open}1${parens_clos
 expect_compile_error "nesting-257-parens" "int x = (${parens_open}1${parens_close});" "слишком глубокая вложенность: больше 256 уровней"
 expect_compile_error "nesting-100000-parens" "int x = $(printf '(%.0s' $(seq 100000))1;" "слишком глубокая вложенность"
 expect_compile_error "nesting-300-not" "bool b = $(printf '!%.0s' $(seq 300))true;" "слишком глубокая вложенность"
+# Цепочка из 10000 операторов: линейное время (было O(n²): 10000 слагаемых ≈ 29 с), 10001 — ошибка, не segfault.
+long_sum="1$(printf ' + 1%.0s' $(seq 10000))"
+start_seconds=$SECONDS
+expect_program_output "sum-10000-operators" "int x = ${long_sum};"$'\nprint(x);' '10001'
+if (( SECONDS - start_seconds > 20 )); then
+    echo "FAIL: 10000-operator sum took $((SECONDS - start_seconds)) s (expected linear time)" >&2
+    exit 1
+fi
+expect_compile_error "sum-10001-operators" "int x = ${long_sum} + 1;" "слишком длинное выражение: больше 10000 операторов в одной инструкции"
+expect_program_output "sum-two-long-statements" "int x = ${long_sum};"$'\n'"int y = ${long_sum};"$'\nprint(x + y);' '20002'
 expect_program_output "sum-2000-terms" "int x = 1$(printf ' + 1%.0s' $(seq 1999));"$'\nprint(x);' '2000'
 elif_chain=$(for i in $(seq 0 999); do printf ' else if (x == %d) { print(%d); }' "$i" "$i"; done)
 expect_program_output "else-if-chain-1000" $'int x = 999;\nif (x < 0) { print(-1); }'"$elif_chain" '999'
