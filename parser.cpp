@@ -185,6 +185,27 @@ std::string declaredType(const Token& token) {
     return canonicalType(token.value);
 }
 
+bool isAssignOperator(TokenType type) {
+    return type == EQUALS || type == PLUS_EQ || type == MINUS_EQ ||
+           type == STAR_EQ || type == SLASH_EQ || type == PERCENT_EQ;
+}
+
+// target op= value  ->  target op value (BINOP с позицией оператора)
+Node compoundValue(const Token& operation, const Node& target, const Node& value) {
+    Node binary;
+    binary.type = NODE_BINOP;
+    binary.line = operation.line;
+    binary.column = operation.column;
+    binary.file = operation.file;
+    binary.op = operation.type == PLUS_EQ ? "+" :
+        operation.type == MINUS_EQ ? "-" :
+        operation.type == STAR_EQ ? "*" :
+        operation.type == SLASH_EQ ? "/" : "%";
+    binary.left = makeNode(target);
+    binary.right = makeNode(value);
+    return binary;
+}
+
 Node parseStructLiteral() {
     Node node; node.type = NODE_STRUCT_LITERAL;
     expect(LBRACE);
@@ -253,6 +274,7 @@ Node parsePrimary() {
         while (peek().type != RPAREN && peek().type != END) {
             left.args.push_back(parseExpr());
             if (peek().type == COMMA) consume();
+            else if (peek().type != RPAREN) failAt(peek(), "ожидалась ',' между аргументами");
         }
         expect(RPAREN);
         return left;
@@ -316,10 +338,11 @@ Node parsePrimary() {
     }
     // *p — разыменование
     if (peek().type == STAR) {
-        consume();
+        Token star = consume();
         Token name = consume();
         left.type = NODE_DEREF;
         left.varName = name.value;
+        left.line = star.line; left.column = star.column; left.file = star.file;
         return left;
     }
     Token t = consume();
@@ -344,6 +367,7 @@ Node parsePrimary() {
         while (peek().type != RPAREN && peek().type != END) {
             left.args.push_back(parseExpr());
             if (peek().type == COMMA) consume();
+            else if (peek().type != RPAREN) failAt(peek(), "ожидалась ',' между аргументами");
         }
         expect(RPAREN);
     }
@@ -994,42 +1018,72 @@ Node parseOne() {
     }
     // *p = 10 — присваивание через указатель
     if (peek().type == STAR) {
-        consume(); // *
+        Token star = consume(); // *
         Node node; node.type = NODE_DEREF_ASSIGN;
+        node.line = star.line; node.column = star.column; node.file = star.file;
         node.varName = consume().value; // имя указателя
         expect(EQUALS);
         node.left = makeNode(parseExpr());
         expect(SEMICOLON);
         return node;
     }
-    // p.health = 10 — поле структуры
-    if (isNameToken(peek().type) && peek(1).type == DOT &&
-        peek(3).type == EQUALS) {
-        std::string inst = consume().value;
-        consume();
-        std::string field = consume().value;
-        Node node;
-        node.type = NODE_STRUCT_FIELD_ASSIGN;
-        node.line = peek().line;
-        node.column = peek().column;
-        node.file = peek().file;
-        node.varName = inst;
-        node.op = field;
-        expect(EQUALS);
-        node.left = makeNode(parseExpr());
-        expect(SEMICOLON);
-        return node;
+    // p.health = 10, r.a.x = 5, a.x += 2 — поле структуры (в том числе вложенное)
+    if (isNameToken(peek().type) && peek(1).type == DOT) {
+        int k = 1;
+        while (peek(k).type == DOT && peek(k + 1).type == IDENTIFIER) k += 2;
+        if (k > 1 && isAssignOperator(peek(k).type)) {
+            Token inst = consume();
+            std::string path;
+            while (peek().type == DOT) {
+                consume();
+                if (!path.empty()) path += ".";
+                path += consume().value;
+            }
+            Node node;
+            node.type = NODE_STRUCT_FIELD_ASSIGN;
+            node.line = peek().line;
+            node.column = peek().column;
+            node.file = peek().file;
+            node.varName = inst.value;
+            node.op = path;
+            Token operation = consume();
+            Node right = parseExpr();
+            if (operation.type != EQUALS) {
+                Node field;
+                field.type = NODE_STRUCT_FIELD;
+                field.varName = inst.value;
+                field.op = path;
+                field.line = inst.line; field.column = inst.column; field.file = inst.file;
+                right = compoundValue(operation, field, right);
+            }
+            node.left = makeNode(right);
+            expect(SEMICOLON);
+            return node;
+        }
     }
     // arr[0] = 10 — присваивание элемента массива
     if (isNameToken(peek().type) && peek(1).type == LBRACKET) {
         Node node; node.type = NODE_ARRAY_ASSIGN;
         node.line = peek().line; node.column = peek().column; node.file = peek().file;
-        node.varName = consume().value;
+        Token arrayName = consume();
+        node.varName = arrayName.value;
         consume(); // [
         node.left = makeNode(parseExpr());
         expect(RBRACKET);
-        expect(EQUALS);
-        node.right = makeNode(parseExpr());
+        if (isAssignOperator(peek().type) && peek().type != EQUALS) {
+            // a[i] += x: индекс вычисляется один раз (codegen подставляет готовое значение).
+            Token operation = consume();
+            Node element;
+            element.type = NODE_ARRAY_ACCESS;
+            element.varName = arrayName.value;
+            element.line = arrayName.line; element.column = arrayName.column; element.file = arrayName.file;
+            element.left = makeNode(*node.left);
+            node.right = makeNode(compoundValue(operation, element, parseExpr()));
+            node.op = "compound";
+        } else {
+            expect(EQUALS);
+            node.right = makeNode(parseExpr());
+        }
         expect(SEMICOLON);
         return node;
     }

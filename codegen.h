@@ -67,6 +67,11 @@ public:
     llvm::Function* abortFunc = nullptr;
     // true, пока генерируется код верхнего уровня: переменные становятся глобалами.
     bool globalStorage = false;
+    // Готовые значения узлов (индекс в a[i] += x вычисляется один раз).
+    std::map<const Node*, llvm::Value*> precomputed_;
+    bool structFieldAddressOnly_ = false;  // NODE_STRUCT_FIELD: вернуть адрес поля, не загружать
+    llvm::Type* lastFieldType_ = nullptr;
+    llvm::Value* nullChecked(llvm::Value* pointer, const Node& location);
 
     CodeGen() : builder(context), module("SC", context) {}
 

@@ -320,8 +320,18 @@ void CodeGen::growDynArray(const std::string& varName, llvm::Value* newCapacity)
     builder.CreateStore(newCapacity, builder.CreateStructGEP(descType, desc, 2));
 }
 
+llvm::Value* CodeGen::nullChecked(llvm::Value* pointer, const Node& location) {
+    emitRuntimeFailureIf(builder.CreateICmpEQ(pointer,
+        llvm::ConstantPointerNull::get(builder.getPtrTy())), "null pointer dereference", location);
+    return pointer;
+}
+
 bool CodeGen::isUnsignedExpr(const Node& node) const {
     if (node.type == NODE_NUMBER) return false;
+    if (node.type == NODE_IDENTIFIER) {
+        auto isChar = charVars.find(node.value);
+        if (isChar != charVars.end() && isChar->second) return true;
+    }
     if (node.type == NODE_FUNC_CALL) {
         auto found = funcReturnTypes.find(node.varName);
         if (found == funcReturnTypes.end()) return false;
@@ -387,6 +397,10 @@ void CodeGen::initStructLiteral(llvm::Value* storage, llvm::StructType* aggregat
 }
 
 llvm::Value* CodeGen::genExpr(const Node& node) {
+    if (!precomputed_.empty()) {
+        auto ready = precomputed_.find(&node);
+        if (ready != precomputed_.end()) return ready->second;
+    }
     if (node.type == NODE_CHAR) {
         return builder.getInt8(static_cast<uint8_t>(std::stoul(node.value)));
     }
@@ -478,13 +492,16 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         currentType = fieldType;
         currentVar = fieldName;
         if (dotPos == std::string::npos) {
-            // Final field: load and return the value
+            // Final field: load and return the value (или адрес — для присваивания)
+            if (structFieldAddressOnly_) { lastFieldType_ = fieldType; return currentPtr; }
             return builder.CreateLoad(fieldType, currentPtr);
         }
         pos = dotPos + 1;
     }
     return nullptr;
     }
+    if (node.type == NODE_IDENTIFIER && node.value == "null" && !vars.count(node.value))
+        return llvm::ConstantPointerNull::get(builder.getPtrTy());
     if (node.type == NODE_IDENTIFIER) {
         llvm::Value* alloca = vars[node.value];
         if (alloca) {
@@ -544,7 +561,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             llvm::Value* ptr = builder.CreateLoad(builder.getPtrTy(), alloca);
             auto pointee = pointeeTypes.find(node.varName);
             llvm::Type* type = pointee != pointeeTypes.end() ? pointee->second : builder.getInt32Ty();
-            return builder.CreateLoad(type, ptr);
+            return builder.CreateLoad(type, nullChecked(ptr, node));
         }
         codegenFailure(node, "неизвестный указатель '" + node.varName + "'");
     }
@@ -797,6 +814,11 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             }
             return unsignedResult ? builder.CreateFPToUI(result, integerResult)
                                   : builder.CreateFPToSI(result, integerResult);
+        }
+        if (L->getType()->isPointerTy() || R->getType()->isPointerTy()) {
+            if (node.op == "==") return builder.CreateICmpEQ(L, R);
+            if (node.op == "!=") return builder.CreateICmpNE(L, R);
+            codegenFailure(node, "недопустимая операция над указателями");
         }
         bool isFloat = L->getType()->isFloatingPointTy() || R->getType()->isFloatingPointTy();
         if (isFloat) {
@@ -1232,6 +1254,18 @@ void CodeGen::genNode(const Node& node) {
             builder.CreateStore(val, alloca);
         }
     }
+    else if (node.type == NODE_STRUCT_FIELD_ASSIGN && node.op.find('.') != std::string::npos) {
+        Node field;
+        field.type = NODE_STRUCT_FIELD;
+        field.varName = node.varName;
+        field.op = node.op;
+        field.line = node.line; field.column = node.column; field.file = node.file;
+        structFieldAddressOnly_ = true;
+        llvm::Value* address = genExpr(field);
+        structFieldAddressOnly_ = false;
+        llvm::Value* value = genExpr(*node.left);
+        builder.CreateStore(castTo(value, lastFieldType_, isUnsignedExpr(*node.left)), address);
+    }
     else if (node.type == NODE_STRUCT_FIELD_ASSIGN) {
         auto object = vars.find(node.varName);
         auto structName = structTypesByVariable.find(node.varName);
@@ -1263,17 +1297,23 @@ void CodeGen::genNode(const Node& node) {
                 llvm::Type* elementType = dynArrayElementTypes[node.varName];
                 if (!elementType) elementType = builder.getInt32Ty();
                 llvm::Value* gep = builder.CreateGEP(elementType, dataPtr, {idx});
-                builder.CreateStore(genExpr(*node.right), gep);
+                if (node.op == "compound") precomputed_[node.right->left->left.get()] = idx;
+                llvm::Value* value = genExpr(*node.right);
+                precomputed_.clear();
+                builder.CreateStore(castTo(value, elementType, isUnsignedExpr(*node.right)), gep);
             }
             // raw dynamic array (ptr variable)
             else if (vars.count(node.varName) &&
                 storageType(vars[node.varName])->isPointerTy()) {
-                llvm::Value* ptr = builder.CreateLoad(
-                    builder.getPtrTy(), vars[node.varName]);
+                llvm::Value* ptr = nullChecked(builder.CreateLoad(
+                    builder.getPtrTy(), vars[node.varName]), node);
                 llvm::Value* idx = genExpr(*node.left);
                 llvm::Value* gep = builder.CreateGEP(
                     builder.getInt32Ty(), ptr, {idx});
-                builder.CreateStore(genExpr(*node.right), gep);
+                if (node.op == "compound") precomputed_[node.right->left->left.get()] = idx;
+                llvm::Value* value = genExpr(*node.right);
+                precomputed_.clear();
+                builder.CreateStore(value, gep);
             } else if (arrays.count(node.varName)) {
                 llvm::Value* arr = arrays[node.varName];
                 unsigned n = arrayLengths[node.varName];
@@ -1284,14 +1324,17 @@ void CodeGen::genNode(const Node& node) {
                 emitArrayBoundsCheck(idx, builder.getInt64(n), node);
                 llvm::Value* gep = builder.CreateInBoundsGEP(
                     at, arr, {builder.getInt32(0), idx});
-                builder.CreateStore(genExpr(*node.right), gep);
+                if (node.op == "compound") precomputed_[node.right->left->left.get()] = idx;
+                llvm::Value* value = genExpr(*node.right);
+                precomputed_.clear();
+                builder.CreateStore(castTo(value, elementType, isUnsignedExpr(*node.right)), gep);
             }
         }
     }
     else if (node.type == NODE_DEREF_ASSIGN) {
         llvm::Value* alloca = vars[node.varName];
         if (alloca) {
-            llvm::Value* ptr = builder.CreateLoad(builder.getPtrTy(), alloca);
+            llvm::Value* ptr = nullChecked(builder.CreateLoad(builder.getPtrTy(), alloca), node);
             auto pointee = pointeeTypes.find(node.varName);
             llvm::Value* value = genExpr(*node.left);
             if (pointee != pointeeTypes.end())

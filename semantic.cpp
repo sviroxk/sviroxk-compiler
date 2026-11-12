@@ -350,6 +350,7 @@ private:
             return "str";
         case NODE_IDENTIFIER: {
             const Symbol* symbol = use(node, node.value);
+            if (!symbol && node.value == "null") return "ptr";  // нулевой указатель
             if (!symbol) {
                 error(node, "неизвестное имя '" + node.value + "'");
                 return "<error>";
@@ -775,6 +776,8 @@ private:
         const sc::Type a = ty(normalize(actual));
         if ((e.isInteger() || e.isFloat()) && (a.isInteger() || a.isFloat()))
             return "; возможна потеря значения, нужно явное приведение: (" + typeName(normalize(expected)) + ") значение";
+        if (a.isPtr() && !e.isPtr())
+            return "; null и указатели допустимы только для типа ptr";
         return "";
     }
 
@@ -852,6 +855,11 @@ private:
         const sc::Type rightTy = ty(right);
         const bool comparison = node.op == ">" || node.op == "<" || node.op == ">=" ||
             node.op == "<=" || node.op == "==" || node.op == "!=";
+        if (comparison && (leftTy.isPtr() || rightTy.isPtr())) {
+            if ((node.op == "==" || node.op == "!=") && leftTy.isPtr() && rightTy.isPtr()) return "bool";
+            error(node, "указатели можно сравнивать только между собой и с null через == и !=");
+            return "<error>";
+        }
         if (comparison) {
             if (!leftTy.isNumeric() || !rightTy.isNumeric()) {
                 error(node, "оператор сравнения принимает только числа");
@@ -862,6 +870,16 @@ private:
                 return "<error>";
             }
             return "bool";
+        }
+        // char в арифметике — как u8 (результат — целое, без неявного сужения обратно в char).
+        const sc::Type leftArith = leftTy.isChar() ? sc::Type::integer(8, false) : leftTy;
+        const sc::Type rightArith = rightTy.isChar() ? sc::Type::integer(8, false) : rightTy;
+        if (leftTy.isChar() || rightTy.isChar()) {
+            if (!leftArith.isInteger() || !rightArith.isInteger()) {
+                error(node, "арифметический оператор '" + node.op + "' для char требует целый операнд");
+                return "<error>";
+            }
+            return leftArith.width == 64 || rightArith.width == 64 ? "i64" : "i32";
         }
         if (!leftTy.isNumeric() || !rightTy.isNumeric()) {
             error(node, "арифметический оператор '" + node.op + "' требует числовые операнды");
@@ -1008,6 +1026,16 @@ private:
         if (last.type == NODE_RETURN) return true;
         if (last.type == NODE_IF && !last.elseChildren.empty())
             return alwaysReturns(last.children) && alwaysReturns(last.elseChildren);
+        if (last.type == NODE_LOOP) return !breaksOut(last.children);  // бесконечный loop без break
+        return false;
+    }
+
+    // Есть ли break, выходящий из текущего цикла (вложенные циклы не считаются).
+    static bool breaksOut(const std::vector<Node>& statements) {
+        for (const Node& s : statements) {
+            if (s.type == NODE_BREAK) return true;
+            if (s.type == NODE_IF && (breaksOut(s.children) || breaksOut(s.elseChildren))) return true;
+        }
         return false;
     }
 
@@ -1238,6 +1266,26 @@ private:
             break;
         }
         case NODE_STRUCT_FIELD_ASSIGN: {
+            if (node.op.find('.') != std::string::npos) {
+                const Symbol* root = use(node, node.varName);
+                if (root && root->isConst) {
+                    error(node, "нельзя изменять поле константной структуры '" + node.varName + "'");
+                    expression(*node.left);
+                    break;
+                }
+                Node field;
+                field.type = NODE_STRUCT_FIELD;
+                field.varName = node.varName;
+                field.op = node.op;
+                field.line = node.line; field.column = node.column; field.file = node.file;
+                const std::string fieldType = expression(field);
+                if (fieldType == "<error>") { expression(*node.left); break; }
+                const std::string actual = expression(*node.left);
+                if (actual != "<error>" && !compatible(fieldType, actual) && !constantFits(*node.left, fieldType))
+                    error(*node.left, "поле ожидает тип '" + typeName(fieldType) +
+                          "', получен '" + typeName(actual) + "'" + castHint(fieldType, actual));
+                break;
+            }
             const Symbol* object = use(node, node.varName);
             if (!object) {
                 error(node, "неизвестная структура '" + node.varName + "'");
@@ -1270,9 +1318,9 @@ private:
                 !node.left->value.empty() && node.left->value.find_first_of(".eE") == std::string::npos)
                 node.left->varType = fieldType;
             const std::string actual = expression(*node.left);
-            if (actual != "<error>" && !compatible(fieldType, actual))
+            if (actual != "<error>" && !compatible(fieldType, actual) && !constantFits(*node.left, fieldType))
                 error(*node.left, "поле ожидает тип '" + typeName(fieldType) +
-                      "', получен '" + typeName(actual) + "'");
+                      "', получен '" + typeName(actual) + "'" + castHint(fieldType, actual));
             break;
         }
         case NODE_ARRAY_ASSIGN: {
