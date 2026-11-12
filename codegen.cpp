@@ -1203,7 +1203,8 @@ void CodeGen::genNode(const Node& node) {
                 builder.CreateCall(printfFunc, {fmt, promoted});
             } else if (val->getType()->isIntegerTy() &&
                        val->getType()->getIntegerBitWidth() < 32) {
-                const bool isUnsigned = isUnsignedExpr(*node.left);
+                const bool isUnsigned = isUnsignedExpr(*node.left) ||
+                    val->getType()->getIntegerBitWidth() == 1;  // bool: 1, не -1
                 val = isUnsigned ? builder.CreateZExt(val, builder.getInt32Ty())
                                  : builder.CreateSExt(val, builder.getInt32Ty());
                 llvm::Value* fmt = getStringPtr("%d\n");
