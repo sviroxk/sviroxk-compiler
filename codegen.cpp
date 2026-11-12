@@ -1167,17 +1167,23 @@ llvm::Value* CodeGen::genCallExpr(const Node& node) {
     if (node.type == NODE_FUNC_CALL) {
         std::string name = node.varName;
         // математика
+        if (name == "pow" && node.varType == "int-pow" && node.args.size() == 2) {
+            // pow двух целых — то же, что `a ** b`: целое с проверкой переполнения (D-009).
+            Node power = node;
+            power.type = NODE_BINOP;
+            power.op = "**";
+            power.left = std::make_shared<Node>(node.args[0]);
+            power.right = std::make_shared<Node>(node.args[1]);
+            power.args.clear();
+            return genExpr(power);
+        }
         if (name == "sqrt" || name == "pow" || name == "floor" ||
             name == "ceil" || name == "round") {
             const std::string mathName = name;
             llvm::Function* function = runtimeFunction(mathName);
             std::vector<llvm::Value*> args;
-            bool floatingArgument = false;
-            bool wideIntegerArgument = false;
             for (const Node& argument : node.args) {
                 llvm::Value* value = genExpr(argument);
-                floatingArgument |= value->getType()->isFloatingPointTy();
-                wideIntegerArgument |= value->getType()->isIntegerTy(64);
                 if (value->getType()->isIntegerTy())
                     value = isUnsignedExpr(argument)
                         ? builder.CreateUIToFP(value, builder.getDoubleTy())
@@ -1186,11 +1192,7 @@ llvm::Value* CodeGen::genCallExpr(const Node& node) {
                     value = builder.CreateFPExt(value, builder.getDoubleTy());
                 args.push_back(value);
             }
-            llvm::Value* result = builder.CreateCall(function, args);
-            if (floatingArgument) return result;
-            return wideIntegerArgument
-                ? builder.CreateFPToSI(result, builder.getInt64Ty())
-                : builder.CreateFPToSI(result, builder.getInt32Ty());
+            return builder.CreateCall(function, args);  // f64 и для целых аргументов (D-009)
         }
         if (name == "abs") {
             llvm::Value* value = genExpr(node.args[0]);
