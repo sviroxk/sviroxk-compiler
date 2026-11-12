@@ -160,6 +160,7 @@ CXX=clang++ CXXFLAGS='-Wall -Wextra -Werror' ./build.sh
 CI собирает и тестирует компилятор на LLVM 18–23 (строгая сборка, полный suite; ASan/UBSan на 23 и 18).
 Sanitizer-проверки показывают проверенные сценарии, а не полную безопасность языка.
 Примеры лежат в `examples/`, regression fixtures — в `tests/fixtures/`.
+Python в репозитории — только тестовый инструмент (`tests/fuzz.py`); компилятор и язык SC — только C++.
 
 ## Документация
 
