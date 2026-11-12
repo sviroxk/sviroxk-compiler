@@ -44,8 +44,8 @@ if ! grep -Fq 'error[syntax]' "$TMP_DIR/parser-state.err"; then
 fi
 
 sources=(
-    "hello.svx"
-    "test.svx"
+    "examples/hello.svx"
+    "tests/fixtures/string_basics.svx"
     "examples/struct.svx"
     "examples/struct_init.svx"
     "examples/array_write.svx"
@@ -115,10 +115,10 @@ sources=(
     "examples/a9_file_open.svx"
     "examples/contextual_numeric_literals.svx"
     "examples/unsigned_print.svx"
-    "test_chain_access.svx"
-    "test_nested_struct.svx"
-    "test_simple_chain.svx"
-    "test_dyn_array.svx"
+    "tests/fixtures/struct_chain_access.svx"
+    "tests/fixtures/struct_nested.svx"
+    "tests/fixtures/struct_simple.svx"
+    "tests/fixtures/dynamic_array.svx"
 )
 
 for source in "${sources[@]}"; do
@@ -599,28 +599,28 @@ for source in "${sources[@]}"; do
             cat "$work/output.txt" >&2
             exit 1
         fi
-    elif [[ "$source" == "test_chain_access.svx" ]]; then
+    elif [[ "$source" == "tests/fixtures/struct_chain_access.svx" ]]; then
         expected=$'1\n2\n3\n4\n42\n7'
         if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
             echo "FAIL: chained struct access mismatch" >&2
             cat "$work/output.txt" >&2
             exit 1
         fi
-    elif [[ "$source" == "test_nested_struct.svx" ]]; then
+    elif [[ "$source" == "tests/fixtures/struct_nested.svx" ]]; then
         expected=$'1\n2\n3\n4'
         if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
             echo "FAIL: nested struct literal mismatch" >&2
             cat "$work/output.txt" >&2
             exit 1
         fi
-    elif [[ "$source" == "test_dyn_array.svx" ]]; then
+    elif [[ "$source" == "tests/fixtures/dynamic_array.svx" ]]; then
         expected=$'10\n20\n30'
         if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
             echo "FAIL: nw rox[n] must create n zeroed elements" >&2
             cat "$work/output.txt" >&2
             exit 1
         fi
-    elif [[ "$source" == "test_simple_chain.svx" ]]; then
+    elif [[ "$source" == "tests/fixtures/struct_simple.svx" ]]; then
         expected=$'5\n10'
         if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
             echo "FAIL: simple struct chain mismatch" >&2
