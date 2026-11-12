@@ -114,7 +114,7 @@ int main() {
     };
     int failures = 0;
     for (const auto& [word, type] : expected) {
-        const std::vector<Token> tokens = tokenize(std::string(word));
+        const std::vector<Token> tokens = tokenize(word);
         if (tokens.size() != 2 || tokens[0].type != type || tokens[0].value != word) {
             std::cerr << "FAIL: keyword '" << word << "' lexed to wrong token\n";
             ++failures;

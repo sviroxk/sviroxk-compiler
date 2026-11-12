@@ -2,6 +2,7 @@
 #define LEXER_H
 
 #include <string>
+#include <string_view>
 #include <vector>
 
 enum TokenType {
@@ -50,6 +51,6 @@ struct Token {
     std::string file;
 };
 
-std::vector<Token> tokenize(const std::string& code, const std::string& filename = {});
+std::vector<Token> tokenize(std::string_view code, const std::string& filename = {});
 
 #endif
