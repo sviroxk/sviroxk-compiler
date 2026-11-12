@@ -23,23 +23,27 @@ inline void registerSource(const std::string& filename, const std::string& text)
     sourceFiles()[filename] = std::move(lines);
 }
 
+// Диагностика собирается в одну строку и пишется одним вызовом: std::cerr без
+// буфера, и посимвольный вывод отступа под `^` на строке в 1 МБ — это миллион
+// системных вызовов (секунды, а под ASan в CI — больше 10 с).
 inline void reportDiagnostic(const std::string& filename, int line, int column,
                              const std::string& category, const std::string& message) {
     const std::string displayName = filename.empty() ? "<source>" : filename;
-    std::cerr << displayName << ':' << line << ':' << column
-              << ": error[" << category << "]: " << message << '\n';
+    std::string text = displayName + ':' + std::to_string(line) + ':' + std::to_string(column) +
+                       ": error[" + category + "]: " + message + '\n';
 
     auto source = sourceFiles().find(filename);
-    if (source == sourceFiles().end() || line < 1 ||
-        static_cast<size_t>(line) > source->second.size()) return;
-
-    const std::string& excerpt = source->second[static_cast<size_t>(line - 1)];
-    const size_t gutterWidth = std::to_string(line).size();
-    std::cerr << ' ' << std::string(gutterWidth, ' ') << line << " | " << excerpt << '\n'
-              << ' ' << std::string(gutterWidth, ' ') << " | ";
-    for (int index = 1; index < std::max(column, 1); ++index)
-        std::cerr << (static_cast<size_t>(index - 1) < excerpt.size() && excerpt[static_cast<size_t>(index - 1)] == '\t' ? '\t' : ' ');
-    std::cerr << "^\n";
+    if (source != sourceFiles().end() && line >= 1 &&
+        static_cast<size_t>(line) <= source->second.size()) {
+        const std::string& excerpt = source->second[static_cast<size_t>(line - 1)];
+        const std::string gutter(std::to_string(line).size(), ' ');
+        text += ' ' + gutter + std::to_string(line) + " | " + excerpt + '\n' + ' ' + gutter + " | ";
+        for (int index = 1; index < std::max(column, 1); ++index)
+            text += static_cast<size_t>(index - 1) < excerpt.size() &&
+                            excerpt[static_cast<size_t>(index - 1)] == '\t' ? '\t' : ' ';
+        text += "^\n";
+    }
+    std::cerr << text;
 }
 
 // Ошибка во входной программе, уже напечатанная: компиляция прекращается с этим

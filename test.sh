@@ -1023,7 +1023,8 @@ if (( compile_seconds > 20 )); then
     exit 1
 fi
 # Граница предела длины выражения: ровно 250000 операторов компилируется (без llc и запуска —
-# под ASan это ~2 мин), 250001 — ошибка, а не переполнение стека.
+# под ASan это ~2 мин), 250001 — ошибка, а не переполнение стека. Ошибка на строке в 1 МБ
+# печатается быстро (раньше отступ под `^` писался посимвольно: >10 с под ASan в CI).
 limit_sum="1$(printf ' + 1%.0s' $(seq 250000))"
 printf 'int x = %s;\nprint(x);\n' "$limit_sum" > "$TMP_DIR/sum-250000.svx"
 if (ulimit -c 0; timeout --signal=TERM 600s ./sc "$TMP_DIR/sum-250000.svx" >"$TMP_DIR/sum-250000.ll" 2>"$TMP_DIR/sum-250000.err") \
@@ -1034,7 +1035,18 @@ else
     head -5 "$TMP_DIR/sum-250000.err" >&2
     exit 1
 fi
-expect_compile_error "sum-250001-operators" "int x = ${limit_sum} + 1;" "слишком длинное выражение: больше 250000 операторов в одной инструкции"
+# 250001 — та же работа парсера, что и у 250000 (под ASan в CI дольше 10 с), поэтому
+# свой таймаут, как у теста выше: код выхода 1 и текст ошибки, не падение.
+printf 'int x = %s + 1;\n' "$limit_sum" > "$TMP_DIR/sum-250001.svx"
+limit_status=0
+(ulimit -c 0; timeout --signal=TERM 600s ./sc "$TMP_DIR/sum-250001.svx" >/dev/null 2>"$TMP_DIR/sum-250001.err") || limit_status=$?
+if [[ $limit_status -eq 1 ]] && grep -q "слишком длинное выражение: больше 250000 операторов в одной инструкции" "$TMP_DIR/sum-250001.err"; then
+    echo "PASS: invalid input 'sum-250001-operators' reported an error without crashing"
+else
+    echo "FAIL: 250001-operator sum: status $limit_status" >&2
+    head -c 500 "$TMP_DIR/sum-250001.err" >&2
+    exit 1
+fi
 expect_program_output "sum-two-long-statements" "int x = ${long_sum};"$'\n'"int y = ${long_sum};"$'\nprint(x + y);' '20002'
 expect_program_output "sum-2000-terms" "int x = 1$(printf ' + 1%.0s' $(seq 1999));"$'\nprint(x);' '2000'
 elif_chain=$(for i in $(seq 0 999); do printf ' else if (x == %d) { print(%d); }' "$i" "$i"; done)
