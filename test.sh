@@ -1016,6 +1016,21 @@ expect_compile_error "loop-with-break-not-returning" 'fn int f(int n) { loop { i
 expect_program_output "char-arithmetic" $'char c = \'a\';\nprint(c + 1);\nint d = c - 32;\nprint(d);' $'98\n65'
 expect_compile_error "char-plus-float" $'char c = \'a\';\nprint(c + 1.5);' "для char требует целый операнд"
 
+# Шаг 5г: составное присваивание в узкий тип проверяет диапазон; чтение p[i] через null.
+narrow_runtime() { printf '%s' "$2" > "$RUNTIME_DIR/narrow_$1.svx"; expect_runtime_error "narrow-$1" "$RUNTIME_DIR/narrow_$1.svx" "$3"; }
+narrow_runtime u8-plus $'u8 x = 255;\nx += 1;\nprint(x);' "integer overflow at line 2, column 1"
+narrow_runtime i8-increment $'i8 x = 127;\nx++;\nprint(x);' "integer overflow at line 2, column 1"
+narrow_runtime i8-decrement $'i8 x = -128;\nx--;\nprint(x);' "integer overflow at line 2, column 1"
+narrow_runtime i16-times $'i16 x = 30000;\nx *= 2;\nprint(x);' "integer overflow at line 2, column 1"
+narrow_runtime u16-minus $'u16 x = 5;\nx -= 6;\nprint(x);' "integer overflow at line 2, column 3"
+narrow_runtime u8-field $'tip P { u8 x = 0; }\nsvi tip P lor a = { x = 255; };\na.x += 1;\nprint(a.x);' "integer overflow at line 3, column 5"
+narrow_runtime u8-element $'u8[] a = [255, 1];\na[0] += 1;\nprint(a[0]);' "integer overflow at line 2, column 1"
+narrow_runtime i8-element-var $'i8[] a = [100, 1];\nint k = 100;\na[0] += k;\nprint(a[0]);' "integer overflow at line 3, column 1"
+narrow_runtime u8-sum $'u8 x = 200;\nu8 y = 100;\nx = x + y;\nprint(x);' "integer overflow at line 3, column 1"
+narrow_runtime null-index-read $'ptr p = null;\nprint(p[0]);' "null pointer dereference at line 2, column 7"
+expect_program_output "narrow-compound-in-range" $'u8 x = 200;\nx /= 2;\nx %= 7;\nprint(x);\ni8 y = 5;\nint k = 3;\ny += k;\nprint(y);\ntip P { u8 v = 0; }\nsvi tip P lor a = { v = 200; };\na.v += 55;\nprint(a.v);\nu8[] b = [250, 1];\nb[0] += 5;\nprint(b[0]);\nu8 z = 254;\nz++;\nprint(z);' $'2\n8\n255\n255\n255'
+expect_compile_error "narrow-compound-constant" $'u8 x = 10;\nx += 300;' "нельзя присвоить 'int/i32' значению типа 'byte/u8'"
+
 # Step 4b: PR22 struct parameters are aggregate copies, not aliases.
 expect_program_output "struct-by-value-copy" "$(cat examples/struct_by_value.svx)" $'17\n3\n4\n3'
 expect_program_output "struct-by-value-nested" $'tip Inner { int x = 2; }\ntip Outer { tip Inner inner = { x = 7; }; int y = 3; }\nfn int change(tip Outer value) { svi tip Inner lor replacement = { x = 9; }; value.inner = replacement; return value.inner.x + value.y; }\nsvi tip Outer lor original = { inner = { x = 5; }; y = 4; };\nprint(change(original)); print(original.inner.x);' $'13\n5'
