@@ -30,6 +30,8 @@ struct Symbol {
     std::string pointee;
     int dynArrayLength = 0;   // current length (for bounds checking)
     int dynArrayCapacity = 0; // allocated capacity
+    int droppedLine = 0;      // строка drop; дальше имя использовать нельзя
+    int deferDropLine = 0;    // строка defer drop; освобождение при выходе из области
 };
 
 struct Function {
@@ -135,6 +137,7 @@ private:
     std::map<std::string, const Node*> structs_;
     std::vector<std::string> returnTypes_;
     unsigned loopDepth_ = 0;
+    size_t dropBarrier_ = 0;  // drop можно только для имён из областей с индексом >= этого
 
     static bool isBuiltinFunction(const std::string& name) {
         static const std::set<std::string> names = {
@@ -227,6 +230,74 @@ private:
         return nullptr;
     }
 
+    // Использование имени: ошибка, если значение уже освобождено drop.
+    const Symbol* use(const Node& node, const std::string& name) const {
+        const Symbol* symbol = lookup(name);
+        if (symbol && symbol->droppedLine)
+            error(node, "'" + name + "' используется после drop (строка " +
+                  std::to_string(symbol->droppedLine) + ")");
+        return symbol;
+    }
+
+    Symbol* lookupMutable(const std::string& name, size_t* scopeIndex = nullptr) {
+        for (size_t i = scopes_.size(); i-- > 0;) {
+            auto found = scopes_[i].find(name);
+            if (found != scopes_[i].end()) {
+                if (scopeIndex) *scopeIndex = i;
+                return &found->second;
+            }
+        }
+        return nullptr;
+    }
+
+    // Проверка drop; возвращает освобождаемый символ или nullptr при ошибке.
+    Symbol* checkDrop(const Node& node) {
+        size_t index = 0;
+        Symbol* symbol = lookupMutable(node.varName, &index);
+        if (!symbol) { error(node, "неизвестное имя '" + node.varName + "'"); return nullptr; }
+        if (!symbol->isDynArray && !symbol->ty.isFile()) {
+            error(node, "drop поддерживается только для динамического массива и file");
+            return nullptr;
+        }
+        if (symbol->droppedLine) {
+            error(node, "повторный drop '" + node.varName + "' (уже освобождено в строке " +
+                  std::to_string(symbol->droppedLine) + ")");
+            return nullptr;
+        }
+        if (symbol->deferDropLine) {
+            error(node, "повторный drop '" + node.varName + "' (defer drop в строке " +
+                  std::to_string(symbol->deferDropLine) + ")");
+            return nullptr;
+        }
+        if (index < dropBarrier_) {
+            error(node, "drop '" + node.varName + "' внутри цикла или функции, а объявлена она снаружи: "
+                  "освобождение выполнилось бы несколько раз");
+            return nullptr;
+        }
+        return symbol;
+    }
+
+    std::vector<std::vector<int>> droppedState() const {
+        std::vector<std::vector<int>> state;
+        for (const auto& scope : scopes_) {
+            state.emplace_back();
+            for (const auto& entry : scope) state.back().push_back(entry.second.droppedLine);
+        }
+        return state;
+    }
+
+    void setDroppedState(const std::vector<std::vector<int>>& state, bool merge) {
+        for (size_t i = 0; i < state.size() && i < scopes_.size(); ++i) {
+            size_t j = 0;
+            for (auto& entry : scopes_[i]) {
+                if (j >= state[i].size()) break;
+                const int line = state[i][j++];
+                if (!merge) entry.second.droppedLine = line;
+                else if (line && !entry.second.droppedLine) entry.second.droppedLine = line;
+            }
+        }
+    }
+
     // Check definite assignment - error if variable used before initialization
     void checkInitialized(const Node& node, const std::string& name) const {
         const Symbol* symbol = lookup(name);
@@ -276,7 +347,7 @@ private:
         case NODE_STRING:
             return "str";
         case NODE_IDENTIFIER: {
-            const Symbol* symbol = lookup(node.value);
+            const Symbol* symbol = use(node, node.value);
             if (!symbol) {
                 error(node, "неизвестное имя '" + node.value + "'");
                 return "<error>";
@@ -285,7 +356,7 @@ private:
             return symbol->type;
         }
         case NODE_STRUCT_FIELD: {
-            const Symbol* object = lookup(node.varName);
+            const Symbol* object = use(node, node.varName);
             if (!object) {
                 error(node, "неизвестное имя '" + node.varName + "'");
                 return "<error>";
@@ -357,7 +428,7 @@ private:
             return node.varType;
         }
         case NODE_ARRAY_ACCESS: {
-            const Symbol* symbol = lookup(node.varName);
+            const Symbol* symbol = use(node, node.varName);
             if (!symbol) {
                 error(node, "неизвестный массив '" + node.varName + "'");
                 return "<error>";
@@ -404,7 +475,7 @@ private:
             return target;
         }
         case NODE_ADDR: {
-            const Symbol* symbol = lookup(node.varName);
+            const Symbol* symbol = use(node, node.varName);
             if (!symbol) {
                 error(node, "невозможно получить адрес неизвестного имени '" + node.varName + "'");
                 return "<error>";
@@ -412,7 +483,7 @@ private:
             return "ptr";
         }
         case NODE_DEREF: {
-            const Symbol* symbol = lookup(node.varName);
+            const Symbol* symbol = use(node, node.varName);
             if (!symbol) {
                 error(node, "неизвестный указатель '" + node.varName + "'");
                 return "<error>";
@@ -447,7 +518,7 @@ private:
             return "file";
         }
         case NODE_FILE_READ:
-            if (!lookup(node.varName)) error(node, "неизвестный файл '" + node.varName + "'");
+            if (!use(node, node.varName)) error(node, "неизвестный файл '" + node.varName + "'");
             return "str";
         case NODE_TERNARY: {
             const std::string conditionType = expression(*node.left);
@@ -467,7 +538,7 @@ private:
         case NODE_FUNC_CALL:
             return call(node);
         case NODE_ARRAY_PUSH: {
-            const Symbol* array = lookup(node.varName);
+            const Symbol* array = use(node, node.varName);
             if (!array) {
                 error(node, "неизвестный массив '" + node.varName + "'");
                 for (const Node& arg : node.args) expression(arg);
@@ -487,7 +558,7 @@ private:
             return "void";
         }
         case NODE_ARRAY_POP: {
-            const Symbol* array = lookup(node.varName);
+            const Symbol* array = use(node, node.varName);
             if (!array) {
                 error(node, "неизвестный массив '" + node.varName + "'");
                 return "void";
@@ -499,7 +570,7 @@ private:
             return array->isDynArray ? array->dynArrayElementType : array->ty.element->toString();
         }
         case NODE_ARRAY_RESIZE: {
-            const Symbol* array = lookup(node.varName);
+            const Symbol* array = use(node, node.varName);
             if (!array) {
                 error(node, "неизвестный массив '" + node.varName + "'");
                 for (const Node& arg : node.args) expression(arg);
@@ -518,7 +589,7 @@ private:
         }
         case NODE_ARRAY_LEN:
         case NODE_ARRAY_CAP: {
-            const Symbol* array = lookup(node.varName);
+            const Symbol* array = use(node, node.varName);
             if (!array) {
                 error(node, "неизвестный массив '" + node.varName + "'");
                 return "i32";
@@ -805,6 +876,8 @@ private:
     }
 
     void checkFunction(const Node& node) {
+        const size_t savedBarrier = dropBarrier_;
+        dropBarrier_ = scopes_.size();
         scopes_.emplace_back();
         returnTypes_.push_back(normalize(node.varType));
         for (const std::string& param : node.params) {
@@ -819,6 +892,7 @@ private:
             error(node, "функция должна возвращать значение на всех путях выполнения");
         returnTypes_.pop_back();
         scopes_.pop_back();
+        dropBarrier_ = savedBarrier;
     }
 
     void checkNode(const Node& node) {
@@ -949,7 +1023,7 @@ private:
             break;
         }
         case NODE_ASSIGN: {
-            const Symbol* symbol = lookup(node.varName);
+            const Symbol* symbol = use(node, node.varName);
             if (!symbol) {
                 error(node, "присваивание неизвестному имени '" + node.varName + "'");
                 expression(*node.left);
@@ -1002,7 +1076,7 @@ private:
             break;
         }
         case NODE_STRUCT_FIELD_ASSIGN: {
-            const Symbol* object = lookup(node.varName);
+            const Symbol* object = use(node, node.varName);
             if (!object) {
                 error(node, "неизвестная структура '" + node.varName + "'");
                 expression(*node.left);
@@ -1040,7 +1114,7 @@ private:
             break;
         }
         case NODE_ARRAY_ASSIGN: {
-            const Symbol* array = lookup(node.varName);
+            const Symbol* array = use(node, node.varName);
             if (!array) error(node, "неизвестный массив '" + node.varName + "'");
             // Definite assignment: array must be initialized before element assignment
             if (array) checkInitialized(node, node.varName);
@@ -1068,7 +1142,7 @@ private:
             break;
         }
         case NODE_DEREF_ASSIGN: {
-            const Symbol* pointer = lookup(node.varName);
+            const Symbol* pointer = use(node, node.varName);
             if (!pointer) error(node, "неизвестный указатель '" + node.varName + "'");
             else if (!pointer->ty.isPtr()) error(node, "запись через разыменование требует тип ptr");
             expression(*node.left);
@@ -1092,7 +1166,7 @@ private:
                 break;
             }
             if (node.left->type == NODE_IDENTIFIER) {
-                const Symbol* returned = lookup(node.left->value);
+                const Symbol* returned = use(node, node.left->value);
                 if (returned && returned->isDynArray) {
                     error(node, "возврат динамического массива из функции пока не поддержан");
                     break;
@@ -1120,22 +1194,29 @@ private:
             std::string condition = expression(*node.left);
             if (condition != "bool" && !isInteger(condition) && condition != "<error>")
                 error(*node.left, "условие if должно быть bool или int");
+            const auto beforeIf = droppedState();
             scopes_.emplace_back();
             checkStatements(node.children);
             scopes_.pop_back();
+            const auto afterThen = droppedState();
+            setDroppedState(beforeIf, false);
             scopes_.emplace_back();
             checkStatements(node.elseChildren);
             scopes_.pop_back();
+            setDroppedState(afterThen, true);  // освобождено хотя бы в одной ветке
             break;
         }
         case NODE_LOOP_N: {
             std::string count = expression(*node.left);
             if (!isInteger(count) && count != "<error>") error(*node.left, "число итераций должно иметь целочисленный тип");
             ++loopDepth_;
+            const size_t savedBarrier = dropBarrier_;
+            dropBarrier_ = scopes_.size();
             scopes_.emplace_back();
             checkStatements(node.children);
             scopes_.pop_back();
             --loopDepth_;
+            dropBarrier_ = savedBarrier;
             break;
         }
         case NODE_LOOP_W:
@@ -1143,10 +1224,13 @@ private:
             std::string condition = expression(*node.left);
             if (condition != "bool" && !isInteger(condition) && condition != "<error>") error(*node.left, "условие цикла должно быть bool или int");
             ++loopDepth_;
+            const size_t savedBarrier = dropBarrier_;
+            dropBarrier_ = scopes_.size();
             scopes_.emplace_back();
             checkStatements(node.children);
             scopes_.pop_back();
             --loopDepth_;
+            dropBarrier_ = savedBarrier;
             break;
         }
         case NODE_FOR_EACH: {
@@ -1159,8 +1243,11 @@ private:
             scopes_.emplace_back();
             declare(node.varName, elementType, node, false, true);
             ++loopDepth_;
+            const size_t savedBarrier = dropBarrier_;
+            dropBarrier_ = scopes_.size() - 1;  // область переменной цикла
             checkStatements(node.children);
             --loopDepth_;
+            dropBarrier_ = savedBarrier;
             scopes_.pop_back();
             break;
         }
@@ -1174,17 +1261,23 @@ private:
             scopes_.emplace_back();
             declare(node.varName, startType == "<error>" ? "i32" : startType, node, false, true);
             ++loopDepth_;
+            const size_t savedBarrier = dropBarrier_;
+            dropBarrier_ = scopes_.size() - 1;  // область переменной цикла
             checkStatements(node.children);
             --loopDepth_;
+            dropBarrier_ = savedBarrier;
             scopes_.pop_back();
             break;
         }
         case NODE_LOOP: {
             ++loopDepth_;
+            const size_t savedBarrier = dropBarrier_;
+            dropBarrier_ = scopes_.size();
             scopes_.emplace_back();
             checkStatements(node.children);
             scopes_.pop_back();
             --loopDepth_;
+            dropBarrier_ = savedBarrier;
             break;
         }
         case NODE_BREAK:
@@ -1204,6 +1297,9 @@ private:
             case NODE_FUNC_DEF: case NODE_STRUCT_DEF: case NODE_IMPORT:
                 error(node, "defer: переходы управления и объявления пока запрещены");
                 break;
+            case NODE_DROP:
+                if (Symbol* symbol = checkDrop(*node.left)) symbol->deferDropLine = node.line;
+                break;
             case NODE_ASSIGN: case NODE_ARRAY_ASSIGN: case NODE_DEREF_ASSIGN:
             case NODE_STRUCT_FIELD_ASSIGN: case NODE_FUNC_CALL: case NODE_SLOV:
             case NODE_DELETE: case NODE_FILE_WRITE: case NODE_FILE_CLOSE:
@@ -1221,15 +1317,18 @@ private:
             }
             break;
         }
+        case NODE_DROP:
+            if (Symbol* symbol = checkDrop(node)) symbol->droppedLine = node.line;
+            break;
         case NODE_DELETE: {
-            const Symbol* symbol = lookup(node.varName);
+            const Symbol* symbol = use(node, node.varName);
             if (!symbol) error(node, "неизвестное имя '" + node.varName + "'");
             else if (!symbol->isDynArray && !symbol->ty.isArray() && !symbol->ty.isPtr())
                 error(node, "освободить можно только динамический массив или ptr");
             break;
         }
         case NODE_ARRAY_PUSH: {
-            const Symbol* array = lookup(node.varName);
+            const Symbol* array = use(node, node.varName);
             if (!array) {
                 error(node, "неизвестный массив '" + node.varName + "'");
                 if (!node.args.empty()) expression(node.args[0]);
@@ -1250,13 +1349,13 @@ private:
             break;
         }
         case NODE_ARRAY_POP: {
-            const Symbol* array = lookup(node.varName);
+            const Symbol* array = use(node, node.varName);
             if (!array) error(node, "неизвестный массив '" + node.varName + "'");
             else if (!array->isDynArray) error(node, "pop поддерживается только для динамических массивов");
             break;
         }
         case NODE_ARRAY_RESIZE: {
-            const Symbol* array = lookup(node.varName);
+            const Symbol* array = use(node, node.varName);
             if (!array) {
                 error(node, "неизвестный массив '" + node.varName + "'");
                 if (!node.args.empty()) expression(node.args[0]);
@@ -1276,7 +1375,7 @@ private:
         }
         case NODE_ARRAY_LEN:
         case NODE_ARRAY_CAP: {
-            const Symbol* array = lookup(node.varName);
+            const Symbol* array = use(node, node.varName);
             if (!array) error(node, "неизвестный массив '" + node.varName + "'");
             else if (!array->isDynArray && !array->ty.isArray())
                 error(node, "'" + std::string(node.type == NODE_ARRAY_LEN ? "len" : "cap") +
@@ -1285,7 +1384,7 @@ private:
         }
         case NODE_FILE_WRITE:
         case NODE_FILE_CLOSE: {
-            const Symbol* symbol = lookup(node.varName);
+            const Symbol* symbol = use(node, node.varName);
             if (!symbol) error(node, "неизвестный файл '" + node.varName + "'");
             else if (!symbol->ty.isFile()) error(node, "ожидался file, получен '" + typeName(symbol->ty.toString()) + "'");
             if (node.left) {

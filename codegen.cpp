@@ -1471,6 +1471,22 @@ void CodeGen::genNode(const Node& node) {
     else if (node.type == NODE_DEFER) {
         deferred_.push_back({node.left.get(), saveScope()});
     }
+    else if (node.type == NODE_DROP) {
+        // Семантика гарантирует: динамический массив или file, освобождается один раз.
+        if (dynArrays.count(node.varName)) {
+            llvm::Value* desc = dynArrays[node.varName];
+            llvm::Value* dataSlot = builder.CreateStructGEP(dynArrayType(), desc, 0);
+            builder.CreateCall(runtimeFunction("free"),
+                {builder.CreateLoad(builder.getPtrTy(), dataSlot)});
+            builder.CreateStore(llvm::ConstantPointerNull::get(builder.getPtrTy()), dataSlot);
+            builder.CreateStore(builder.getInt64(0), builder.CreateStructGEP(dynArrayType(), desc, 1));
+            builder.CreateStore(builder.getInt64(0), builder.CreateStructGEP(dynArrayType(), desc, 2));
+        } else if (llvm::Value* slot = vars[node.varName]) {
+            llvm::Function* fcloseF = runtimeFunction("fclose");
+            builder.CreateCall(fcloseF, {builder.CreateLoad(builder.getPtrTy(), slot)});
+            builder.CreateStore(llvm::ConstantPointerNull::get(builder.getPtrTy()), slot);
+        }
+    }
     else if (node.type == NODE_DELETE) {
         llvm::Function* freeF = runtimeFunction("free");
         llvm::Value* alloca = vars[node.varName];

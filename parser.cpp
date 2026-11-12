@@ -947,18 +947,31 @@ Node parseOne() {
         node.left = makeNode(parseOne());
         return node;
     }
+    // drop — освободить динамический массив или закрыть файл
+    if (peek().type == DROP) {
+        const Token token = consume();
+        Node node; node.type = NODE_DROP;
+        node.line = token.line; node.column = token.column; node.file = token.file;
+        if (!isNameToken(peek().type))
+            failAt(peek(), "после drop ожидалось имя переменной");
+        node.varName = consume().value;
+        expect(SEMICOLON);
+        return node;
+    }
     // del — удалить массив
     if (peek().type == DEL) {
+        const Token token = consume();
         Node node; node.type = NODE_DELETE;
-        consume();
+        node.line = token.line; node.column = token.column; node.file = token.file;
         node.varName = consume().value;
         expect(SEMICOLON);
         return node;
     }
     // zap — записать в файл
     if (peek().type == ZAP) {
+        const Token token = consume();
         Node node; node.type = NODE_FILE_WRITE;
-        consume();
+        node.line = token.line; node.column = token.column; node.file = token.file;
         expect(LPAREN);
         node.varName = consume().value; // имя файла
         expect(COMMA);
@@ -969,8 +982,9 @@ Node parseOne() {
     }
     // zak — закрыть файл
     if (peek().type == ZAK) {
+        const Token token = consume();
         Node node; node.type = NODE_FILE_CLOSE;
-        consume();
+        node.line = token.line; node.column = token.column; node.file = token.file;
         expect(LPAREN);
         node.varName = consume().value;
         expect(RPAREN);
