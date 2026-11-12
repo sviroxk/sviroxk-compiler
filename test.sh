@@ -964,6 +964,7 @@ expect_compile_error "int-void-call" $'fn void f() { print(1); }\nint y = f();' 
 expect_compile_error "print-void-call" $'fn void f() { print(1); }\nprint(f());' "print: функция без результата (void)"
 expect_program_output "static-array-len-cap" $'int[] a = [1, 2, 3];\nprint(a.len());\nprint(a.cap());\nint[] e = [];\nprint(e.len());\nfor i in 0..a.len() { print(a[i]); }' $'3\n3\n0\n1\n2\n3'
 expect_compile_error "static-array-pop-expression" $'int[] a = [1, 2];\nprint(a.pop());' "pop поддерживается только для динамических массивов"
+expect_program_output "math-integer-arguments" $'print(pow(2, 10));\ni64 b = 3;\nprint(pow(b, 30));\nprint(sqrt(2));\nprint(floor(7));\nprint(ceil(7));\nprint(round(7));\nf64 r = sqrt(16);\nprint(r);\nprint(pow(2.0, 3));' $'1024\n205891132094649\n1.414214\n7.000000\n7.000000\n7.000000\n4.000000\n8.000000'
 expect_program_output "defer-return-in-loop" $'fn int run() { defer print(9); for i in 0..3 { defer print(i); if (i == 1) { return 7; } } return 0; }\nprint(run());' $'0\n1\n9\n7'
 expect_program_output "defer-loop-forms" $'int n = 0; while (n < 2) { n = n + 1; defer print(n); }\nrepeat (2) { defer print(3); }\nwhile (n < 3) { n = n + 1; defer print(n); }\nfor i in 4..6 { defer print(i); }\nint[] values = [6, 7]; for item in values { defer print(item); }' $'1\n2\n3\n3\n3\n4\n5\n6\n7'
 expect_program_output "defer-break-continue" $'defer print(9); for i in 0..4 { defer print(i); if (i == 0) { continue; } if (i == 2) { break; } print(8); }' $'0\n8\n1\n2\n9'
@@ -1096,6 +1097,7 @@ int_runtime div-zero $'int a = 5;\nint b = 0;\nprint(a / b);' "division by zero 
 int_runtime rem-zero $'int a = 5;\nint b = 0;\nprint(a % b);' "division by zero at line 3, column 9"
 int_runtime min-div-minus-one $'int a = -2147483647 - 1;\nint b = -1;\nprint(a / b);' "integer overflow at line 3, column 9"
 int_runtime shift-range $'int a = 1;\nint s = 40;\nprint(a << s);' "shift amount out of range at line 3, column 9"
+int_runtime pow-overflow $'int a = 2;\nprint(pow(a, 31));' "integer overflow at line 2"
 int_runtime add-overflow $'int a = 2147483647;\nprint(a + 1);' "integer overflow at line 2, column 9"
 int_runtime sub-overflow $'int a = -2147483647;\nprint(a - 2);' "integer overflow at line 2, column 9"
 int_runtime mul-overflow-i64 $'i64 a = 4611686018427387904;\nprint(a * 2);' "integer overflow at line 2, column 9"

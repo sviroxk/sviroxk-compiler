@@ -994,6 +994,13 @@ private:
             if (node.varName == "replace") return "ptr";
             if (node.varName == "sqrt" || node.varName == "pow" ||
                 node.varName == "floor" || node.varName == "ceil" || node.varName == "round") {
+                // D-009: целые аргументы. pow двух целых — целое, как `**` (с проверкой
+                // переполнения), остальные — f64 (sqrt(2) = 1.414…).
+                bool allInteger = !argumentTypes.empty();
+                for (const std::string& type : argumentTypes)
+                    allInteger = allInteger && isInteger(type);
+                if (allInteger && node.varName == "pow") node.varType = "int-pow";
+                else if (allInteger) return "f64";
                 sc::Type resultTy = sc::Type::from(argumentTypes.empty() ? "i32" : argumentTypes.front());
                 for (size_t index = 1; index < argumentTypes.size(); ++index) {
                     const sc::Type argTy = sc::Type::from(argumentTypes[index]);
