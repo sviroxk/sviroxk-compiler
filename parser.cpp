@@ -768,7 +768,7 @@ void parseDeclBody(Node& node, bool isArray) {
 Node parseOne() {
     operatorsInStatement = 0;  // выражения разных инструкций не вкладываются друг в друга
     // P p; / P p = { ... }; — переменная-структура
-    if (peek().type == IDENTIFIER && structNames.count(peek().value) && peek(1).type == IDENTIFIER) {
+    if (peek().type == IDENTIFIER && structNames.contains(peek().value) && peek(1).type == IDENTIFIER) {
         Token declarationToken = consume();
         return parseStructInstance(declarationToken, declarationToken.value, consume().value);
     }

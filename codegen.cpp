@@ -556,7 +556,7 @@ bool CodeGen::isUnsignedExpr(const Node& node) const {
 
 void CodeGen::initStructLiteral(llvm::Value* storage, llvm::StructType* aggregateType,
                                 const std::string& structName, const Node& literal) {
-    if (!structDefs.count(structName)) {
+    if (!structDefs.contains(structName)) {
         codegenFailure(literal, "неизвестная структура: " + structName);
         return;
     }
@@ -571,7 +571,7 @@ void CodeGen::initStructLiteral(llvm::Value* storage, llvm::StructType* aggregat
     for (size_t index = 0; index < fields.size(); ++index) {
         const StructField& field = fields[index];
         const Node* initializer;
-        if (named.count(field.name)) {
+        if (named.contains(field.name)) {
             initializer = named.at(field.name)->left.get();
         } else if (positionalIndex < positional.size()) {
             initializer = positional[positionalIndex++]->left.get();
@@ -709,7 +709,7 @@ llvm::Value* CodeGen::genOtherExpr(const Node& node) {
     }
     return nullptr;
     }
-    if (node.type == NODE_IDENTIFIER && node.value == "null" && !vars.count(node.value))
+    if (node.type == NODE_IDENTIFIER && node.value == "null" && !vars.contains(node.value))
         return llvm::ConstantPointerNull::get(builder.getPtrTy());
     if (node.type == NODE_IDENTIFIER) {
         llvm::Value* alloca = vars[node.value];
@@ -722,7 +722,7 @@ llvm::Value* CodeGen::genOtherExpr(const Node& node) {
         codegenFailure(node, "неизвестная переменная '" + node.value + "'");
     }
     if (node.type == NODE_ARRAY_ACCESS) {
-        if (dynArrays.count(node.varName)) {
+        if (dynArrays.contains(node.varName)) {
             llvm::Value* desc = dynArrays[node.varName];
             llvm::StructType* descType = dynArrayType();
             llvm::Value* dataPtr = builder.CreateLoad(builder.getPtrTy(),
@@ -736,7 +736,7 @@ llvm::Value* CodeGen::genOtherExpr(const Node& node) {
             llvm::Value* gep = builder.CreateGEP(elementType, dataPtr, {idx});
             return builder.CreateLoad(elementType, gep);
         }
-        if (vars.count(node.varName) &&
+        if (vars.contains(node.varName) &&
             storageType(vars[node.varName])->isPointerTy()) {
             llvm::Value* ptr = nullChecked(builder.CreateLoad(
                 builder.getPtrTy(), vars[node.varName]), node);
@@ -745,7 +745,7 @@ llvm::Value* CodeGen::genOtherExpr(const Node& node) {
                 builder.getInt32Ty(), ptr, {idx});
             return builder.CreateLoad(builder.getInt32Ty(), gep);
         }
-        if (arrays.count(node.varName)) {
+        if (arrays.contains(node.varName)) {
             llvm::Value* arr = arrays[node.varName];
             unsigned n = arrayLengths[node.varName];
             llvm::Type* elementType = arrayElementTypes[node.varName];
@@ -1344,7 +1344,7 @@ llvm::Value* CodeGen::genCallExpr(const Node& node) {
             return builder.CreateTrunc(builder.CreateCall(strlenF, {str}), builder.getInt32Ty());
         }
         // пользовательские функции
-        if (funcs.count(name)) {
+        if (funcs.contains(name)) {
             std::vector<llvm::Value*> argVals;
             llvm::Function* fn = funcs[name];
             const auto& ptypes = funcParamTypes[name];
@@ -1355,7 +1355,7 @@ llvm::Value* CodeGen::genCallExpr(const Node& node) {
                 argVals.push_back(v);
             }
             llvm::Value* ret = builder.CreateCall(fn, argVals);
-            std::string rt = funcReturnTypes.count(name)
+            std::string rt = funcReturnTypes.contains(name)
                 ? funcReturnTypes[name] : "i32";
             return castTo(ret, svType(rt));
         }
@@ -1393,7 +1393,7 @@ void CodeGen::genNode(const Node& node) {
                 llvm::Value* fmt = getStringPtr("%f\n");
                 builder.CreateCall(printfFunc, {fmt, val});
             } else if (node.left->type == NODE_IDENTIFIER &&
-                       charVars.count(node.left->value) && charVars[node.left->value]) {
+                       charVars.contains(node.left->value) && charVars[node.left->value]) {
                 llvm::Value* promoted = builder.CreateZExt(val, builder.getInt32Ty());
                 llvm::Value* fmt = getStringPtr("%c\n");
                 builder.CreateCall(printfFunc, {fmt, promoted});
@@ -1449,7 +1449,7 @@ void CodeGen::genNode(const Node& node) {
         }
         // ptr p = &x: запомнить тип x, чтобы *p читал и писал значение нужного типа.
         pointeeTypes.erase(node.varName);
-        if (node.left->type == NODE_ADDR && vars.count(node.left->varName) && vars[node.left->varName])
+        if (node.left->type == NODE_ADDR && vars.contains(node.left->varName) && vars[node.left->varName])
             pointeeTypes[node.varName] = storageType(vars[node.left->varName]);
         llvm::Value* val = genExpr(*node.left);
         llvm::Type* ty = node.varType.empty()
@@ -1466,7 +1466,7 @@ void CodeGen::genNode(const Node& node) {
     }
     else if (node.type == NODE_VAR_DECL && node.left && node.left->type == NODE_STRUCT_LITERAL) {
         // Handle struct literal initialization for typed variable declarations
-        if (!structDefs.count(node.varType)) {
+        if (!structDefs.contains(node.varType)) {
             codegenFailure(node, "неизвестная структура: " + node.varType);
             return;
         }
@@ -1524,7 +1524,7 @@ void CodeGen::genNode(const Node& node) {
     else if (node.type == NODE_ARRAY_ASSIGN) {
         if (node.left && node.right) {
             // динамический массив с описателем
-            if (dynArrays.count(node.varName)) {
+            if (dynArrays.contains(node.varName)) {
                 llvm::Value* desc = dynArrays[node.varName];
                 llvm::StructType* descType = dynArrayType();
                 llvm::Value* dataPtr = builder.CreateLoad(builder.getPtrTy(),
@@ -1543,7 +1543,7 @@ void CodeGen::genNode(const Node& node) {
                 builder.CreateStore(castTo(value, elementType, isUnsignedExpr(*node.right)), gep);
             }
             // raw dynamic array (ptr variable)
-            else if (vars.count(node.varName) &&
+            else if (vars.contains(node.varName) &&
                 storageType(vars[node.varName])->isPointerTy()) {
                 llvm::Value* ptr = nullChecked(builder.CreateLoad(
                     builder.getPtrTy(), vars[node.varName]), node);
@@ -1554,7 +1554,7 @@ void CodeGen::genNode(const Node& node) {
                 llvm::Value* value = genExpr(*node.right);
                 precomputed_.clear();
                 builder.CreateStore(value, gep);
-            } else if (arrays.count(node.varName)) {
+            } else if (arrays.contains(node.varName)) {
                 llvm::Value* arr = arrays[node.varName];
                 unsigned n = arrayLengths[node.varName];
                 llvm::Type* elementType = arrayElementTypes[node.varName];
@@ -1764,7 +1764,7 @@ void CodeGen::genNode(const Node& node) {
         structFieldIndices[node.varName] = std::move(fieldIndices);
     }
     else if (node.type == NODE_STRUCT_INSTANCE) {
-        if (!structDefs.count(node.varType)) {
+        if (!structDefs.contains(node.varType)) {
             std::cerr << "Неизвестная структура: " << node.varType << std::endl;
             throw sc::CompileFailure{1};
         }
@@ -1819,7 +1819,7 @@ void CodeGen::genNode(const Node& node) {
         funcs[node.varName] = func;
     }
     else if (node.type == NODE_FUNC_CALL) {
-        if (funcs.count(node.varName)) {
+        if (funcs.contains(node.varName)) {
             std::vector<llvm::Value*> argVals;
             const auto& ptypes = funcParamTypes[node.varName];
             for (size_t i = 0; i < node.args.size(); i++) {
@@ -1838,7 +1838,7 @@ void CodeGen::genNode(const Node& node) {
     }
     else if (node.type == NODE_DROP) {
         // Семантика гарантирует: динамический массив или file, освобождается один раз.
-        if (dynArrays.count(node.varName)) {
+        if (dynArrays.contains(node.varName)) {
             llvm::Value* desc = dynArrays[node.varName];
             llvm::Value* dataSlot = builder.CreateStructGEP(dynArrayType(), desc, 0);
             builder.CreateCall(runtimeFunction("free"),
@@ -1946,7 +1946,7 @@ void CodeGen::genNode(const Node& node) {
         loopDeferredBase_ = savedLoopBase;
     }
     else if (node.type == NODE_FOR_EACH) {
-        if (!arrays.count(node.left->value) || !arrayLengths.count(node.left->value))
+        if (!arrays.contains(node.left->value) || !arrayLengths.contains(node.left->value))
             return;
         llvm::Value* array = arrays[node.left->value];
         const unsigned length = arrayLengths[node.left->value];
