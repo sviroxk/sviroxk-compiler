@@ -617,7 +617,7 @@ for source in "${sources[@]}"; do
     elif [[ "$source" == "tests/fixtures/dynamic_array.svx" ]]; then
         expected=$'10\n20\n30'
         if [[ "$(cat "$work/output.txt")" != "$expected" ]]; then
-            echo "FAIL: nw rox[n] must create n zeroed elements" >&2
+            echo "FAIL: nw int[n] must create n zeroed elements" >&2
             cat "$work/output.txt" >&2
             exit 1
         fi
@@ -778,7 +778,7 @@ expect_garbage_input "truncated-let" 'let x: int = ' "ожидалось выр�
 expect_garbage_input "truncated-if" 'if (1) {' ""
 expect_garbage_input "truncated-struct" 'tip P {' ""
 expect_garbage_input "truncated-call" 'print(max(1, ' ""
-expect_garbage_input "truncated-cop" 'cop f(1 2 3' ""
+expect_garbage_input "truncated-cop" 'f(1 2 3' ""
 expect_garbage_input "stray-rbrace-in-fn" $'fn void f() { print(1); } }\nprint(2);\n' "лишняя '}'" 1
 many_errors=""
 for ((i = 0; i < 50; i++)); do many_errors+=$'let a: int = ;\n'; done
@@ -817,7 +817,7 @@ expect_compile_error_file() {
 expect_compile_error_file "examples/a15_builtin_collision.svx" "зарезервировано встроенной функцией"
 expect_compile_error_file "examples/a19_nested_function.svx" "вложенные определения функций"
 expect_compile_error_file "examples/a20_unreachable.svx" "недостижимый код"
-expect_compile_error_file "examples/a5_positions.svx" "a5_positions.svx:5:13: error[semantic]"
+expect_compile_error_file "examples/a5_positions.svx" "a5_positions.svx:5:14: error[semantic]"
 expect_compile_error_file "examples/array_bounds_negative.svx" "индекс массива выходит за границы"
 expect_compile_error_file "examples/array_bounds_upper.svx" "индекс массива выходит за границы"
 expect_compile_error_file "examples/continue_counted_loop.svx" "недостижимый код"
@@ -827,9 +827,9 @@ expect_compile_error_file "examples/p0_struct_recursive.svx" "рекурсивн
 
 RUNTIME_DIR="$TMP_DIR/runtime-sources"
 mkdir -p "$RUNTIME_DIR"
-printf '%s\n' 'svi rox[] lor values = [1, 2, 3];' 'let i: int = 5;' 'print(values[i]);' > "$RUNTIME_DIR/static_read.svx"
-printf '%s\n' 'svi rox[] lor values = [1, 2, 3];' 'let i: int = 0 - 1;' 'values[i] = 4;' > "$RUNTIME_DIR/static_write.svx"
-printf '%s\n' 'ptr values = nw rox[2];' 'values.push(7);' 'let i: int = 3;' 'print(values[i]);' > "$RUNTIME_DIR/dynamic_read.svx"
+printf '%s\n' 'svi int[] lor values = [1, 2, 3];' 'let i: int = 5;' 'print(values[i]);' > "$RUNTIME_DIR/static_read.svx"
+printf '%s\n' 'svi int[] lor values = [1, 2, 3];' 'let i: int = 0 - 1;' 'values[i] = 4;' > "$RUNTIME_DIR/static_write.svx"
+printf '%s\n' 'ptr values = nw int[2];' 'values.push(7);' 'let i: int = 3;' 'print(values[i]);' > "$RUNTIME_DIR/dynamic_read.svx"
 expect_runtime_error "static-array-read-oob" "$RUNTIME_DIR/static_read.svx" "array index out of bounds at line 3, column 7"
 expect_runtime_error "static-array-write-oob" "$RUNTIME_DIR/static_write.svx" "array index out of bounds at line 3, column 1"
 expect_runtime_error "dynamic-array-read-oob" "$RUNTIME_DIR/dynamic_read.svx" "array index out of bounds at line 4, column 7"
@@ -873,7 +873,7 @@ expect_program_output "global-read-in-fn" $'let g = 5;\nfn int h() { return g; }
 expect_program_output "global-write-in-fn" $'let counter: int = 0;\nfn void inc() { counter = counter + 1; }\ninc();\ninc();\nprint(counter);' '2'
 expect_program_output "global-in-recursion" $'let depth: int = 0;\nfn int fact(int n) { depth = depth + 1; if (n <= 1) { return 1; } return n * fact(n - 1); }\nprint(fact(5));\nprint(depth);' $'120\n5'
 expect_program_output "global-declared-after-fn" $'fn void show() { print(total); }\nlet total: int = 7;\nshow();' '7'
-expect_program_output "global-array-in-fn" $'svi rox[] lor arr = [1, 2, 3];\nfn int second() { return arr[1]; }\nprint(second());' '2'
+expect_program_output "global-array-in-fn" $'svi int[] lor arr = [1, 2, 3];\nfn int second() { return arr[1]; }\nprint(second());' '2'
 expect_program_output "global-const-and-param-shadow" $'const limit: int = 10;\nlet x: int = 1;\nfn int f(int x) { return x + limit; }\nprint(f(5));\nprint(x);' $'15\n1'
 expect_program_output "block-local-vs-global" $'if (1) { let inner: int = 3; print(inner); }\nlet inner: int = 9;\nfn int f() { return inner; }\nprint(f());' $'3\n9'
 expect_program_output "globals-named-like-runtime" $'let printf = 3;\nlet puts = 4;\nfn int f() { return printf + puts; }\nprint(f());' '7'
@@ -881,7 +881,7 @@ expect_program_output "struct-in-fn" $'tip P { int x = 4; }\nfn int f() { svi ti
 expect_program_output "ar-and-rep-together" $'print(ar("abc"));\nprint(rep("hello world", "world", "SC"));' $'3\nhello SC'
 expect_program_output "user-fn-named-strlen" $'fn int strlen(int x) { return x + 1; }\nprint(strlen(4));\nprint(ar("abcd"));' $'5\n4'
 expect_compile_error "user-main-reserved" $'fn void main() { print(111); }\nprint(1);' "имя функции 'main' зарезервировано"
-expect_compile_error "return-dynamic-array" $'fn ptr make() { ptr v = nw rox[3]; return v; }\nprint(1);' "возврат динамического массива из функции пока не поддержан"
+expect_compile_error "return-dynamic-array" $'fn ptr make() { ptr v = nw int[3]; return v; }\nprint(1);' "возврат динамического массива из функции пока не поддержан"
 
 # Шаг 3: строки в куче, файлы, nw, push, разыменование.
 expect_program_output "str-huge-double" 'print(ar(str(1e300)));' '308'
@@ -894,20 +894,20 @@ file g = atk(\"$TMP_DIR/roundtrip.txt\", \"r\");
 str t = pro(g);
 print(t);
 zak(g);" 'line1'
-expect_program_output "nw-has-length-n" $'ptr v = nw rox[3];\nv[0] = 10;\nprint(v[0]);\nprint(v.len());\nprint(v[2]);' $'10\n3\n0'
-expect_program_output "nw-empty-then-push" $'ptr v = nw rox[0];\nprint(v.len());\nv.push(5);\nprint(v[0]);' $'0\n5'
+expect_program_output "nw-has-length-n" $'ptr v = nw int[3];\nv[0] = 10;\nprint(v[0]);\nprint(v.len());\nprint(v[2]);' $'10\n3\n0'
+expect_program_output "nw-empty-then-push" $'ptr v = nw int[0];\nprint(v.len());\nv.push(5);\nprint(v[0]);' $'0\n5'
 expect_program_output "deref-f64" $'f64 f = 2.5;\nptr p = &f;\nprint(*p);\n*p = 4.25;\nprint(f);' $'2.500000\n4.250000'
 expect_program_output "deref-int" $'int x = 7;\nptr p = &x;\n*p = *p + 1;\nprint(x);\nprint(*p);' $'8\n8'
 printf '%s\n' 'file f = atk("no-such-dir/missing.txt", "r");' 'str t = pro(f);' 'print(t);' > "$RUNTIME_DIR/missing_file.svx"
 expect_runtime_error "open-missing-file" "$RUNTIME_DIR/missing_file.svx" "cannot open file 'no-such-dir/missing.txt' at line 1, column 10"
-expect_compile_error "push-string-into-int-array" $'ptr v = nw rox[3];\nv.push("hello");' "элемент массива ожидает тип"
+expect_compile_error "push-string-into-int-array" $'ptr v = nw int[3];\nv.push("hello");' "элемент массива ожидает тип"
 
 # Step 4c: lexical scope cleanup, LIFO, return and loop exits.
 expect_program_output "defer-lifo-late-evaluation" "$(cat examples/defer.svx)" $'0\n2\n3'
 expect_program_output "defer-branch-return" $'fn int choose(bool early) { defer print(10); if (early) { defer print(20); return 1; } else { defer print(30); } return 2; }\nprint(choose(true)); print(choose(false));' $'20\n10\n1\n30\n10\n2'
 expect_program_output "defer-shadow-binding" $'fn void run() { int value = 1; defer print(value); if (true) { int value = 2; defer print(value); return; } }\nrun();' $'2\n1'
 expect_program_output "defer-return-in-loop" $'fn int run() { defer print(9); for i in 0..3 { defer print(i); if (i == 1) { return 7; } } return 0; }\nprint(run());' $'0\n1\n9\n7'
-expect_program_output "defer-loop-forms" $'int n = 0; while (n < 2) { n = n + 1; defer print(n); }\ncert ceh (2) { defer print(3); }\ncert usy (n < 3) { n = n + 1; defer print(n); }\nfor i in 4..6 { defer print(i); }\nsvi rox[] lor values = [6, 7]; for item in values { defer print(item); }' $'1\n2\n3\n3\n3\n4\n5\n6\n7'
+expect_program_output "defer-loop-forms" $'int n = 0; while (n < 2) { n = n + 1; defer print(n); }\ncert ceh (2) { defer print(3); }\nwhile (n < 3) { n = n + 1; defer print(n); }\nfor i in 4..6 { defer print(i); }\nsvi int[] lor values = [6, 7]; for item in values { defer print(item); }' $'1\n2\n3\n3\n3\n4\n5\n6\n7'
 expect_program_output "defer-break-continue" $'defer print(9); for i in 0..4 { defer print(i); if (i == 0) { continue; } if (i == 2) { break; } print(8); }' $'0\n8\n1\n2\n9'
 expect_program_output "defer-nested-loop" $'for i in 1..3 { defer print(i); loop { defer print(7); break; } print(8); }' $'7\n8\n1\n7\n8\n2'
 expect_program_output "defer-call-and-assignment" $'fn void show(int n) { print(n); }\nfn int run() { int n = 1; defer show(n); defer n = 4; return n; }\nprint(run());' $'4\n1'
@@ -921,31 +921,31 @@ expect_compile_error "defer-unknown-name" 'defer print(missing);' "неизве�
 expect_compile_error "defer-invalid-delete" 'int value = 1; defer del value;' 'освободить можно только динамический массив или ptr'
 
 # drop: освобождение динамического массива / закрытие файла, повтор и использование после drop — ошибки компиляции.
-expect_program_output "drop-dyn-array" $'ptr v = nw rox[3];\nv[0] = 7;\nprint(v[0]);\ndrop v;\nprint(1);' $'7\n1'
+expect_program_output "drop-dyn-array" $'ptr v = nw int[3];\nv[0] = 7;\nprint(v[0]);\ndrop v;\nprint(1);' $'7\n1'
 expect_program_output "drop-file-flushes" "file f = atk(\"$TMP_DIR/drop.txt\", \"w\");
 zap(f, \"dropped\");
 drop f;
 file g = atk(\"$TMP_DIR/drop.txt\", \"r\");
 print(pro(g));
 drop g;" 'dropped'
-expect_program_output "drop-in-function-and-loop" $'fn int first() { ptr v = nw rox[2]; v[0] = 4; int r = v[0]; drop v; return r; }\nprint(first());\nfor i in 0..2 { ptr w = nw rox[1]; w[0] = i; print(w[0]); drop w; }' $'4\n0\n1'
-expect_program_output "defer-drop" $'fn void run() { ptr v = nw rox[2]; defer drop v; defer print(v[1]); v[1] = 5; }\nrun();\nprint(6);' $'5\n6'
-expect_program_output "drop-in-one-branch" $'ptr v = nw rox[2];\nif (true) { drop v; } else { print(v[0]); }\nprint(3);' '3'
-expect_compile_error "drop-use-after" $'ptr v = nw rox[3];\ndrop v;\nprint(v[0]);' "'v' используется после drop (строка 2)"
-expect_compile_error "drop-use-after-branch" $'ptr v = nw rox[3];\nif (true) { drop v; }\nprint(v.len());' "'v' используется после drop (строка 2)"
+expect_program_output "drop-in-function-and-loop" $'fn int first() { ptr v = nw int[2]; v[0] = 4; int r = v[0]; drop v; return r; }\nprint(first());\nfor i in 0..2 { ptr w = nw int[1]; w[0] = i; print(w[0]); drop w; }' $'4\n0\n1'
+expect_program_output "defer-drop" $'fn void run() { ptr v = nw int[2]; defer drop v; defer print(v[1]); v[1] = 5; }\nrun();\nprint(6);' $'5\n6'
+expect_program_output "drop-in-one-branch" $'ptr v = nw int[2];\nif (true) { drop v; } else { print(v[0]); }\nprint(3);' '3'
+expect_compile_error "drop-use-after" $'ptr v = nw int[3];\ndrop v;\nprint(v[0]);' "'v' используется после drop (строка 2)"
+expect_compile_error "drop-use-after-branch" $'ptr v = nw int[3];\nif (true) { drop v; }\nprint(v.len());' "'v' используется после drop (строка 2)"
 expect_compile_error "drop-file-close-after" "file f = atk(\"$TMP_DIR/drop2.txt\", \"w\");
 drop f;
 zak(f);" "'f' используется после drop (строка 2)"
-expect_compile_error "drop-twice" $'ptr v = nw rox[3];\ndrop v;\ndrop v;' "повторный drop 'v' (уже освобождено в строке 2)"
-expect_compile_error "drop-after-defer-drop" $'ptr v = nw rox[3];\ndefer drop v;\ndrop v;' "повторный drop 'v' (defer drop в строке 2)"
+expect_compile_error "drop-twice" $'ptr v = nw int[3];\ndrop v;\ndrop v;' "повторный drop 'v' (уже освобождено в строке 2)"
+expect_compile_error "drop-after-defer-drop" $'ptr v = nw int[3];\ndefer drop v;\ndrop v;' "повторный drop 'v' (defer drop в строке 2)"
 expect_compile_error "drop-string" $'str s = "a";\ndrop s;' 'drop поддерживается только для динамического массива и file'
 expect_compile_error "drop-raw-pointer" $'int x = 1;\nptr p = &x;\ndrop p;' 'drop поддерживается только для динамического массива и file'
-expect_compile_error "drop-outer-in-loop" $'ptr v = nw rox[3];\nwhile (true) { drop v; }' "drop 'v' внутри цикла или функции"
-expect_compile_error "drop-global-in-function" $'ptr v = nw rox[3];\nfn void f() { drop v; }\nf();' "drop 'v' внутри цикла или функции"
+expect_compile_error "drop-outer-in-loop" $'ptr v = nw int[3];\nwhile (true) { drop v; }' "drop 'v' внутри цикла или функции"
+expect_compile_error "drop-global-in-function" $'ptr v = nw int[3];\nfn void f() { drop v; }\nf();' "drop 'v' внутри цикла или функции"
 expect_compile_error "drop-without-name" 'drop 5;' 'после drop ожидалось имя переменной'
-expect_program_output "defer-drop-after-return-value" $'fn int f(int x) {\n  ptr v = nw rox[2];\n  defer drop v;\n  v[0] = x;\n  return v[0] + 1;\n}\nprint(f(4));' '5'
+expect_program_output "defer-drop-after-return-value" $'fn int f(int x) {\n  ptr v = nw int[2];\n  defer drop v;\n  v[0] = x;\n  return v[0] + 1;\n}\nprint(f(4));' '5'
 expect_program_output "defer-after-return-call" $'fn int g() { print(1); return 3; }\nfn int f() { defer print(2); return g(); }\nprint(f());' $'1\n2\n3'
-expect_program_output "defer-assign-after-return-value" $'fn int f() { ptr v = nw rox[1]; v[0] = 4; defer v[0] = 100; return v[0]; }\nprint(f());' '4'
+expect_program_output "defer-assign-after-return-value" $'fn int f() { ptr v = nw int[1]; v[0] = 4; defer v[0] = 100; return v[0]; }\nprint(f());' '4'
 expect_program_output "defer-struct-param-return" $'tip P { int x = 0; }\nfn int f(tip P value) { defer value.x = 100; return value.x; }\nsvi tip P lor p = { x = 3; };\nprint(f(p));\nprint(p.x);' $'3\n3'
 
 # Целые (шаг 5а): деление на ноль, сдвиги, переполнение — ошибка, а не молчаливая порча значения.
@@ -1003,7 +1003,7 @@ expect_compile_error "null-compare-int" $'int x = 1;\nif (x == null) { print(2);
 expect_compile_error "null-ordering" $'ptr p = null;\nif (p < null) { print(1); }' "указатели можно сравнивать только между собой и с null"
 expect_program_output "nested-field-assign" $'tip In { int x = 0; }\ntip Out { tip In a; int y = 0; }\nsvi tip Out lor r = { };\nr.a.x = 5;\nr.a.x += 2;\nr.y = 1;\nprint(r.a.x);\nprint(r.y);' $'7\n1'
 expect_program_output "compound-field-and-element" $'tip P { int x = 1; }\nsvi tip P lor a = { x = 1; };\na.x += 2;\na.x *= 5;\na.x -= 3;\na.x /= 2;\na.x %= 4;\nprint(a.x);\nint[] s = [1, 2];\ns[0] += 5;\ns[1] *= 10;\nprint(s[0]);\nprint(s[1]);' $'2\n6\n20'
-expect_program_output "compound-index-evaluated-once" $'fn int k() { print(9); return 1; }\nptr v = nw rox[2];\nv[k()] += 4;\nv[k()] -= 1;\nprint(v[1]);' $'9\n9\n3'
+expect_program_output "compound-index-evaluated-once" $'fn int k() { print(9); return 1; }\nptr v = nw int[2];\nv[k()] += 4;\nv[k()] -= 1;\nprint(v[1]);' $'9\n9\n3'
 compound_runtime() { printf '%s' "$2" > "$RUNTIME_DIR/compound_$1.svx"; expect_runtime_error "compound-$1" "$RUNTIME_DIR/compound_$1.svx" "$3"; }
 compound_runtime element-overflow $'int[] a = [2147483647, 0];\na[0] += 1;' "integer overflow at line 2, column 6"
 compound_runtime field-division-by-zero $'tip P { int x = 0; }\nsvi tip P lor a = { x = 1; };\nint z = 0;\na.x %= z;' "division by zero at line 4, column 5"
@@ -1031,6 +1031,25 @@ narrow_runtime null-index-read $'ptr p = null;\nprint(p[0]);' "null pointer dere
 expect_program_output "narrow-compound-in-range" $'u8 x = 200;\nx /= 2;\nx %= 7;\nprint(x);\ni8 y = 5;\nint k = 3;\ny += k;\nprint(y);\ntip P { u8 v = 0; }\nsvi tip P lor a = { v = 200; };\na.v += 55;\nprint(a.v);\nu8[] b = [250, 1];\nb[0] += 5;\nprint(b[0]);\nu8 z = 254;\nz++;\nprint(z);' $'2\n8\n255\n255\n255'
 expect_compile_error "narrow-compound-constant" $'u8 x = 10;\nx += 300;' "нельзя присвоить 'int/i32' значению типа 'byte/u8'"
 
+# Шаг 6а: одно слово на одно действие — старые синонимы дают ошибку с подсказкой.
+expect_compile_error "removed-word-fucn" "fucn void f() { }" "слово 'fucn' удалено: пишите 'fn'"
+expect_compile_error "removed-word-rev" "fn int f() { rev 1; }" "слово 'rev' удалено: пишите 'return'"
+expect_compile_error "removed-word-slov" "slov(1);" "слово 'slov' удалено: пишите 'print'"
+expect_compile_error "removed-word-eles" "eles (true) { print(1); }" "слово 'eles' удалено: пишите 'if'"
+expect_compile_error "removed-word-sele" "if (true) { print(1); } sele { print(2); }" "слово 'sele' удалено: пишите 'else'"
+expect_compile_error "removed-word-brk" "loop { brk; }" "слово 'brk' удалено: пишите 'break'"
+expect_compile_error "removed-word-cont" "for i in 0..2 { cont; }" "слово 'cont' удалено: пишите 'continue'"
+expect_compile_error "removed-word-rox" "rox x = 1;" "слово 'rox' удалено: пишите 'int'"
+expect_compile_error "removed-word-rox64" "rox64 x = 1;" "слово 'rox64' удалено: пишите 'long'"
+expect_compile_error "removed-word-dor" "dor x = 1.5;" "слово 'dor' удалено: пишите 'float'"
+expect_compile_error "removed-word-cos" "cos s = \"a\";" "слово 'cos' удалено: пишите 'string'"
+expect_compile_error "removed-word-bue" "bue b = true;" "слово 'bue' удалено: пишите 'bool'"
+expect_compile_error "removed-word-chr" "chr c = 'a';" "слово 'chr' удалено: пишите 'char'"
+expect_compile_error "removed-word-cop" "fn int f() { return 1; } print(cop f());" "слово 'cop' удалено"
+expect_compile_error "removed-form-cert-usy" "int n = 0; cert usy (n < 2) { n = n + 1; }" "форма 'cert usy (...)' удалена: пишите 'while (...)'"
+expect_program_output "removed-word-in-string-ok" 'print("fucn slov rox");' 'fucn slov rox'
+expect_program_output "kept-cert-ceh" 'cert ceh (2) { print(1); }' $'1\n1'
+
 # Step 4b: PR22 struct parameters are aggregate copies, not aliases.
 expect_program_output "struct-by-value-copy" "$(cat examples/struct_by_value.svx)" $'17\n3\n4\n3'
 expect_program_output "struct-by-value-nested" $'tip Inner { int x = 2; }\ntip Outer { tip Inner inner = { x = 7; }; int y = 3; }\nfn int change(tip Outer value) { svi tip Inner lor replacement = { x = 9; }; value.inner = replacement; return value.inner.x + value.y; }\nsvi tip Outer lor original = { inner = { x = 5; }; y = 4; };\nprint(change(original)); print(original.inner.x);' $'13\n5'
@@ -1044,9 +1063,9 @@ expect_compile_error "struct-field-tip-unknown" 'tip Outer { tip Missing inner; 
 expect_compile_error "struct-field-tip-recursive" 'tip Recursive { tip Recursive next; }' 'рекурсивное определение структуры'
 
 # pop() expression: both PHI incoming blocks must be actual CFG predecessors.
-expect_program_output "pop-expression-after-growth" 'ptr v = nw rox[0]; v.push(1); print(v.pop()); print(v.len()); del v;' $'1\n0'
-expect_program_output "pop-expression-empty" 'ptr v = nw rox[0]; print(v.pop()); print(v.pop()); print(v.len()); del v;' $'0\n0\n0'
-expect_program_output "pop-expression-lifo-and-control-flow" $'ptr v = nw rox[0];\nv.push(10); v.push(20); v.push(30); v.push(40); v.push(50);\nprint(v.pop()); print(v.len()); print(v.pop() + v.pop());\nif (v.len() == 2) { print(v.pop()); } else { print(-1); }\nprint(v.pop()); print(v.pop()); print(v.len()); del v;' $'50\n4\n70\n20\n10\n0\n0'
+expect_program_output "pop-expression-after-growth" 'ptr v = nw int[0]; v.push(1); print(v.pop()); print(v.len()); del v;' $'1\n0'
+expect_program_output "pop-expression-empty" 'ptr v = nw int[0]; print(v.pop()); print(v.pop()); print(v.len()); del v;' $'0\n0\n0'
+expect_program_output "pop-expression-lifo-and-control-flow" $'ptr v = nw int[0];\nv.push(10); v.push(20); v.push(30); v.push(40); v.push(50);\nprint(v.pop()); print(v.len()); print(v.pop() + v.pop());\nif (v.len() == 2) { print(v.pop()); } else { print(-1); }\nprint(v.pop()); print(v.pop()); print(v.len()); del v;' $'50\n4\n70\n20\n10\n0\n0'
 expect_program_output "pop-expression-float-zero" 'ptr v = nw f64[0]; print(v.pop()); v.push(2.5); print(v.pop()); print(v.pop()); del v;' $'0.000000\n2.500000\n0.000000'
 
 # Объявление функции без тела (fn T name(...);) и взаимная рекурсия.
@@ -1058,8 +1077,8 @@ expect_compile_error "forward-decl-return-mismatch" $'fn f64 g(int x);\nfn int g
 expect_compile_error "duplicate-function-definition" $'fn int g(int x) { return 1; }\nfn int g(int x) { return 2; }\nprint(g(1));' "повторное определение функции 'g'"
 expect_compile_error "duplicate-forward-decl" $'fn int g(int x);\nfn int g(int x);\nfn int g(int x) { return 1; }\nprint(g(1));' "повторное объявление функции 'g'"
 
-expect_compile_error "array-negative-index" "svi rox[] lor values = [1, 2]; slov(values[-1]);" "индекс массива выходит за границы"
-expect_compile_error "array-upper-index" "svi rox[] lor values = [1, 2]; slov(values[2]);" "индекс массива выходит за границы"
+expect_compile_error "array-negative-index" "svi int[] lor values = [1, 2]; print(values[-1]);" "индекс массива выходит за границы"
+expect_compile_error "array-upper-index" "svi int[] lor values = [1, 2]; print(values[2]);" "индекс массива выходит за границы"
 
 expect_compile_error "missing-expression" 'let value: int = ;' "ожидалось выражение"
 # exact-array-not-yet-supported is now supported (i16, u16, f32, u8, i8, u32, u64, i64)
@@ -1068,24 +1087,24 @@ expect_compile_error "array-unsupported-element" 'ptr[] values = [1, 2];'
 expect_compile_error "unsigned-mixed-sign" 'u32 positive = 1; i32 signed = -1; let result: int = positive + signed;'
 expect_compile_error "unsigned-width-mix" 'u64 large = 2; i64 signed = -1; let result: i64 = large + signed;'
 expect_compile_error "mixed-signedness-comparison" 'u32 unsigned_value = 1; i32 signed_value = 1; if (unsigned_value > signed_value) { print(1); }'
-expect_compile_error "array-index-type" 'svi rox[] values = [1, 2]; svi dor index = 0.5; values[index] = 9;'
+expect_compile_error "array-index-type" 'svi int[] values = [1, 2]; svi float index = 0.5; values[index] = 9;'
 expect_compile_error "unknown-type" 'mystery value = 1;'
 expect_compile_error "duplicate-variable" 'let result: int = 1; let result: int = 2;'
-expect_compile_error "break-outside-loop" 'brk;'
+expect_compile_error "break-outside-loop" 'break;'
 expect_compile_error "builtin-function-collision" 'fn int max(int left, int right) { return left + right; }'
 expect_compile_error "nested-function" 'if (1) { fn int inner(int value) { return value; } }'
 expect_compile_error "unreachable-after-return" 'fn void dead() { return; print(2); }'
-expect_compile_error "unreachable-after-break" 'fn void dead() { cert ceh (2) { brk; print(3); } }'
-expect_compile_error "unreachable-after-continue" 'fn void dead() { cert ceh (2) { cont; print(4); } }'
-expect_compile_error "continue-in-counted-loop" 'let total: int = 0; cert ceh (5) { cont; total = total + 1; } print(total);'
+expect_compile_error "unreachable-after-break" 'fn void dead() { cert ceh (2) { break; print(3); } }'
+expect_compile_error "unreachable-after-continue" 'fn void dead() { cert ceh (2) { continue; print(4); } }'
+expect_compile_error "continue-in-counted-loop" 'let total: int = 0; cert ceh (5) { continue; total = total + 1; } print(total);'
 expect_compile_error "string-arithmetic" 'let bad: int = "x" + "y";'
 expect_compile_error "int-overflow-negative" 'int overflow = -2147483649;'
-expect_compile_error "array-index-float" 'svi rox[] values = [1, 2]; svi dor index = 0.5; slov(values[index]);'
+expect_compile_error "array-index-float" 'svi int[] values = [1, 2]; svi float index = 0.5; print(values[index]);'
 expect_compile_error "builtin-no-args" 'sqrt();'
 expect_compile_error "type-mismatch-initializer" 'int count = "wrong";'
-expect_compile_error "recursive-struct-definition" 'tip BadRecursive { rox value; BadRecursive next; }' "рекурсивное определение структуры"
-expect_compile_error "struct-copy-ownership" 'tip Container { rox id; ptr data; } svi tip Container lor a; a.id = 1; a.data = null; svi tip Container lor b; b = a;' "неявное копирование структуры"
-expect_compile_error "struct-ptr-field-access" 'tip Node { rox value; ptr next; } svi tip Node lor n1; svi tip Node lor n2; n1.value = 10; n1.next = &n2; n2.value = 20; n2.next = null; print(n1.next.value);' "не имеет полей"
+expect_compile_error "recursive-struct-definition" 'tip BadRecursive { int value; BadRecursive next; }' "рекурсивное определение структуры"
+expect_compile_error "struct-copy-ownership" 'tip Container { int id; ptr data; } svi tip Container lor a; a.id = 1; a.data = null; svi tip Container lor b; b = a;' "неявное копирование структуры"
+expect_compile_error "struct-ptr-field-access" 'tip Node { int value; ptr next; } svi tip Node lor n1; svi tip Node lor n2; n1.value = 10; n1.next = &n2; n2.value = 20; n2.next = null; print(n1.next.value);' "не имеет полей"
 
 IMPORT_DIR="$TMP_DIR/imports"
 mkdir -p "$IMPORT_DIR/lib"

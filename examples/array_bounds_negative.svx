@@ -1,2 +1,2 @@
-svi rox[] lor values = [1, 2];
-slov(values[-1]);
+svi int[] lor values = [1, 2];
+print(values[-1]);

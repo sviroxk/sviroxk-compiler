@@ -1,7 +1,7 @@
-fucn dor half(rox x) {
-    rev (dor)(x / 2);
+fn float half(int x) {
+    return (float)(x / 2);
 }
 
-svi dor lor y = 3.14;
-svi dor lor h = cop half(10);
-slov(h);
+svi float lor y = 3.14;
+svi float lor h = half(10);
+print(h);

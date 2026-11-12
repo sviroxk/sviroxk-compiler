@@ -13,10 +13,10 @@ svi tip Rect lor rect = {
     bottom_right = { x = 3; y = 4; }
 };
 
-slov(rect.top_left.x);
-slov(rect.top_left.y);
-slov(rect.bottom_right.x);
-slov(rect.bottom_right.y);
+print(rect.top_left.x);
+print(rect.top_left.y);
+print(rect.bottom_right.x);
+print(rect.bottom_right.y);
 
 // Дополнительные тесты вложенного доступа
 tip Inner {
@@ -26,7 +26,7 @@ tip Outer {
     Inner inner = { val = 42 };
 }
 svi tip Outer lor outer;
-slov(outer.inner.val);
+print(outer.inner.val);
 
 // Цепной доступ через именованные поля
 tip A {
@@ -39,4 +39,4 @@ tip C {
     B b = { a = { x = 7 } };
 }
 svi tip C lor c;
-slov(c.b.a.x);
+print(c.b.a.x);

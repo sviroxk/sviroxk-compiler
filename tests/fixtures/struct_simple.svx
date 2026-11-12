@@ -4,5 +4,5 @@ tip Point {
 }
 
 svi tip Point lor p = { x = 5; y = 10; };
-slov(p.x);
-slov(p.y);
+print(p.x);
+print(p.y);

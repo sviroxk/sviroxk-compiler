@@ -4,13 +4,13 @@ fn void dead_after_return() {
 }
 fn void dead_after_break() {
     cert ceh (2) {
-        brk;
+        break;
         print(3);
     }
 }
 fn void dead_after_continue() {
     cert ceh (2) {
-        cont;
+        continue;
         print(4);
     }
 }

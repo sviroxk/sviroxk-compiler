@@ -1,17 +1,17 @@
-svi rox[] lor values = [1, 2, 3];
+svi int[] lor values = [1, 2, 3];
 values[0] = 7;
 
-svi rox lor index = 0;
-cert usy (index < 3) {
+svi int lor index = 0;
+while (index < 3) {
     index = index + 1;
 }
 
-eles (index >= 3 && !(index <= 2)) {
-    slov(values[0]);
-} sele {
-    slov("condition failed");
+if (index >= 3 && !(index <= 2)) {
+    print(values[0]);
+} else {
+    print("condition failed");
 }
 
-eles (false || index == 3) {
-    slov("logical operators passed");
+if (false || index == 3) {
+    print("logical operators passed");
 }

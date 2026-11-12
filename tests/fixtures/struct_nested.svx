@@ -13,7 +13,7 @@ svi tip Rect lor rect = {
     bottom_right = { x = 3; y = 4; }
 };
 
-slov(rect.top_left.x);
-slov(rect.top_left.y);
-slov(rect.bottom_right.x);
-slov(rect.bottom_right.y);
+print(rect.top_left.x);
+print(rect.top_left.y);
+print(rect.bottom_right.x);
+print(rect.bottom_right.y);

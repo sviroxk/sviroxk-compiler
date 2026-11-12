@@ -59,7 +59,7 @@ print(text);
 del text;
 SC
 check_case dynamic-grow-release clean $'5\n10\n50\n4' 1 <<'SC'
-ptr values = nw rox[0];
+ptr values = nw int[0];
 values.push(10); values.push(20); values.push(30);
 values.push(40); values.push(50);
 print(values.len()); print(values[0]); print(values[4]);
@@ -67,7 +67,7 @@ values.pop(); print(values.len());
 del values;
 SC
 check_case empty-release clean '0' 1 <<'SC'
-ptr values = nw rox[0];
+ptr values = nw int[0];
 print(values.len());
 del values;
 SC
@@ -81,12 +81,12 @@ print(first); print(second); print(ar(eof)); print(first);
 zak(input);
 SC
 check_case dynamic-negative-read runtime 'SC runtime error: array index out of bounds' <<'SC'
-ptr values = nw rox[2];
+ptr values = nw int[2];
 int index = -1;
 print(values[index]);
 SC
 check_case dynamic-upper-write runtime 'SC runtime error: array index out of bounds' <<'SC'
-ptr values = nw rox[2];
+ptr values = nw int[2];
 i64 index = values.len();
 values[index] = 9;
 SC
@@ -98,12 +98,12 @@ SC
 # Self-tests deliberately exercise the current lack of ownership/lifetime checks.
 # Future checked pointers may replace these with controlled SC diagnostics.
 check_case use-after-delete detector heap-use-after-free <<'SC'
-ptr values = nw rox[2];
+ptr values = nw int[2];
 del values;
 print(values[0]);
 SC
 check_case double-delete detector attempting\ double-free <<'SC'
-ptr values = nw rox[2];
+ptr values = nw int[2];
 del values;
 del values;
 SC

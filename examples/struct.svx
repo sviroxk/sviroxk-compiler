@@ -1,8 +1,8 @@
 tip Player {
-    rox health = 100;
-    rox speed = 5;
+    int health = 100;
+    int speed = 5;
 }
 
 svi tip Player lor hero;
 hero.health = 80;
-slov(hero.health);
+print(hero.health);
