@@ -146,7 +146,7 @@ bool Type::fitsLiteral(const std::string& text) const {
             double value = std::stod(text, &parsed);
             if (parsed != text.size() || !std::isfinite(value)) return false;
             return width != 32 || std::fabs(value) <= std::numeric_limits<float>::max();
-        } catch (...) { return false; }
+        } catch (const std::logic_error&) { return false; }
     }
     if (isInteger()) {
         try {
@@ -174,7 +174,7 @@ bool Type::fitsLiteral(const std::string& text) const {
                 default: return false;
                 }
             }
-        } catch (...) { return false; }
+        } catch (const std::logic_error&) { return false; }
     }
     return false;
 }
@@ -190,7 +190,7 @@ bool Type::fitsArithmeticLiteral(const std::string& text) const {
             size_t parsed = 0;
             std::stod(text, &parsed);
             if (parsed == text.size()) return false; // floating point literal
-        } catch (...) {}
+        } catch (const std::logic_error&) {}
     }
     return fitsLiteral(text);
 }

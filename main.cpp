@@ -25,36 +25,38 @@ static void printHelp(std::ostream& out) {
         << "       sc --help\n";
 }
 
+// Ошибки импорта — в общем формате диагностик: «файл:строка:столбец: error[import]»
+// у строки import, а для исходного файла из командной строки — «файл: error[import]».
+[[noreturn]] static void importFailure(const Token* importedAt, const std::string& path,
+                                       const std::string& message) {
+    if (importedAt)
+        sc::failAt(importedAt->file, importedAt->line, importedAt->column, "import", message);
+    sc::failFile(path, "import", message);
+}
+
 static void appendModuleTokens(const fs::path& sourcePath,
                                std::vector<Token>& output,
                                std::set<fs::path>& active,
-                               std::set<fs::path>& loaded) {
+                               std::set<fs::path>& loaded,
+                               const Token* importedAt = nullptr) {
     std::error_code ec;
     fs::path canonicalPath = fs::weakly_canonical(sourcePath, ec);
-    if (ec) {
-        std::cerr << "Ошибка: не удалось разрешить путь модуля: "
-                  << sourcePath.string() << std::endl;
-        std::exit(1);
-    }
+    if (ec)
+        importFailure(importedAt, sourcePath.string(),
+                      "не удалось разрешить путь модуля: " + sourcePath.string());
 
-    if (active.count(canonicalPath)) {
-        std::cerr << "Ошибка: обнаружен циклический импорт: "
-                  << canonicalPath.string() << std::endl;
-        std::exit(1);
-    }
+    if (active.count(canonicalPath))
+        importFailure(importedAt, canonicalPath.string(),
+                      "обнаружен циклический импорт: " + canonicalPath.string());
     if (loaded.count(canonicalPath)) return;
 
-    if (fs::exists(canonicalPath, ec) && !fs::is_regular_file(canonicalPath, ec)) {
-        std::cerr << "Ошибка: не удалось открыть модуль: " << canonicalPath.string()
-                  << " (это не обычный файл)" << std::endl;
-        std::exit(1);
-    }
+    if (fs::exists(canonicalPath, ec) && !fs::is_regular_file(canonicalPath, ec))
+        importFailure(importedAt, canonicalPath.string(),
+                      "не удалось открыть модуль: " + canonicalPath.string() + " (это не обычный файл)");
     std::ifstream file(canonicalPath);
-    if (!file.is_open()) {
-        std::cerr << "Ошибка: не удалось открыть модуль: "
-                  << canonicalPath.string() << std::endl;
-        std::exit(1);
-    }
+    if (!file.is_open())
+        importFailure(importedAt, canonicalPath.string(),
+                      "не удалось открыть модуль: " + canonicalPath.string());
 
     std::string code((std::istreambuf_iterator<char>(file)),
                      std::istreambuf_iterator<char>());
@@ -70,24 +72,18 @@ static void appendModuleTokens(const fs::path& sourcePath,
         }
 
         Token importToken = tokens[i++];
-        if (importToken.value == "imp") {
-            sc::reportDiagnostic(importToken.file, importToken.line, importToken.column, "syntax",
-                                 "слово 'imp' удалено: пишите 'import'");
-            std::exit(1);
-        }
-        if (i >= tokens.size() || tokens[i].type != STRING) {
-            std::cerr << "Ошибка " << importToken.line << ':' << importToken.column
-                      << ": после 'import' ожидался путь в кавычках" << std::endl;
-            std::exit(1);
-        }
+        if (importToken.value == "imp")
+            sc::failAt(importToken.file, importToken.line, importToken.column, "syntax",
+                       "слово 'imp' удалено: пишите 'import'");
+        if (i >= tokens.size() || tokens[i].type != STRING)
+            sc::failAt(importToken.file, importToken.line, importToken.column, "import",
+                       "после 'import' ожидался путь в кавычках");
         fs::path importPath = canonicalPath.parent_path() / tokens[i++].value;
-        if (i >= tokens.size() || tokens[i].type != SEMICOLON) {
-            std::cerr << "Ошибка " << importToken.line << ':' << importToken.column
-                      << ": после пути импорта ожидалась ';'" << std::endl;
-            std::exit(1);
-        }
+        if (i >= tokens.size() || tokens[i].type != SEMICOLON)
+            sc::failAt(importToken.file, importToken.line, importToken.column, "import",
+                       "после пути импорта ожидалась ';'");
         ++i;
-        appendModuleTokens(importPath, output, active, loaded);
+        appendModuleTokens(importPath, output, active, loaded, &importToken);
     }
 
     active.erase(canonicalPath);
@@ -139,6 +135,8 @@ static int run(int argc, char* argv[]) {
 static int guardedRun(int argc, char* argv[]) {
     try {
         return run(argc, argv);
+    } catch (const sc::CompileFailure& failure) {
+        return failure.exitCode;  // ошибка в программе уже напечатана
     } catch (const std::exception& error) {
         std::cerr << "Ошибка: внутренняя ошибка компилятора: " << error.what() << '\n';
     } catch (...) {

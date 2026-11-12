@@ -1,3 +1,4 @@
+#include "diagnostics.h"
 #include <llvm/Config/llvm-config.h>
 #include <llvm/IR/Intrinsics.h>
 #include "codegen.h"
@@ -610,7 +611,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             if (parsed != node.value.size() || !std::isfinite(value)) {
                 std::cerr << "Ошибка: вещественный литерал вне диапазона f64: "
                           << node.value << std::endl;
-                std::exit(1);
+                throw sc::CompileFailure{1};
             }
             return llvm::ConstantFP::get(builder.getDoubleTy(), value);
         }
@@ -628,7 +629,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         } catch (const std::exception&) {
             std::cerr << "Ошибка: целочисленный литерал вне диапазона i64/u64: "
                       << node.value << std::endl;
-            std::exit(1);
+            throw sc::CompileFailure{1};
         }
     }
     if (node.type == NODE_STRING)
@@ -1747,7 +1748,7 @@ void CodeGen::genNode(const Node& node) {
     else if (node.type == NODE_STRUCT_INSTANCE) {
         if (!structDefs.count(node.varType)) {
             std::cerr << "Неизвестная структура: " << node.varType << std::endl;
-            exit(1);
+            throw sc::CompileFailure{1};
         }
         llvm::StructType* aggregateType = llvmStructTypes[node.varType];
         llvm::Value* object = createStorage(aggregateType, node.varName);

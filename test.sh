@@ -983,6 +983,18 @@ expect_compile_error "drop-raw-pointer" $'int x = 1;\nptr p = &x;\ndrop p;' 'dro
 expect_compile_error "drop-outer-in-loop" $'ptr v = new int[3];\nwhile (true) { drop v; }' "drop 'v' внутри цикла или функции"
 expect_compile_error "drop-global-in-function" $'ptr v = new int[3];\nfn void f() { drop v; }\nf();' "drop 'v' внутри цикла или функции"
 expect_compile_error "drop-without-name" 'drop 5;' 'после drop ожидалось имя переменной'
+# Аудит §2: ошибки лексера — обычная диагностика «файл:строка:столбец: error[lexer]» и код 1 (раньше std::exit).
+expect_compile_error "lexer-unclosed-comment" '/* abc' ":1:1: error[lexer]: незакрытый блочный комментарий"
+expect_compile_error "lexer-bad-number" 'int x = 0x;' ":1:9: error[lexer]: некорректный числовой литерал '0x'"
+expect_compile_error "lexer-empty-char" "char c = '';" ":1:10: error[lexer]: ожидался один символ между одинарными кавычками"
+expect_compile_error "lexer-unclosed-string" 'string s = "abc;' ":1:12: error[lexer]: строковый литерал не закрыт кавычкой"
+expect_compile_error "lexer-unknown-char" 'int x = 1 @ 2;' ":1:11: error[lexer]: неизвестный символ: @"
+# Константный индекс и сдвиг в 0x/0b-записи проверяются как десятичные (stoll читал `0x5` как 0).
+expect_compile_error "hex-index-out-of-bounds" $'int[] a = [1, 2, 3];\nprint(a[0x5]);' "индекс массива выходит за границы [3]"
+expect_compile_error "binary-index-store-out-of-bounds" $'int[] a = [1, 2, 3];\na[0b11] = 1;' "индекс массива выходит за границы [3]"
+expect_compile_error "hex-shift-too-wide" 'int x = 1 << 0x40;' "счётчик сдвига должен быть меньше ширины левого операнда"
+expect_program_output "hex-index-in-bounds" $'int[] a = [1, 2, 3];\nprint(a[0x2]);' '3'
+
 # Аудит, класс 1: вложенность до 256 уровней работает, глубже — синтаксическая ошибка, а не segfault;
 # длинные цепочки и else-if не упираются в стек (компиляция идёт в потоке с большим стеком).
 nest_open=$(printf 'if (x == 1) {\n%.0s' $(seq 256)); nest_close=$(printf '}%.0s' $(seq 256))
@@ -1274,6 +1286,17 @@ expect_import_error() {
 }
 
 expect_import_error "missing-module" "не удалось открыть модуль" 'import "missing.svx";'
+# Аудит §2: ошибки импорта — в общем формате «файл:строка:столбец: error[import]» у строки import.
+expect_import_error "missing-module-position" ":2:1: error[import]: не удалось открыть модуль" $'print(1);\nimport "missing.svx";'
+expect_import_error "import-without-path" ":1:1: error[import]: после 'import' ожидался путь в кавычках" 'import 5;'
+missing_root="$TMP_DIR/no-such-dir/main.svx"
+if (timeout --signal=TERM 10s "$SC_BIN" "$missing_root" >/dev/null 2>"$TMP_DIR/missing-root.err"); then
+    echo "FAIL: missing source file compiled" >&2; exit 1
+fi
+if ! grep -Fq "$missing_root: error[import]: не удалось открыть модуль" "$TMP_DIR/missing-root.err"; then
+    echo "FAIL: missing source file diagnostic has wrong format" >&2; cat "$TMP_DIR/missing-root.err" >&2; exit 1
+fi
+echo "PASS: missing source file reported as 'file: error[import]'"
 # Аудит, класс 4: каталог или устройство вместо файла давали abort (код 134).
 expect_import_error "empty-path" "это не обычный файл" 'import "";'
 expect_import_error "directory" "это не обычный файл" 'import ".";'
