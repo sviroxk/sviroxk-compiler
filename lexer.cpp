@@ -460,7 +460,16 @@ std::vector<Token> tokenize(std::string_view code, const std::string& filename) 
             case ',': add(COMMA, ",", tokLine, tokCol); break;
             case '[': add(LBRACKET, "[", tokLine, tokCol); break;
             case ']': add(RBRACKET, "]", tokLine, tokCol); break;
-            case '.': add(DOT, ".", tokLine, tokCol); break;
+            case '.':
+                // `s..e` / `s..=e`: диапазон после имени, `)` или `]` (после числа — выше).
+                if (i + 1 < static_cast<int>(code.size()) && code[i + 1] == '.') {
+                    if (i + 2 < static_cast<int>(code.size()) && code[i + 2] == '=') {
+                        add(RANGE_EQ, "..=", tokLine, tokCol); i += 2; column += 2;
+                    } else {
+                        add(RANGE, "..", tokLine, tokCol); ++i; ++column;
+                    }
+                } else add(DOT, ".", tokLine, tokCol);
+                break;
             case ':': add(COLON, ":", tokLine, tokCol); break;
             case '?': add(QUESTION, "?", tokLine, tokCol); break;
             default:
