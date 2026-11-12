@@ -58,7 +58,7 @@ public:
     bool run(const Node& program) {
         for (const Node& node : program.children) {
             if (node.type == NODE_STRUCT_DEF) {
-                if (structs_.count(node.varName))
+                if (structs_.contains(node.varName))
                     error(node, "повторное объявление структуры '" + node.varName + "'");
                 else
                     structs_[node.varName] = &node;
@@ -78,7 +78,7 @@ public:
                     error(node, "имя функции '" + node.varName + "' зарезервировано встроенной функцией");
                 else if (node.varName == "main")
                     error(node, "имя функции 'main' зарезервировано: точка входа программы — код верхнего уровня файла");
-                else if (functions_.count(node.varName))
+                else if (functions_.contains(node.varName))
                     mergeDeclaration(functions_[node.varName], fn, node);
                 else {
                     functions_[node.varName] = fn;
@@ -151,7 +151,7 @@ private:
             "sqrt", "abs", "pow", "max", "min", "floor", "ceil", "round",
             "rand", "len", "replace", "str"
         };
-        return names.count(name) != 0;
+        return names.contains(name);
     }
 
     static std::string normalize(const std::string& type) {
@@ -188,7 +188,7 @@ private:
         const sc::Type t = sc::Type::from(raw);
         if (!t.isKnown()) return false;
         return t.isScalar() || t.isStr() || t.isPtr() || t.isVoid() || t.isFile() ||
-               (t.isStruct() && structs_.count(t.structName));
+               (t.isStruct() && structs_.contains(t.structName));
     }
 
     static bool isInteger(const std::string& type) {
@@ -211,7 +211,7 @@ private:
         auto& scope = scopes_.back();
         // Allow shadowing (variable in inner scope with same name as outer scope)
         // This is a common pattern and not an error
-        if (scope.count(name)) {
+        if (scope.contains(name)) {
             error(node, "повторное объявление '" + name + "' в этой области видимости");
             return false;
         }
@@ -450,7 +450,7 @@ private:
                         !literalFits(normalize(field.varType), value->left->value))
                         error(*value, "литерал поля вне диапазона типа '" + typeName(normalize(field.varType)) + "'");
                 }
-                if (!value && named.count(field.varName)) named.erase(field.varName);
+                if (!value) named.erase(field.varName);
             }
             for (const auto& item : named) {
                 bool exists = false;
@@ -498,7 +498,7 @@ private:
                 error(node, "неизвестный тип преобразования '" + node.varType + "'");
             else if (source == "<error>")
                 ;  // ошибка операнда уже сообщена
-            else if (!numeric.count(target) || !numeric.count(source))
+            else if (!numeric.contains(target) || !numeric.contains(source))
                 error(node, "явное преобразование между '" + typeName(source) +
                             "' и '" + typeName(target) + "' не поддерживается");
             else if (node.left->type == NODE_NUMBER &&
@@ -1075,7 +1075,7 @@ private:
     }
 
     void checkStructRecursion(const Node& node, std::unordered_set<std::string>& visited) {
-        if (visited.count(node.varName)) {
+        if (visited.contains(node.varName)) {
             error(node, "рекурсивное определение структуры '" + node.varName + "' приводит к бесконечному размеру");
             return;
         }
@@ -1083,7 +1083,7 @@ private:
         for (const Node& field : node.children) {
             // Check if field type is a struct that could create a cycle
             sc::Type fieldTy = sc::Type::from(normalize(field.varType));
-            if (fieldTy.isStruct() && structs_.count(fieldTy.structName)) {
+            if (fieldTy.isStruct() && structs_.contains(fieldTy.structName)) {
                 checkStructRecursion(*structs_.at(fieldTy.structName), visited);
             }
         }
@@ -1190,9 +1190,9 @@ private:
             }
             declare(node.varName, node.varType, node, node.isConst, actual != "<error>",
                     dynArrayInit, dynElementType);
-            if (dynArrayInit && scopes_.back().count(node.varName))
+            if (dynArrayInit && scopes_.back().contains(node.varName))
                 scopes_.back()[node.varName].dynArrayCapacity = dynCapacity;
-            if (node.left->type == NODE_ADDR && scopes_.back().count(node.varName)) {
+            if (node.left->type == NODE_ADDR && scopes_.back().contains(node.varName)) {
                 if (const Symbol* target = lookup(node.left->varName))
                     scopes_.back()[node.varName].pointee = target->type;
                 scopes_.back()[node.varName].pointsToLocal = isFunctionLocal(node.left->varName);
@@ -1222,7 +1222,7 @@ private:
             unsigned length = node.args.size();
             sc::Type arrayType = sc::Type::arrayTy(sc::Type::from(element), length);
             auto& scope = scopes_.back();
-            if (scope.count(node.varName)) {
+            if (scope.contains(node.varName)) {
                 error(node, "повторное объявление '" + node.varName + "' в этой области видимости");
                 break;
             }
@@ -1272,7 +1272,7 @@ private:
                 if (!value && !hasDefault && !node.children.empty()) {
                     error(node, "поле '" + field.varName + "' не имеет значения по умолчанию и должно быть инициализировано");
                 }
-                if (!value && named.count(field.varName)) named.erase(field.varName);
+                if (!value) named.erase(field.varName);
             }
             for (const auto& item : named) {
                 bool exists = false;
@@ -1302,7 +1302,7 @@ private:
             }
             // Check for struct assignment with owning fields (dyn array, ptr, etc.)
             sc::Type destTy = symbol->ty;
-            if (destTy.isStruct() && structs_.count(destTy.structName)) {
+            if (destTy.isStruct() && structs_.contains(destTy.structName)) {
                 const Node* structDef = structs_.at(destTy.structName);
                 for (const Node& field : structDef->children) {
                     sc::Type fieldTy = sc::Type::from(normalize(field.varType));

@@ -45,10 +45,10 @@ static void appendModuleTokens(const fs::path& sourcePath,
         importFailure(importedAt, sourcePath.string(),
                       "не удалось разрешить путь модуля: " + sourcePath.string());
 
-    if (active.count(canonicalPath))
+    if (active.contains(canonicalPath))
         importFailure(importedAt, canonicalPath.string(),
                       "обнаружен циклический импорт: " + canonicalPath.string());
-    if (loaded.count(canonicalPath)) return;
+    if (loaded.contains(canonicalPath)) return;
 
     if (fs::exists(canonicalPath, ec) && !fs::is_regular_file(canonicalPath, ec))
         importFailure(importedAt, canonicalPath.string(),

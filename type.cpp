@@ -24,7 +24,7 @@ static Type normalizeName(const std::string& raw) {
     if (raw == "ptr") return Type::ptrTy();
     if (raw == "void") return Type::voidTy();
     if (raw == "file") return Type::fileTy();
-    if (raw.rfind("array<", 0) == 0) {
+    if (raw.starts_with("array<")) {
         std::string element = raw.substr(6, raw.size() - 7);
         return Type::arrayTy(Type::from(element), 0);
     }
