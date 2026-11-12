@@ -910,7 +910,7 @@ expect_program_output "defer-return-in-loop" $'fn int run() { defer print(9); fo
 expect_program_output "defer-loop-forms" $'int n = 0; while (n < 2) { n = n + 1; defer print(n); }\ncert ceh (2) { defer print(3); }\ncert usy (n < 3) { n = n + 1; defer print(n); }\nfor i in 4..6 { defer print(i); }\nsvi rox[] lor values = [6, 7]; for item in values { defer print(item); }' $'1\n2\n3\n3\n3\n4\n5\n6\n7'
 expect_program_output "defer-break-continue" $'defer print(9); for i in 0..4 { defer print(i); if (i == 0) { continue; } if (i == 2) { break; } print(8); }' $'0\n8\n1\n2\n9'
 expect_program_output "defer-nested-loop" $'for i in 1..3 { defer print(i); loop { defer print(7); break; } print(8); }' $'7\n8\n1\n7\n8\n2'
-expect_program_output "defer-call-and-assignment" $'fn void show(int n) { print(n); }\nfn int run() { int n = 1; defer show(n); defer n = 4; return n; }\nprint(run());' $'4\n4'
+expect_program_output "defer-call-and-assignment" $'fn void show(int n) { print(n); }\nfn int run() { int n = 1; defer show(n); defer n = 4; return n; }\nprint(run());' $'4\n1'
 expect_compile_error "defer-return-forbidden" 'fn int run() { defer return 1; return 0; }' 'defer: переходы управления и объявления пока запрещены'
 expect_compile_error "defer-break-forbidden" 'loop { defer break; break; }' 'defer: переходы управления и объявления пока запрещены'
 expect_compile_error "defer-continue-forbidden" 'loop { defer continue; break; }' 'defer: переходы управления и объявления пока запрещены'
@@ -943,6 +943,10 @@ expect_compile_error "drop-raw-pointer" $'int x = 1;\nptr p = &x;\ndrop p;' 'dro
 expect_compile_error "drop-outer-in-loop" $'ptr v = nw rox[3];\nwhile (true) { drop v; }' "drop 'v' внутри цикла или функции"
 expect_compile_error "drop-global-in-function" $'ptr v = nw rox[3];\nfn void f() { drop v; }\nf();' "drop 'v' внутри цикла или функции"
 expect_compile_error "drop-without-name" 'drop 5;' 'после drop ожидалось имя переменной'
+expect_program_output "defer-drop-after-return-value" $'fn int f(int x) {\n  ptr v = nw rox[2];\n  defer drop v;\n  v[0] = x;\n  return v[0] + 1;\n}\nprint(f(4));' '5'
+expect_program_output "defer-after-return-call" $'fn int g() { print(1); return 3; }\nfn int f() { defer print(2); return g(); }\nprint(f());' $'1\n2\n3'
+expect_program_output "defer-assign-after-return-value" $'fn int f() { ptr v = nw rox[1]; v[0] = 4; defer v[0] = 100; return v[0]; }\nprint(f());' '4'
+expect_program_output "defer-struct-param-return" $'tip P { int x = 0; }\nfn int f(tip P value) { defer value.x = 100; return value.x; }\nsvi tip P lor p = { x = 3; };\nprint(f(p));\nprint(p.x);' $'3\n3'
 
 # Step 4b: PR22 struct parameters are aggregate copies, not aliases.
 expect_program_output "struct-by-value-copy" "$(cat examples/struct_by_value.svx)" $'17\n3\n4\n3'
