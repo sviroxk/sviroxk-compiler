@@ -1148,6 +1148,15 @@ expect_compile_error "char-plus-float" $'char c = \'a\';\nprint(c + 1.5);' "дл
 
 # Шаг 5г: составное присваивание в узкий тип проверяет диапазон; чтение p[i] через null.
 narrow_runtime() { printf '%s' "$2" > "$RUNTIME_DIR/narrow_$1.svx"; expect_runtime_error "narrow-$1" "$RUNTIME_DIR/narrow_$1.svx" "$3"; }
+narrow_runtime decl-i8 $'i8 a = 100;\ni8 c = a + a;\nprint(c);' "integer overflow at line 2, column 1"
+narrow_runtime decl-i16 $'i16 a = 30000;\ni16 b = a + a;\nprint(b);' "integer overflow at line 2, column 1"
+narrow_runtime let-u8 $'u8 a = 200;\nlet x: u8 = a + a;\nprint(x);' "integer overflow at line 2, column 1"
+narrow_runtime return-i8 $'fn i8 f(i8 a) { return a + a; }\nprint(f(100));' "integer overflow at line 1, column 17"
+narrow_runtime argument-i8 $'fn void g(i8 x) { print(x); }\ni8 a = 100;\ng(a + a);' "integer overflow at line 3, column 5"
+narrow_runtime array-literal-u8 $'u8 a = 200;\nu8[] arr = [a + a];\nprint(arr[0]);' "integer overflow at line 2, column 15"
+narrow_runtime push-u8 $'u8 a = 200;\nptr v = new u8[0];\nv.push(a + a);' "integer overflow at line 3, column 10"
+narrow_runtime struct-literal-u8 $'struct S { u8 v = 0; }\nu8 a = 200;\nS s = { v = a + a; };\nprint(s.v);' "integer overflow at line 3, column 15"
+expect_program_output "narrow-store-in-range" $'i8 a = 50;\ni8 c = a + a;\nfn i8 f(i8 x) { return x + x; }\nfn void g(u8 y) { print(y); }\nu8 b = 100;\ng(b + b);\nu8[] arr = [b + b];\nprint(c);\nprint(f(60));\nprint(arr[0]);' $'200\n100\n120\n200'
 narrow_runtime u8-plus $'u8 x = 255;\nx += 1;\nprint(x);' "integer overflow at line 2, column 1"
 narrow_runtime i8-increment $'i8 x = 127;\nx++;\nprint(x);' "integer overflow at line 2, column 1"
 narrow_runtime i8-decrement $'i8 x = -128;\nx--;\nprint(x);' "integer overflow at line 2, column 1"

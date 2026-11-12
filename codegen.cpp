@@ -521,6 +521,12 @@ void CodeGen::checkNarrowStore(llvm::Value* value, const Node& valueNode, llvm::
     emitRuntimeFailureIf(builder.CreateNot(inRange), "integer overflow", location);
 }
 
+// Беззнаковый ли тип SC по имени (char в арифметике — как u8).
+static bool unsignedTypeName(std::string_view type) {
+    const sc::Type t = sc::Type::from(type);
+    return t.isUnsigned() || t.isChar();
+}
+
 llvm::Value* CodeGen::nullChecked(llvm::Value* pointer, const Node& location) {
     emitRuntimeFailureIf(builder.CreateICmpEQ(pointer,
         llvm::ConstantPointerNull::get(builder.getPtrTy())), "null pointer dereference", location);
@@ -596,6 +602,7 @@ void CodeGen::initStructLiteral(llvm::Value* storage, llvm::StructType* aggregat
             builder.CreateStore(loaded, address);
         } else {
             llvm::Value* value = genExpr(*initializer);
+            checkNarrowStore(value, *initializer, fieldType, unsignedTypeName(field.type), *initializer);
             value = castTo(value, fieldType, isUnsignedExpr(*initializer));
             builder.CreateStore(value, address);
         }
@@ -1356,8 +1363,11 @@ llvm::Value* CodeGen::genCallExpr(const Node& node) {
             const auto& ptypes = funcParamTypes[name];
             for (size_t i = 0; i < node.args.size(); i++) {
                 llvm::Value* v = genExpr(node.args[i]);
-                if (i < ptypes.size())
+                if (i < ptypes.size()) {
+                    checkNarrowStore(v, node.args[i], svType(ptypes[i]), unsignedTypeName(ptypes[i]),
+                                     node.args[i]);
                     v = castTo(v, svType(ptypes[i]));
+                }
                 argVals.push_back(v);
             }
             llvm::Value* ret = builder.CreateCall(fn, argVals);
@@ -1461,6 +1471,7 @@ void CodeGen::genNode(const Node& node) {
         llvm::Type* ty = node.varType.empty()
             ? val->getType() : svType(node.varType);
         llvm::Value* alloca = createStorage(ty, node.varName);
+        checkNarrowStore(val, *node.left, ty, unsignedTypeName(node.varType), node);
         val = castTo(val, ty, isUnsignedExpr(*node.left));
         builder.CreateStore(val, alloca);
         vars[node.varName] = alloca;
@@ -1597,7 +1608,15 @@ void CodeGen::genNode(const Node& node) {
             emitDeferred(0);
             builder.CreateRetVoid();
         } else if (node.left) {
-            llvm::Value* v = castTo(genExpr(*node.left), retTy, isUnsignedExpr(*node.left));
+            llvm::Value* v = genExpr(*node.left);
+            // Имя функции в модуле — "sc.fn." + имя SC (generate()).
+            const llvm::StringRef name = cur->getName();
+            if (name.starts_with("sc.fn.")) {
+                const auto returnType = funcReturnTypes.find(name.drop_front(6).str());
+                if (returnType != funcReturnTypes.end())
+                    checkNarrowStore(v, *node.left, retTy, unsignedTypeName(returnType->second), node);
+            }
+            v = castTo(v, retTy, isUnsignedExpr(*node.left));
             emitDeferred(0);
             builder.CreateRet(v);
         } else {
@@ -1623,6 +1642,7 @@ void CodeGen::genNode(const Node& node) {
             llvm::Value* gep = builder.CreateInBoundsGEP(
                 at, arr, {builder.getInt32(0), builder.getInt32(i)});
             llvm::Value* val = genExpr(node.args[i]);
+            checkNarrowStore(val, node.args[i], elementType, unsignedElements[node.varName], node.args[i]);
             val = castTo(val, elementType, isUnsignedExpr(node.args[i]));
             builder.CreateStore(val, gep);
         }
@@ -1691,6 +1711,7 @@ void CodeGen::genNode(const Node& node) {
         llvm::Value* currentData = builder.CreateLoad(builder.getPtrTy(),
             builder.CreateStructGEP(descType, desc, 0));
         llvm::Value* value = genExpr(*node.left);
+        checkNarrowStore(value, *node.left, elementType, unsignedElements[node.varName], *node.left);
         value = castTo(value, elementType, isUnsignedExpr(*node.left));
         llvm::Value* gep = builder.CreateGEP(elementType, currentData, {currentLength});
         builder.CreateStore(value, gep);
@@ -1830,8 +1851,11 @@ void CodeGen::genNode(const Node& node) {
             const auto& ptypes = funcParamTypes[node.varName];
             for (size_t i = 0; i < node.args.size(); i++) {
                 llvm::Value* v = genExpr(node.args[i]);
-                if (i < ptypes.size())
+                if (i < ptypes.size()) {
+                    checkNarrowStore(v, node.args[i], svType(ptypes[i]), unsignedTypeName(ptypes[i]),
+                                     node.args[i]);
                     v = castTo(v, svType(ptypes[i]));
+                }
                 argVals.push_back(v);
             }
             builder.CreateCall(funcs[node.varName], argVals);
