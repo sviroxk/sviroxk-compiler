@@ -1239,14 +1239,18 @@ void CodeGen::genNode(const Node& node) {
         }
     }
     else if (node.type == NODE_RETURN) {
-        emitDeferred(0);
+        // Как в Go/Zig/Swift: сначала значение return, затем defer, затем выход.
         llvm::Function* cur = builder.GetInsertBlock()->getParent();
         llvm::Type* retTy = cur->getReturnType();
         if (retTy->isVoidTy()) {
+            emitDeferred(0);
             builder.CreateRetVoid();
         } else if (node.left) {
-            llvm::Value* v = genExpr(*node.left);
-            builder.CreateRet(castTo(v, retTy, isUnsignedExpr(*node.left)));
+            llvm::Value* v = castTo(genExpr(*node.left), retTy, isUnsignedExpr(*node.left));
+            emitDeferred(0);
+            builder.CreateRet(v);
+        } else {
+            emitDeferred(0);
         }
     }
     else if (node.type == NODE_BREAK) {
