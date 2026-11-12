@@ -1,2 +1,2 @@
-svi string lor text = vv_s("text: ");
+string text = input_str("text: ");
 print(text);

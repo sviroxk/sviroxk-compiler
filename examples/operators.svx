@@ -1,7 +1,7 @@
-svi int[] lor values = [1, 2, 3];
+int[] values = [1, 2, 3];
 values[0] = 7;
 
-svi int lor index = 0;
+int index = 0;
 while (index < 3) {
     index = index + 1;
 }

@@ -1,4 +1,4 @@
-file input = atk("b2-input.tmp", "r");
-str text = pro(input);
+file input = open("b2-input.tmp", "r");
+str text = read(input);
 print(text);
-zak(input);
+close(input);

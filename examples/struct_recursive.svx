@@ -1,10 +1,10 @@
-tip Node {
+struct Node {
     int value;
     ptr next;
 }
 
-svi tip Node lor n1;
-svi tip Node lor n2;
+Node n1;
+Node n2;
 n1.value = 10;
 n1.next = &n2;
 n2.value = 20;

@@ -1,4 +1,4 @@
-imp "../stdlib/math/math.svx";
+import "../stdlib/math/math.svx";
 
 long magnitude = math_abs(-2147483648);
 print(magnitude);

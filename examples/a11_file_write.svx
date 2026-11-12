@@ -1,4 +1,4 @@
-file output = atk("sc-a11.tmp");
-zap(output, "ok");
-zak(output);
+file output = open("sc-a11.tmp");
+write(output, "ok");
+close(output);
 print(1);

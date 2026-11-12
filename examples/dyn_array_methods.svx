@@ -1,4 +1,4 @@
-nw int[0] arr;
+new int[0] arr;
 arr.push(10);
 arr.push(20);
 arr.push(30);

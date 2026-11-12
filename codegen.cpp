@@ -743,7 +743,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             llvm::ConstantPointerNull::get(builder.getPtrTy())), "cannot open file '%s'", node, fname);
         return file;
     }
-    if (node.type == NODE_INPUT && node.varType == "cos") {
+    if (node.type == NODE_INPUT && node.varType == "str") {
         llvm::Function* printfF = runtimeFunction("printf");
         llvm::Function* scanfF = runtimeFunction("scanf");
         llvm::Value* prompt = getStringPtr(node.value);
@@ -861,6 +861,11 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             return unsignedResult ? builder.CreateFPToUI(result, integerResult)
                                   : builder.CreateFPToSI(result, integerResult);
         }
+        if (node.varType == "string-compare") {  // a == b / a != b для строк
+            llvm::Value* order = builder.CreateCall(runtimeFunction("strcmp"), {L, R});
+            return node.op == "==" ? builder.CreateICmpEQ(order, builder.getInt32(0))
+                                   : builder.CreateICmpNE(order, builder.getInt32(0));
+        }
         if (L->getType()->isPointerTy() || R->getType()->isPointerTy()) {
             if (node.op == "==") return builder.CreateICmpEQ(L, R);
             if (node.op == "!=") return builder.CreateICmpNE(L, R);
@@ -949,10 +954,9 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
     if (node.type == NODE_FUNC_CALL) {
         std::string name = node.varName;
         // математика
-        if (name == "sqrt" || name == "pow" || name == "flo" ||
-            name == "cel" || name == "ron") {
-            const std::string mathName = name == "flo" ? "floor" :
-                name == "cel" ? "ceil" : name == "ron" ? "round" : name;
+        if (name == "sqrt" || name == "pow" || name == "floor" ||
+            name == "ceil" || name == "round") {
+            const std::string mathName = name;
             llvm::Function* function = runtimeFunction(mathName);
             std::vector<llvm::Value*> args;
             bool floatingArgument = false;
@@ -1036,14 +1040,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             builder.CreateCall(snprintfF, {bufPtr, bytes, fmt, val});
             return bufPtr;
         }
-        if (name == "ser") {
-            llvm::Function* strcmpF = runtimeFunction("strcmp");
-            llvm::Value* s1 = genExpr(node.args[0]);
-            llvm::Value* s2 = genExpr(node.args[1]);
-            llvm::Value* res = builder.CreateCall(strcmpF, {s1, s2});
-            return builder.CreateICmpEQ(res, builder.getInt32(0));
-        }
-        if (name == "rep" && node.args.size() == 3) {
+        if (name == "replace" && node.args.size() == 3) {
             llvm::Function* strlenF = runtimeFunction("strlen");
             llvm::Function* strstrF = runtimeFunction("strstr");
             llvm::Function* memcpyF = runtimeFunction("memcpy");
@@ -1131,8 +1128,8 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             resultPhi->addIncoming(copyResult, copyEnd);
             return resultPhi;
         }
-        if (name == "flo" || name == "cel" || name == "ron") {
-            std::string cname = name == "flo" ? "floor" : name == "cel" ? "ceil" : "round";
+        if (name == "floor" || name == "ceil" || name == "round") {
+            std::string cname = name;
             llvm::Function* f = runtimeFunction(cname);
             llvm::Value* arg = genExpr(node.args[0]);
             if (arg->getType()->isIntegerTy())
@@ -1140,11 +1137,11 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             llvm::Value* res = builder.CreateCall(f, {arg});
             return builder.CreateFPToSI(res, builder.getInt32Ty());
         }
-        if (name == "ran") {
+        if (name == "rand") {
             llvm::Function* f = runtimeFunction("rand");
             return builder.CreateCall(f, {});
         }
-        if (name == "ar") {
+        if (name == "len") {
             llvm::Function* strlenF = runtimeFunction("strlen");
             llvm::Value* str = genExpr(node.args[0]);
             return builder.CreateTrunc(builder.CreateCall(strlenF, {str}), builder.getInt32Ty());
@@ -1162,7 +1159,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
             }
             llvm::Value* ret = builder.CreateCall(fn, argVals);
             std::string rt = funcReturnTypes.count(name)
-                ? funcReturnTypes[name] : "rox";
+                ? funcReturnTypes[name] : "i32";
             return castTo(ret, svType(rt));
         }
         codegenFailure(node, "неизвестная функция '" + name + "' при генерации LLVM");
@@ -1920,7 +1917,7 @@ void CodeGen::generate(const Node& program) {
             parameterTypes.push_back(svType(typeName));
             parameterNames.push_back(typeName);
         }
-        const std::string returnType = node.varType.empty() ? "rox" : node.varType;
+        const std::string returnType = node.varType.empty() ? "i32" : node.varType;
         funcParamTypes[node.varName] = parameterNames;
         funcReturnTypes[node.varName] = returnType;
         llvm::FunctionType* functionType = llvm::FunctionType::get(

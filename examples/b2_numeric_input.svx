@@ -1,2 +1,2 @@
-int value = vd("number: ");
+int value = input_int("number: ");
 print(value);

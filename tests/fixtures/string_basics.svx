@@ -1,10 +1,10 @@
-svi string lor s1 = "привет";
-svi string lor s2 = "привет";
-svi string lor s3 = "мир";
-svi bool lor eq1 = ser(s1, s2);
-svi bool lor eq2 = ser(s1, s3);
+string s1 = "привет";
+string s2 = "привет";
+string s3 = "мир";
+bool eq1 = (s1 == s2);
+bool eq2 = (s1 == s3);
 print(eq1);
 print(eq2);
-svi int lor n = 42;
-svi string lor ns = str(n);
+int n = 42;
+string ns = str(n);
 print(ns);

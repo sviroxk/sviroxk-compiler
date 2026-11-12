@@ -1,4 +1,4 @@
-ptr values = nw int[0];
+ptr values = new int[0];
 values.push(7);
 values.push(8);
 print(values[0] + values[1]);

@@ -1,4 +1,4 @@
-tip BadRecursive {
+struct BadRecursive {
     int value;
     BadRecursive next;
 }

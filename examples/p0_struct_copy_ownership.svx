@@ -1,12 +1,12 @@
-tip Container {
+struct Container {
     int id;
     ptr data;
 }
 
-svi tip Container lor a;
+Container a;
 a.id = 1;
 a.data = null;
-svi tip Container lor b;
+Container b;
 b = a;
 print(a.id);
 print(b.id);

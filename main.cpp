@@ -63,9 +63,14 @@ static void appendModuleTokens(const fs::path& sourcePath,
         }
 
         Token importToken = tokens[i++];
+        if (importToken.value == "imp") {
+            sc::reportDiagnostic(importToken.file, importToken.line, importToken.column, "syntax",
+                                 "слово 'imp' удалено: пишите 'import'");
+            std::exit(1);
+        }
         if (i >= tokens.size() || tokens[i].type != STRING) {
             std::cerr << "Ошибка " << importToken.line << ':' << importToken.column
-                      << ": после 'imp' ожидался путь в кавычках" << std::endl;
+                      << ": после 'import' ожидался путь в кавычках" << std::endl;
             std::exit(1);
         }
         fs::path importPath = canonicalPath.parent_path() / tokens[i++].value;

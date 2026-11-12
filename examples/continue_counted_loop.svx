@@ -1,5 +1,5 @@
 let total: int = 0;
-cert ceh (5) {
+repeat (5) {
     continue;
     total = total + 1;
 }

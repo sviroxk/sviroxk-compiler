@@ -143,8 +143,8 @@ private:
 
     static bool isBuiltinFunction(const std::string& name) {
         static const std::set<std::string> names = {
-            "sqrt", "abs", "pow", "max", "min", "flo", "cel", "ron",
-            "ran", "ar", "ser", "rep", "str"
+            "sqrt", "abs", "pow", "max", "min", "floor", "ceil", "round",
+            "rand", "len", "replace", "str"
         };
         return names.count(name) != 0;
     }
@@ -877,6 +877,14 @@ private:
         const sc::Type rightTy = ty(right);
         const bool comparison = node.op == ">" || node.op == "<" || node.op == ">=" ||
             node.op == "<=" || node.op == "==" || node.op == "!=";
+        if (comparison && leftTy.isStr() && rightTy.isStr()) {
+            if (node.op == "==" || node.op == "!=") {
+                node.varType = "string-compare";  // codegen: strcmp
+                return "bool";
+            }
+            error(node, "строки сравниваются только через == и !=");
+            return "<error>";
+        }
         if (comparison && (leftTy.isPtr() || rightTy.isPtr())) {
             if ((node.op == "==" || node.op == "!=") && leftTy.isPtr() && rightTy.isPtr()) return "bool";
             error(node, "указатели можно сравнивать только между собой и с null через == и !=");
@@ -918,9 +926,9 @@ private:
     std::string call(const Node& node) {
         static const std::map<std::string, std::pair<size_t, size_t>> builtins = {
             {"sqrt", {1,1}}, {"abs", {1,1}}, {"pow", {2,2}},
-            {"max", {2,2}}, {"min", {2,2}}, {"flo", {1,1}},
-            {"cel", {1,1}}, {"ron", {1,1}}, {"ran", {0,0}},
-            {"ar", {1,1}}, {"ser", {2,2}}, {"rep", {3,3}}, {"str", {1,1}}
+            {"max", {2,2}}, {"min", {2,2}}, {"floor", {1,1}},
+            {"ceil", {1,1}}, {"round", {1,1}}, {"rand", {0,0}},
+            {"len", {1,1}}, {"replace", {3,3}}, {"str", {1,1}}
         };
         auto builtin = builtins.find(node.varName);
         if (builtin != builtins.end()) {
@@ -934,8 +942,7 @@ private:
                 const Node& arg = node.args[index];
                 std::string type = expression(arg);
                 argumentTypes.push_back(type);
-                const bool expectsString = node.varName == "ar" || node.varName == "ser" ||
-                    node.varName == "rep";
+                const bool expectsString = node.varName == "len" || node.varName == "replace";
                 if (expectsString && type != "str" && type != "<error>")
                     error(arg, "аргумент " + std::to_string(index + 1) + " функции '" +
                           node.varName + "' должен иметь тип str");
@@ -944,12 +951,11 @@ private:
                          type != "char" && type != "<error>")
                     error(arg, "недопустимый тип аргумента функции '" + node.varName + "'");
             }
-            if (node.varName == "ser") return "bool";
-            if (node.varName == "ar" || node.varName == "ran") return "i32";
+            if (node.varName == "len" || node.varName == "rand") return "i32";
             if (node.varName == "str") return "str";
-            if (node.varName == "rep") return "ptr";
+            if (node.varName == "replace") return "ptr";
             if (node.varName == "sqrt" || node.varName == "pow" ||
-                node.varName == "flo" || node.varName == "cel" || node.varName == "ron") {
+                node.varName == "floor" || node.varName == "ceil" || node.varName == "round") {
                 sc::Type resultTy = sc::Type::from(argumentTypes.empty() ? "i32" : argumentTypes.front());
                 for (size_t index = 1; index < argumentTypes.size(); ++index) {
                     const sc::Type argTy = sc::Type::from(argumentTypes[index]);

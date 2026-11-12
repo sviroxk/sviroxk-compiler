@@ -1,7 +1,7 @@
-tip Point {
+struct Point {
     int field = 1;
 }
-svi tip Point lor point = { field = 9; };
+Point point = { field = 9; };
 int point_field = 42;
 print(point.field);
 print(point_field);
