@@ -72,7 +72,7 @@ print(values.len());
 del values;
 SC
 # read() returns owning heap strings that SC cannot yet release: leaks disabled here only.
-check_case file-roundtrip-eof clean $'first\n\nsecond\n0\nfirst\n' <<'SC'
+check_case file-roundtrip-eof clean $'first\nsecond\n0\nfirst' <<'SC'
 file output = open("roundtrip.txt", "w");
 write(output, "first\nsecond"); close(output);
 file input = open("roundtrip.txt", "r");

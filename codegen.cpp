@@ -47,6 +47,14 @@ llvm::Value* CodeGen::createStorage(llvm::Type* type, const std::string& name) {
         "sc.global." + name);
 }
 
+// Служебный слот в начале текущей функции: alloca внутри цикла растила бы стек
+// на каждой итерации.
+llvm::AllocaInst* CodeGen::entryAlloca(llvm::Type* type, const char* name) {
+    llvm::BasicBlock& entry = builder.GetInsertBlock()->getParent()->getEntryBlock();
+    llvm::IRBuilder<> at(&entry, entry.getFirstInsertionPt());
+    return at.CreateAlloca(type, nullptr, name);
+}
+
 // Единая таблица функций C-рантайма: одно имя — одна сигнатура.
 llvm::Function* CodeGen::runtimeFunction(const std::string& name) {
     if (llvm::Function* existing = module.getFunction(name)) return existing;
@@ -72,6 +80,10 @@ llvm::Function* CodeGen::runtimeFunction(const std::string& name) {
         {"strstr",  {ptr, {ptr, ptr}, false}},
         {"fopen",   {ptr, {ptr, ptr}, false}},
         {"fgets",   {ptr, {ptr, i32, ptr}, false}},
+        {"fgetc",   {i32, {ptr}, false}},
+        {"getchar", {i32, {}, false}},
+        {"realloc", {ptr, {ptr, i64}, false}},
+        {"strtoll", {i64, {ptr, ptr, i32}, false}},
         {"fputs",   {i32, {ptr, ptr}, false}},
         {"fclose",  {i32, {ptr}, false}},
         {"rand",    {i32, {}, false}},
@@ -248,6 +260,122 @@ llvm::Value* CodeGen::allocateStringBuffer(llvm::Value* bytes, const Node& locat
         llvm::ConstantPointerNull::get(builder.getPtrTy())), "out of memory", location);
     builder.CreateStore(builder.getInt8(0), buffer);
     return buffer;
+}
+
+// sc.read_line(file, status): строка любой длины без '\n' (и '\r' перед ним) в
+// буфере из malloc. file == null — стандартный ввод. status: 0 — прочитано,
+// 1 — конец ввода до первого символа, 2 — не хватило памяти.
+llvm::Function* CodeGen::readLineFunction() {
+    if (llvm::Function* existing = module.getFunction("sc.read_line")) return existing;
+    llvm::Type* ptrTy = builder.getPtrTy();
+    llvm::Type* i64 = builder.getInt64Ty();
+    llvm::Function* function = llvm::Function::Create(
+        llvm::FunctionType::get(ptrTy, {ptrTy, ptrTy}, false),
+        llvm::Function::InternalLinkage, "sc.read_line", module);
+    llvm::Value* file = function->getArg(0);
+    llvm::Value* status = function->getArg(1);
+    llvm::IRBuilderBase::InsertPointGuard guard(builder);
+    auto block = [&](const char* name) { return llvm::BasicBlock::Create(context, name, function); };
+    llvm::BasicBlock* entry = block("entry");
+    llvm::BasicBlock* loop = block("loop");
+    llvm::BasicBlock* store = block("store");
+    llvm::BasicBlock* grow = block("grow");
+    llvm::BasicBlock* put = block("put");
+    llvm::BasicBlock* done = block("done");
+    llvm::BasicBlock* eof = block("eof");
+    llvm::BasicBlock* finish = block("finish");
+    llvm::BasicBlock* oom = block("oom");
+    builder.SetInsertPoint(entry);
+    llvm::Value* cap = builder.CreateAlloca(i64);
+    llvm::Value* len = builder.CreateAlloca(i64);
+    llvm::Value* buf = builder.CreateAlloca(ptrTy);
+    builder.CreateStore(builder.getInt64(64), cap);
+    builder.CreateStore(builder.getInt64(0), len);
+    llvm::Value* first = builder.CreateCall(runtimeFunction("malloc"), {builder.getInt64(64)});
+    builder.CreateStore(first, buf);
+    builder.CreateCondBr(builder.CreateIsNull(first), oom, loop);
+
+    builder.SetInsertPoint(loop);
+    llvm::BasicBlock* readFile = block("read_file");
+    llvm::BasicBlock* readStdin = block("read_stdin");
+    llvm::BasicBlock* gotChar = block("got_char");
+    builder.CreateCondBr(builder.CreateIsNull(file), readStdin, readFile);
+    builder.SetInsertPoint(readFile);
+    llvm::Value* fromFile = builder.CreateCall(runtimeFunction("fgetc"), {file});
+    builder.CreateBr(gotChar);
+    builder.SetInsertPoint(readStdin);
+    llvm::Value* fromStdin = builder.CreateCall(runtimeFunction("getchar"), {});
+    builder.CreateBr(gotChar);
+    builder.SetInsertPoint(gotChar);
+    llvm::PHINode* c = builder.CreatePHI(builder.getInt32Ty(), 2);
+    c->addIncoming(fromFile, readFile);
+    c->addIncoming(fromStdin, readStdin);
+    llvm::Value* atEnd = builder.CreateICmpEQ(c, builder.getInt32(-1));
+    llvm::Value* newline = builder.CreateICmpEQ(c, builder.getInt32('\n'));
+    builder.CreateCondBr(builder.CreateOr(atEnd, newline), done, store);
+
+    builder.SetInsertPoint(store);
+    llvm::Value* used = builder.CreateLoad(i64, len);
+    llvm::Value* capacity = builder.CreateLoad(i64, cap);
+    builder.CreateCondBr(builder.CreateICmpUGE(builder.CreateAdd(used, builder.getInt64(1)), capacity),
+                         grow, put);
+
+    builder.SetInsertPoint(grow);
+    llvm::Value* doubled = builder.CreateMul(builder.CreateLoad(i64, cap), builder.getInt64(2));
+    llvm::Value* old = builder.CreateLoad(ptrTy, buf);
+    llvm::Value* bigger = builder.CreateCall(runtimeFunction("realloc"), {old, doubled});
+    llvm::BasicBlock* grown = block("grown");
+    builder.CreateCondBr(builder.CreateIsNull(bigger), oom, grown);
+    builder.SetInsertPoint(grown);
+    builder.CreateStore(bigger, buf);
+    builder.CreateStore(doubled, cap);
+    builder.CreateBr(put);
+
+    builder.SetInsertPoint(put);
+    llvm::Value* at = builder.CreateLoad(i64, len);
+    builder.CreateStore(builder.CreateTrunc(c, builder.getInt8Ty()),
+                        builder.CreateGEP(builder.getInt8Ty(), builder.CreateLoad(ptrTy, buf), at));
+    builder.CreateStore(builder.CreateAdd(at, builder.getInt64(1)), len);
+    builder.CreateBr(loop);
+
+    builder.SetInsertPoint(done);
+    llvm::Value* count = builder.CreateLoad(i64, len);
+    builder.CreateCondBr(builder.CreateAnd(atEnd, builder.CreateICmpEQ(count, builder.getInt64(0))),
+                         eof, finish);
+    builder.SetInsertPoint(eof);
+    builder.CreateStore(builder.getInt32(1), status);
+    builder.CreateStore(builder.getInt8(0), builder.CreateLoad(ptrTy, buf));
+    builder.CreateRet(builder.CreateLoad(ptrTy, buf));
+
+    builder.SetInsertPoint(finish);
+    llvm::Value* text = builder.CreateLoad(ptrTy, buf);
+    llvm::Value* hasChars = builder.CreateICmpUGT(count, builder.getInt64(0));
+    llvm::Value* lastIndex = builder.CreateSelect(hasChars, builder.CreateSub(count, builder.getInt64(1)),
+                                                  builder.getInt64(0));
+    llvm::Value* last = builder.CreateLoad(builder.getInt8Ty(),
+                                           builder.CreateGEP(builder.getInt8Ty(), text, lastIndex));
+    llvm::Value* carriage = builder.CreateAnd(hasChars, builder.CreateICmpEQ(last, builder.getInt8('\r')));
+    llvm::Value* end = builder.CreateSelect(carriage, lastIndex, count);
+    builder.CreateStore(builder.getInt8(0), builder.CreateGEP(builder.getInt8Ty(), text, end));
+    builder.CreateStore(builder.getInt32(0), status);
+    builder.CreateRet(text);
+
+    builder.SetInsertPoint(oom);
+    builder.CreateCall(runtimeFunction("free"), {builder.CreateLoad(ptrTy, buf)});
+    builder.CreateStore(builder.getInt32(2), status);
+    builder.CreateRet(llvm::ConstantPointerNull::get(llvm::cast<llvm::PointerType>(ptrTy)));
+    return function;
+}
+
+llvm::Value* CodeGen::emitReadLine(llvm::Value* file, const Node& location, bool eofIsError) {
+    llvm::Value* status = entryAlloca(builder.getInt32Ty(), "read_status");
+    llvm::Value* line = builder.CreateCall(readLineFunction(), {file, status});
+    llvm::Value* code = builder.CreateLoad(builder.getInt32Ty(), status);
+    emitRuntimeFailureIf(builder.CreateICmpEQ(code, builder.getInt32(2)), "out of memory", location);
+    if (eofIsError)
+        emitRuntimeFailureIf(builder.CreateICmpEQ(code, builder.getInt32(1)),
+                             "unexpected end of input", location);
+    return line;
 }
 
 void CodeGen::emitArrayBoundsCheck(llvm::Value* index, llvm::Value* length,
@@ -729,11 +857,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         llvm::Value* fp = builder.CreateLoad(builder.getPtrTy(), fileAlloca);
         emitRuntimeFailureIf(builder.CreateICmpEQ(fp,
             llvm::ConstantPointerNull::get(builder.getPtrTy())), "file is not open", node);
-        llvm::Function* fgetsF = runtimeFunction("fgets");
-        llvm::Value* bufPtr = allocateStringBuffer(builder.getInt64(4096), node);
-        builder.CreateCall(fgetsF,
-            {bufPtr, builder.getInt32(4096), fp});
-        return bufPtr;
+        return emitReadLine(fp, node, false);
     }
     if (node.type == NODE_FILE_OPEN) {
         llvm::Function* fopenF = runtimeFunction("fopen");
@@ -746,24 +870,44 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
     }
     if (node.type == NODE_INPUT && node.varType == "str") {
         llvm::Function* printfF = runtimeFunction("printf");
-        llvm::Function* scanfF = runtimeFunction("scanf");
         llvm::Value* prompt = getStringPtr(node.value);
         builder.CreateCall(printfF, {prompt});
-        llvm::Value* bufPtr = allocateStringBuffer(builder.getInt64(256), node);
-        llvm::Value* fmt = getStringPtr("%255s");
-        builder.CreateCall(scanfF, {fmt, bufPtr});
-        return bufPtr;
+        return emitReadLine(llvm::ConstantPointerNull::get(builder.getPtrTy()), node, false);
     }
     if (node.type == NODE_INPUT) {
         llvm::Function* printfF = runtimeFunction("printf");
-        llvm::Function* scanfF = runtimeFunction("scanf");
         llvm::Value* prompt = getStringPtr(node.value);
         builder.CreateCall(printfF, {prompt});
-        llvm::AllocaInst* tmp =
-            builder.CreateAlloca(builder.getInt32Ty(), nullptr, "input_tmp");
-        llvm::Value* fmt = getStringPtr("%d");
-        builder.CreateCall(scanfF, {fmt, tmp});
-        return builder.CreateLoad(builder.getInt32Ty(), tmp);
+        // Одна строка ввода — одно целое: пробелы вокруг допустимы, остальное — ошибка.
+        llvm::Value* line = emitReadLine(llvm::ConstantPointerNull::get(builder.getPtrTy()), node, true);
+        llvm::Value* endSlot = entryAlloca(builder.getPtrTy(), "input_end");
+        llvm::Value* value = builder.CreateCall(runtimeFunction("strtoll"),
+                                                {line, endSlot, builder.getInt32(10)});
+        llvm::Value* end = builder.CreateLoad(builder.getPtrTy(), endSlot);
+        llvm::Function* function = builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* skip = llvm::BasicBlock::Create(context, "input_skip", function);
+        llvm::BasicBlock* next = llvm::BasicBlock::Create(context, "input_next", function);
+        llvm::BasicBlock* checked = llvm::BasicBlock::Create(context, "input_checked", function);
+        llvm::BasicBlock* before = builder.GetInsertBlock();
+        builder.CreateBr(skip);
+        builder.SetInsertPoint(skip);
+        llvm::PHINode* cursor = builder.CreatePHI(builder.getPtrTy(), 2, "input_cursor");
+        cursor->addIncoming(end, before);
+        llvm::Value* ch = builder.CreateLoad(builder.getInt8Ty(), cursor);
+        llvm::Value* space = builder.CreateOr(builder.CreateICmpEQ(ch, builder.getInt8(' ')),
+                                              builder.CreateICmpEQ(ch, builder.getInt8('\t')));
+        builder.CreateCondBr(space, next, checked);
+        builder.SetInsertPoint(next);
+        cursor->addIncoming(builder.CreateGEP(builder.getInt8Ty(), cursor, builder.getInt64(1)), next);
+        builder.CreateBr(skip);
+        builder.SetInsertPoint(checked);
+        llvm::Value* noDigits = builder.CreateICmpEQ(end, line);
+        llvm::Value* trailing = builder.CreateICmpNE(ch, builder.getInt8(0));
+        emitRuntimeFailureIf(builder.CreateOr(noDigits, trailing), "invalid integer input", node);
+        llvm::Value* tooSmall = builder.CreateICmpSLT(value, builder.getInt64(INT32_MIN));
+        llvm::Value* tooLarge = builder.CreateICmpSGT(value, builder.getInt64(INT32_MAX));
+        emitRuntimeFailureIf(builder.CreateOr(tooSmall, tooLarge), "integer input out of range", node);
+        return builder.CreateTrunc(value, builder.getInt32Ty());
     }
     if (node.type == NODE_TERNARY) {
         llvm::Value* condition = toBool(genExpr(*node.left));

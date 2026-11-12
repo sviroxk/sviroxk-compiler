@@ -91,6 +91,9 @@ public:
     void emitRuntimeFailureIf(llvm::Value* failed, const std::string& message,
                               const Node& location, llvm::Value* detail = nullptr);
     llvm::Value* allocateStringBuffer(llvm::Value* bytes, const Node& location);
+    llvm::Function* readLineFunction();
+    llvm::AllocaInst* entryAlloca(llvm::Type* type, const char* name);
+    llvm::Value* emitReadLine(llvm::Value* file, const Node& location, bool eofIsError);
     void emitArrayBoundsCheck(llvm::Value* index, llvm::Value* length, const Node& location);
     llvm::StructType* dynArrayType();
     void growDynArray(const std::string& varName, llvm::Value* newCapacity);
