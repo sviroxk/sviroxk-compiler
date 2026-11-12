@@ -892,6 +892,10 @@ expect_program_output "block-local-vs-global" $'if (1) { let inner: int = 3; pri
 expect_program_output "globals-named-like-runtime" $'let printf = 3;\nlet puts = 4;\nfn int f() { return printf + puts; }\nprint(f());' '7'
 expect_program_output "struct-in-fn" $'struct P { int x = 4; }\nfn int f() { P p; return p.x; }\nprint(f());' '4'
 expect_program_output "ar-and-rep-together" $'print(len("abc"));\nprint(replace("hello world", "world", "SC"));' $'3\nhello SC'
+# Аудит, класс 6: литерал больше i32 без контекста — i64, а не ложная ошибка.
+expect_program_output "i64-min-expression" $'print(-9223372036854775807 - 1);\ni64 m = -9223372036854775807 - 1;\nprint(m);\nprint(2147483648 + 0);' $'-9223372036854775808\n-9223372036854775808\n2147483648'
+expect_compile_error "literal-beyond-i64" 'print(9223372036854775808);' "не помещается в тип i64"
+expect_compile_error "i64-constant-overflow" 'print(9223372036854775807 + 1);' "переполнение"
 # Аудит, класс 5: литерал в объявлении массива вне диапазона типа элемента молча обрезался.
 expect_compile_error "array-literal-i32-range" 'int[] a = [1, 2147483648];' "элемент массива 2147483648 вне диапазона типа 'int/i32'"
 expect_compile_error "array-literal-u8-range" 'u8[] b = [300];' "элемент массива 300 вне диапазона типа"
