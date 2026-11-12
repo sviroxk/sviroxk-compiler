@@ -35,6 +35,12 @@ static constexpr int kMaxNesting = 256;
 // предел — половина от проходящего потолка. Снять совсем — обход без рекурсии.
 static constexpr int kMaxOperators = 250000;
 int operatorsInStatement = 0;
+// Цепочка `else if` разбирается рекурсией (каждое звено — вложенный if), и так же её
+// обходят семантика и codegen. Измерено (стек компилятора, ASan/UBSan LLVM 18):
+// 5000 звеньев проходит, 10000 — переполнение стека; release LLVM 23 — 10000 / 20000.
+// Предел — половина от проходящего потолка; глубже — синтаксическая ошибка, а не segfault.
+static constexpr int kMaxElseIf = 2500;
+int elseIfChain = 0;
 int nesting = -1;  // верхний уровень (само выражение или блок) не считается
 
 // RAII: один уровень вложенности; ok() == false — лимит превышен, ошибка уже выдана.
@@ -1411,7 +1417,14 @@ Node parseOne() {
         if (peek().type == SELE) {
             consume();
             if (peek().type == ELES) {
-                node.elseChildren.push_back(parseOne());
+                if (++elseIfChain > kMaxElseIf && !parseStopped) {
+                    failAt(peek(), "слишком длинная цепочка else if: больше " +
+                           std::to_string(kMaxElseIf) + " звеньев");
+                    stopParsing();
+                } else if (!parseStopped) {
+                    node.elseChildren.push_back(parseOne());
+                }
+                --elseIfChain;
             } else {
                 expect(LBRACE);
                 node.elseChildren = parseBlock();

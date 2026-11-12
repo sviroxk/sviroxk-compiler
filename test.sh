@@ -1076,6 +1076,11 @@ expect_program_output "sum-two-long-statements" "int x = ${long_sum};"$'\n'"int 
 expect_program_output "sum-2000-terms" "int x = 1$(printf ' + 1%.0s' $(seq 1999));"$'\nprint(x);' '2000'
 elif_chain=$(for i in $(seq 0 999); do printf ' else if (x == %d) { print(%d); }' "$i" "$i"; done)
 expect_program_output "else-if-chain-1000" $'int x = 999;\nif (x < 0) { print(-1); }'"$elif_chain" '999'
+# Аудит, находка 10: 20000 звеньев давали segfault (ASan/UBSan — уже 10000); предел 2500.
+elif_chain=$(for i in $(seq 0 2499); do printf ' else if (x == %d) { print(%d); }' "$i" "$i"; done)
+expect_program_output "else-if-chain-2500" $'int x = 2499;\nif (x < 0) { print(-1); }'"$elif_chain" '2499'
+elif_chain=$(for i in $(seq 0 19999); do printf ' else if (x == %d) { print(%d); }' "$i" "$i"; done)
+expect_compile_error "else-if-chain-20000" $'int x = 1;\nif (x < 0) { print(-1); }'"$elif_chain" "слишком длинная цепочка else if: больше 2500 звеньев"
 
 # D-007 / аудит 07f: вернуть адрес локальной переменной или параметра — ошибка компиляции.
 expect_compile_error "return-addr-local" 'fn ptr g() { int x = 5; return &x; }' "возврат адреса локальной переменной 'x'"
