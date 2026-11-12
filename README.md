@@ -157,7 +157,7 @@ CXX=clang++ CXXFLAGS='-Wall -Wextra -Werror' ./build.sh
 ./test-conformance.sh
 ```
 
-CI выполняет строгую сборку и полный suite в обычной и ASan/UBSan-конфигурациях.
+CI собирает и тестирует компилятор на LLVM 18–23 (строгая сборка, полный suite; ASan/UBSan на 23 и 18).
 Sanitizer-проверки показывают проверенные сценарии, а не полную безопасность языка.
 Примеры лежат в `examples/`, regression fixtures — в `tests/fixtures/`.
 
