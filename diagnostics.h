@@ -42,6 +42,28 @@ inline void reportDiagnostic(const std::string& filename, int line, int column,
     std::cerr << "^\n";
 }
 
+// Ошибка во входной программе, уже напечатанная: компиляция прекращается с этим
+// кодом выхода (spec §1). Не std::exception — её не перехватят обработчики
+// внутренних ошибок; ловит только main (вместо std::exit посреди кода).
+struct CompileFailure {
+    int exitCode = 1;
+};
+
+[[noreturn]] inline void failAt(const std::string& filename, int line, int column,
+                                const std::string& category, const std::string& message,
+                                int exitCode = 1) {
+    reportDiagnostic(filename, line, column, category, message);
+    throw CompileFailure{exitCode};
+}
+
+// Ошибка без позиции в тексте (например, не открылся исходный файл).
+[[noreturn]] inline void failFile(const std::string& filename, const std::string& category,
+                                  const std::string& message) {
+    std::cerr << (filename.empty() ? "<source>" : filename) << ": error[" << category
+              << "]: " << message << '\n';
+    throw CompileFailure{1};
+}
+
 } // namespace sc
 
 #endif

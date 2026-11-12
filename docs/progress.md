@@ -289,3 +289,8 @@
 - Причина (замер `-fprofile-instr-generate` + `llvm-profdata`, 3000 слагаемых): `CodeGen::isUnsignedExpr` и `CodeGen::integerWidth` — по 9 млн вызовов, у каждого `+` заново обходили левое поддерево; так же `Checker::constantInteger` в семантике.
 - Исправлено: кэш по узлу AST (`left`/`right` в куче): в семантике — на всю проверку, в codegen — на одну инструкцию (`genNode` сбрасывает: объявления меняют таблицы переменных). После: 5000 ≈ 0,23 с, 10000 ≈ 0,47 с, 20000 ≈ 0,93 с. В парсере лимит 10000 бинарных операторов в инструкции → `слишком длинное выражение` (дерево цепочки обходится рекурсивно).
 - Тесты: `sum-10000-operators` (вывод и время < 20 с), `sum-10001-operators`, `sum-two-long-statements`.
+
+## Аудит §2: без `std::exit` и `catch (...)`
+- Было (main, 23.1.5): лексер, импорт и codegen завершали процесс `std::exit(1)` посреди кода (21 место) с текстом «Ошибка 1:9: …» без имени файла; в `semantic.cpp` пять `catch (...) {}` глотали всё подряд, а `stoll("0x5")` давал 0 — константный индекс `a[0x5]` и сдвиг `1 << 0x40` не проверялись при компиляции.
+- Стало: `sc::failAt`/`sc::failFile` (`diagnostics.h`) печатают диагностику в общем формате («файл:строка:столбец: error[lexer|import]» с выдержкой и `^`) и бросают `sc::CompileFailure` — её ловит только `main` и возвращает код (spec §1). Импорт показывает позицию строки `import`; не открывшийся исходный файл — «файл: error[import]». В семантике константы разбирает `constantInteger` (0x/0b/0o, `_`), без исключений; в `type.cpp` — `catch (const std::logic_error&)` вместо `catch (...)`.
+- Тесты: `lexer-*` (5), `missing-module-position`, `import-without-path`, файл не найден, `hex-index-out-of-bounds`, `binary-index-store-out-of-bounds`, `hex-shift-too-wide`, `hex-index-in-bounds`.

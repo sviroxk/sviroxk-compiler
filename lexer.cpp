@@ -62,9 +62,7 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
                 }
             }
             if (!closed) {
-                std::cerr << "Ошибка " << commentLine << ':' << commentColumn
-                          << ": незакрытый блочный комментарий" << std::endl;
-                std::exit(1);
+                sc::failAt(filename, commentLine, commentColumn, "lexer", std::string("незакрытый блочный комментарий"));
             }
             continue;
         }
@@ -190,18 +188,14 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
                     (i < static_cast<int>(code.size()) &&
                      isalnum(static_cast<unsigned char>(code[i])))) malformed = true;
                 if (malformed) {
-                    std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                              << ": некорректный числовой литерал '" << num << "'" << std::endl;
-                    std::exit(1);
+                    sc::failAt(filename, tokLine, tokCol, "lexer", std::string("некорректный числовой литерал '") + num + "'");
                 }
                 try {
                     const unsigned long long value = std::stoull(num.substr(2), nullptr,
                         prefix == 'x' ? 16 : 2);
                     num = std::to_string(value);
                 } catch (const std::exception&) {
-                    std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                              << ": числовой литерал вне диапазона u64" << std::endl;
-                    std::exit(1);
+                    sc::failAt(filename, tokLine, tokCol, "lexer", std::string("числовой литерал вне диапазона u64"));
                 }
                 add(NUMBER, num, tokLine, tokCol);
                 continue;
@@ -261,9 +255,7 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
                 }
             }
             if (malformed) {
-                std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                          << ": некорректный числовой литерал '" << num << "'" << std::endl;
-                std::exit(1);
+                sc::failAt(filename, tokLine, tokCol, "lexer", std::string("некорректный числовой литерал '") + num + "'");
             }
             add(NUMBER, num, tokLine, tokCol);
             continue;
@@ -273,17 +265,13 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
             ++i;
             ++column;
             if (i >= static_cast<int>(code.size()) || code[i] == '\n' || code[i] == '\'') {
-                std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                          << ": ожидался один символ между одинарными кавычками" << std::endl;
-                std::exit(1);
+                sc::failAt(filename, tokLine, tokCol, "lexer", std::string("ожидался один символ между одинарными кавычками"));
             }
             unsigned char charVal;
             if (code[i] == '\\') {
                 ++i; ++column;
                 if (i >= static_cast<int>(code.size()) || code[i] == '\n') {
-                    std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                              << ": незавершённая escape-последовательность в символьном литерале" << std::endl;
-                    std::exit(1);
+                    sc::failAt(filename, tokLine, tokCol, "lexer", std::string("незавершённая escape-последовательность в символьном литерале"));
                 }
                 switch (code[i]) {
                     case '0': charVal = 0; break;
@@ -293,9 +281,7 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
                     case 't': charVal = '\t'; break;
                     case '\\': charVal = '\\'; break;
                     default:
-                        std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                                  << ": неизвестная escape-последовательность в символьном литерале" << std::endl;
-                        std::exit(1);
+                        sc::failAt(filename, tokLine, tokCol, "lexer", std::string("неизвестная escape-последовательность в символьном литерале"));
                 }
             } else {
                 charVal = static_cast<unsigned char>(code[i]);
@@ -303,9 +289,7 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
             ++i;
             ++column;
             if (i >= static_cast<int>(code.size()) || code[i] != '\'') {
-                std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                          << ": символьный литерал должен содержать один символ и закрывающую кавычку" << std::endl;
-                std::exit(1);
+                sc::failAt(filename, tokLine, tokCol, "lexer", std::string("символьный литерал должен содержать один символ и закрывающую кавычку"));
             }
             ++i;
             ++column;
@@ -338,9 +322,7 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
                         case '"': str += '"'; break;
                         case '\\': str += '\\'; break;
                         default:
-                            std::cerr << "Ошибка " << line << ':' << column
-                                      << ": неизвестная escape-последовательность" << std::endl;
-                            std::exit(1);
+                            sc::failAt(filename, line, column, "lexer", std::string("неизвестная escape-последовательность"));
                     }
                     ++i;
                     ++column;
@@ -350,9 +332,7 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
                 ++column;
             }
             if (!closed) {
-                std::cerr << "Ошибка " << tokLine << ':' << tokCol
-                          << ": строковый литерал не закрыт кавычкой" << std::endl;
-                std::exit(1);
+                sc::failAt(filename, tokLine, tokCol, "lexer", std::string("строковый литерал не закрыт кавычкой"));
             }
             add(STRING, str, tokLine, tokCol);
             continue;
@@ -454,9 +434,7 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
             case ':': add(COLON, ":", tokLine, tokCol); break;
             case '?': add(QUESTION, "?", tokLine, tokCol); break;
             default:
-                std::cerr << "Ошибка " << tokLine << ":" << tokCol
-                          << " неизвестный символ: " << c << std::endl;
-                exit(1);
+                sc::failAt(filename, tokLine, tokCol, "lexer", std::string("неизвестный символ: ") + c);
         }
         i++;
         column++;

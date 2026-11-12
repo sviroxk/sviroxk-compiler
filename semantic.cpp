@@ -1,3 +1,4 @@
+#include <climits>
 #include <unordered_map>
 #include <optional>
 #include <cctype>
@@ -457,13 +458,10 @@ private:
                 error(*node.left, "индекс массива должен иметь целочисленный тип");
             // Compile-time bounds check for static arrays with constant integer index
             if (symbol->ty.isArray() && node.left->type == NODE_NUMBER && node.left->varType.empty()) {
-                try {
-                    long long idx = std::stoll(node.left->value);
-                    unsigned len = symbol->ty.arrayLength;
-                    if (idx < 0 || static_cast<unsigned long long>(idx) >= len) {
-                        error(*node.left, "индекс массива выходит за границы [" + std::to_string(len) + "]");
-                    }
-                } catch (...) {}
+                // constantInteger понимает 0x/0b/0o и `_`; stoll читал `0x5` как 0.
+                const unsigned len = symbol->ty.arrayLength;
+                if (const auto idx = constantInteger(*node.left); idx && (*idx < 0 || *idx >= len))
+                    error(*node.left, "индекс массива выходит за границы [" + std::to_string(len) + "]");
             }
             if (symbol->ty.isArray())
                 return symbol->ty.element->toString();
@@ -497,7 +495,7 @@ private:
                     node.left->value.rfind("0x", 0) != 0;
                 if (floatLiteral) {
                     double v = 0;
-                    try { v = std::stod(node.left->value); } catch (...) {}
+                    v = std::strtod(node.left->value.c_str(), nullptr);  // без исключений
                     const sc::Type t = ty(target);
                     const double low = t.isUnsigned() ? -1.0 : -std::ldexp(1.0, static_cast<int>(t.width) - 1) - 1.0;
                     const double high = std::ldexp(1.0, static_cast<int>(t.isUnsigned() ? t.width : t.width - 1));
@@ -883,14 +881,11 @@ private:
                 return "<error>";
             }
             if ((node.op == "<<" || node.op == ">>") && node.right->type == NODE_NUMBER) {
-                try {
-                    const long long shift = std::stoll(node.right->value);
-                    const unsigned width = ty(left).width;
-                    if (shift < 0 || static_cast<unsigned long long>(shift) >= width) {
-                        error(*node.right, "счётчик сдвига должен быть меньше ширины левого операнда");
-                        return "<error>";
-                    }
-                } catch (...) {}
+                const unsigned width = ty(left).width;
+                if (const auto shift = constantInteger(*node.right); shift && (*shift < 0 || *shift >= width)) {
+                    error(*node.right, "счётчик сдвига должен быть меньше ширины левого операнда");
+                    return "<error>";
+                }
             }
             return left;
         }
@@ -1177,8 +1172,8 @@ private:
                 dynArrayInit = true;
                 dynElementType = normalize(node.left->varType);
                 if (node.left->left && node.left->left->type == NODE_NUMBER) {
-                    try { dynCapacity = static_cast<int>(std::stoll(node.left->left->value)); }
-                    catch (...) {}
+                    if (const auto n = constantInteger(*node.left->left); n && *n >= 0 && *n <= INT32_MAX)
+                        dynCapacity = static_cast<int>(*n);
                 }
             }
             declare(node.varName, node.varType, node, node.isConst, actual != "<error>",
@@ -1413,13 +1408,10 @@ private:
             if (!isInteger(index) && index != "<error>") error(*node.left, "индекс массива должен быть целым числом");
             // Compile-time bounds check for static arrays with constant integer index
             if (array && array->ty.isArray() && node.left->type == NODE_NUMBER && node.left->varType.empty()) {
-                try {
-                    long long idx = std::stoll(node.left->value);
-                    unsigned len = array->ty.arrayLength;
-                    if (idx < 0 || static_cast<unsigned long long>(idx) >= len) {
-                        error(*node.left, "индекс массива выходит за границы [" + std::to_string(len) + "]");
-                    }
-                } catch (...) {}
+                // constantInteger понимает 0x/0b/0o и `_`; stoll читал `0x5` как 0.
+                const unsigned len = array->ty.arrayLength;
+                if (const auto idx = constantInteger(*node.left); idx && (*idx < 0 || *idx >= len))
+                    error(*node.left, "индекс массива выходит за границы [" + std::to_string(len) + "]");
             }
             std::string value = expression(*node.right);
             Node self;
