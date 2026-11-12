@@ -1,3 +1,4 @@
+static_assert(__cplusplus >= 202002L, "SC собирается как C++20: build.sh задаёт -std=c++20");
 #include <iostream>
 #include <fstream>
 #include <string>

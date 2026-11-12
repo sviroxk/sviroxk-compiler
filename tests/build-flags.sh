@@ -26,3 +26,17 @@ if ! (cd "$work/src" && PATH="$work/bin:$PATH" CXX="${CXX:-clang++}" \
     exit 1
 fi
 echo "PASS: build.sh treats llvm-config include paths as system headers"
+
+# The compiler is C++20: an older -std must be rejected with a clear message.
+read -r -a llvm_flags <<< "$("$real_config" --cxxflags)"
+if "${CXX:-clang++}" -fsyntax-only "${llvm_flags[@]}" -std=c++17 -fexceptions main.cpp \
+        >"$work/std.log" 2>&1; then
+    echo "FAIL: main.cpp compiled as C++17" >&2
+    exit 1
+fi
+if ! grep -Fq 'SC собирается как C++20' "$work/std.log"; then
+    echo "FAIL: C++17 build did not report the C++20 requirement" >&2
+    tail -5 "$work/std.log" >&2
+    exit 1
+fi
+echo "PASS: compiler sources require C++20"

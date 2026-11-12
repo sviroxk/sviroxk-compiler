@@ -2,7 +2,7 @@
 
 [![SC compiler CI](https://img.shields.io/github/actions/workflow/status/sviroxk/sviroxk-compiler/ci.yml?branch=main&style=for-the-badge&logo=github&label=SC%20compiler%20CI)](https://github.com/sviroxk/sviroxk-compiler/actions/workflows/ci.yml) [![Claude](https://img.shields.io/badge/built%20with-Claude-D97757?style=for-the-badge&logo=claude&logoColor=white)](https://claude.ai) [![Viktor](https://img.shields.io/badge/built%20with-Viktor-5B4BDB?style=for-the-badge)](https://viktor.com) [![Cursor](https://img.shields.io/badge/built%20with-Cursor-000000?style=for-the-badge&logo=cursor&logoColor=white)](https://cursor.com)
 
-**Экспериментальный язык · компилятор 0.3.0 · C++17 + LLVM · исходники `.svx`**
+**Экспериментальный язык · компилятор 0.3.0 · C++20 + LLVM · исходники `.svx`**
 
 SC — самостоятельный универсальный язык в разработке. Компилятор проверяет
 исходник и генерирует LLVM IR; его можно выполнить через `lli` или собрать в
@@ -13,7 +13,7 @@ SC — самостоятельный универсальный язык в р�
 
 ## Быстрый старт
 
-Нужны Bash, C++17-компилятор (`clang++`), LLVM **18–23** (эталон 23.1.5; `llvm-config`, `lli`,
+Нужны Bash, C++20-компилятор (`clang++` 18+ или `g++` 12+), LLVM **18–23** (эталон 23.1.5; `llvm-config`, `lli`,
 `llvm-as`, `llc`), `clang` и `timeout`. Сборка — без CMake и новых зависимостей.
 Если LLVM установлен с суффиксом версии, добавьте каталог его `bin` в `PATH`.
 
