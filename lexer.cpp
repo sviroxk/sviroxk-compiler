@@ -138,6 +138,7 @@ std::vector<Token> tokenize(const std::string& code, const std::string& filename
             else if (word == "nw")   add(NW,   word, tokLine, tokCol);
             else if (word == "del")  add(DEL,  word, tokLine, tokCol);
             else if (word == "defer") add(DEFER, word, tokLine, tokCol);
+            else if (word == "drop") add(DROP, word, tokLine, tokCol);
             else if (word == "brk" || word == "break") add(BRK, word, tokLine, tokCol);
             else if (word == "imp")  add(IMP,  word, tokLine, tokCol);
             else if (word == "cont" || word == "continue") add(CONT, word, tokLine, tokCol);

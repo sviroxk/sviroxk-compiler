@@ -33,6 +33,7 @@ enum NodeType {
     NODE_DYN_ARRAY,
     NODE_DELETE,
     NODE_DEFER,
+    NODE_DROP,
     NODE_BREAK,
     NODE_CONTINUE,
     NODE_IMPORT,

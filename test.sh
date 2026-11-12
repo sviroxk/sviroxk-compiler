@@ -45,6 +45,7 @@ fi
 
 sources=(
     "examples/hello.svx"
+    "examples/legacy_square.svx"
     "tests/fixtures/string_basics.svx"
     "examples/struct.svx"
     "examples/struct_init.svx"
@@ -918,6 +919,30 @@ expect_compile_error "defer-nested-forbidden" 'defer defer print(1);' 'defer: о
 expect_compile_error "defer-control-forbidden" 'defer if (true) { print(1); }' 'defer: ожидается обычная операция или вызов'
 expect_compile_error "defer-unknown-name" 'defer print(missing);' "неизвестное имя 'missing'"
 expect_compile_error "defer-invalid-delete" 'int value = 1; defer del value;' 'освободить можно только динамический массив или ptr'
+
+# drop: освобождение динамического массива / закрытие файла, повтор и использование после drop — ошибки компиляции.
+expect_program_output "drop-dyn-array" $'ptr v = nw rox[3];\nv[0] = 7;\nprint(v[0]);\ndrop v;\nprint(1);' $'7\n1'
+expect_program_output "drop-file-flushes" "file f = atk(\"$TMP_DIR/drop.txt\", \"w\");
+zap(f, \"dropped\");
+drop f;
+file g = atk(\"$TMP_DIR/drop.txt\", \"r\");
+print(pro(g));
+drop g;" 'dropped'
+expect_program_output "drop-in-function-and-loop" $'fn int first() { ptr v = nw rox[2]; v[0] = 4; int r = v[0]; drop v; return r; }\nprint(first());\nfor i in 0..2 { ptr w = nw rox[1]; w[0] = i; print(w[0]); drop w; }' $'4\n0\n1'
+expect_program_output "defer-drop" $'fn void run() { ptr v = nw rox[2]; defer drop v; defer print(v[1]); v[1] = 5; }\nrun();\nprint(6);' $'5\n6'
+expect_program_output "drop-in-one-branch" $'ptr v = nw rox[2];\nif (true) { drop v; } else { print(v[0]); }\nprint(3);' '3'
+expect_compile_error "drop-use-after" $'ptr v = nw rox[3];\ndrop v;\nprint(v[0]);' "'v' используется после drop (строка 2)"
+expect_compile_error "drop-use-after-branch" $'ptr v = nw rox[3];\nif (true) { drop v; }\nprint(v.len());' "'v' используется после drop (строка 2)"
+expect_compile_error "drop-file-close-after" "file f = atk(\"$TMP_DIR/drop2.txt\", \"w\");
+drop f;
+zak(f);" "'f' используется после drop (строка 2)"
+expect_compile_error "drop-twice" $'ptr v = nw rox[3];\ndrop v;\ndrop v;' "повторный drop 'v' (уже освобождено в строке 2)"
+expect_compile_error "drop-after-defer-drop" $'ptr v = nw rox[3];\ndefer drop v;\ndrop v;' "повторный drop 'v' (defer drop в строке 2)"
+expect_compile_error "drop-string" $'str s = "a";\ndrop s;' 'drop поддерживается только для динамического массива и file'
+expect_compile_error "drop-raw-pointer" $'int x = 1;\nptr p = &x;\ndrop p;' 'drop поддерживается только для динамического массива и file'
+expect_compile_error "drop-outer-in-loop" $'ptr v = nw rox[3];\nwhile (true) { drop v; }' "drop 'v' внутри цикла или функции"
+expect_compile_error "drop-global-in-function" $'ptr v = nw rox[3];\nfn void f() { drop v; }\nf();' "drop 'v' внутри цикла или функции"
+expect_compile_error "drop-without-name" 'drop 5;' 'после drop ожидалось имя переменной'
 
 # Step 4b: PR22 struct parameters are aggregate copies, not aliases.
 expect_program_output "struct-by-value-copy" "$(cat examples/struct_by_value.svx)" $'17\n3\n4\n3'
