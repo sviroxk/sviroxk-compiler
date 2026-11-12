@@ -1009,7 +1009,18 @@ private:
                     error(arg, "недопустимый тип аргумента функции '" + node.varName + "'");
             }
             if (node.varName == "len" || node.varName == "rand") return "i32";
-            if (node.varName == "str") return "str";
+            if (node.varName == "str") {
+                // str(x): число, bool, char или строка (копия). Указатель, массив, структура,
+                // файл раньше молча превращались в адрес-число.
+                const std::string& argument = argumentTypes.empty() ? "<error>" : argumentTypes[0];
+                const sc::Type argumentTy = ty(argument);
+                const Symbol* named = !node.args.empty() && node.args[0].type == NODE_IDENTIFIER
+                    ? lookup(node.args[0].value) : nullptr;
+                if (argument != "<error>" && ((named && named->isDynArray) ||
+                    !(argumentTy.isNumeric() || argumentTy.isStr() || argument == "bool" || argument == "char")))
+                    error(node.args[0], "str: значение типа '" + typeName(argument) + "' в строку не преобразуется");
+                return "str";
+            }
             if (node.varName == "replace") return "ptr";
             if (node.varName == "sqrt" || node.varName == "pow" ||
                 node.varName == "floor" || node.varName == "ceil" || node.varName == "round") {
