@@ -684,8 +684,9 @@ expect_runtime_error() {
         cat "$work/error.log" >&2
         exit 1
     fi
-    if ! grep -Fq "$expected" "$work/error.log" &&
-       ! grep -Fq "$expected" "$work/output.log"; then
+    # Диагностика выполнения — только в stderr (D-007).
+    if ! grep -Fq "$expected" "$work/error.log" ||
+       grep -Fq "SC runtime error" "$work/output.log"; then
         echo "FAIL: runtime error '$name' missed expected diagnostic" >&2
         cat "$work/output.log" "$work/error.log" >&2
         exit 1
@@ -847,6 +848,15 @@ printf '%s\n' 'ptr values = new int[2];' 'values.push(7);' 'let i: int = 3;' 'pr
 expect_runtime_error "static-array-read-oob" "$RUNTIME_DIR/static_read.svx" "array index out of bounds at line 3, column 7"
 expect_runtime_error "static-array-write-oob" "$RUNTIME_DIR/static_write.svx" "array index out of bounds at line 3, column 1"
 expect_runtime_error "dynamic-array-read-oob" "$RUNTIME_DIR/dynamic_read.svx" "array index out of bounds at line 4, column 7"
+# D-007: обычный вывод программы — в stdout, диагностика выполнения — только в stderr.
+printf '%s\n' 'print("before");' 'int[] values = [1];' 'let i: int = 2;' 'print(values[i]);' > "$RUNTIME_DIR/stderr_split.svx"
+expect_runtime_error "runtime-error-stderr" "$RUNTIME_DIR/stderr_split.svx" "SC runtime error: array index out of bounds at line 4, column 7"
+if [[ "$(cat "$TMP_DIR/runtime-error-runtime-error-stderr/output.log")" != "before" ]]; then
+    echo "FAIL: stdout before a runtime error must be exactly the program output" >&2
+    cat "$TMP_DIR/runtime-error-runtime-error-stderr/output.log" >&2
+    exit 1
+fi
+echo "PASS: runtime error goes to stderr, stdout keeps program output"
 
 # Программа из строки: компилируется, запускается, вывод совпадает с ожидаемым.
 expect_program_output() {
@@ -1293,7 +1303,8 @@ expect_runtime_error "input-int-garbage" "$RUNTIME_DIR/input_int.svx" "SC runtim
 expect_runtime_error "input-int-trailing" "$RUNTIME_DIR/input_int.svx" "invalid integer input" $'12abc\n'
 expect_runtime_error "input-int-overflow" "$RUNTIME_DIR/input_int.svx" "integer input out of range" $'99999999999999\n'
 expect_runtime_error "input-int-eof" "$RUNTIME_DIR/input_int.svx" "unexpected end of input" ''
-expect_program_output "file-read-lines" $'file o = open("input-lines.tmp", "w");\nwrite(o, "line one\\nline two");\nclose(o);\nfile i = open("input-lines.tmp", "r");\nprint(read(i));\nprint(read(i));\nprint(len(read(i)));\nclose(i);' $'line one\nline two\n0'
+lines_file="$TMP_DIR/input-lines.tmp"
+expect_program_output "file-read-lines" "file o = open(\"$lines_file\", \"w\");"$'\nwrite(o, "line one\\nline two");\nclose(o);\n'"file i = open(\"$lines_file\", \"r\");"$'\nprint(read(i));\nprint(read(i));\nprint(len(read(i)));\nclose(i);' $'line one\nline two\n0'
 
 # Каждый пример из docs/spec.md компилируется, запускается и даёт указанный вывод.
 bash tests/spec-examples.sh

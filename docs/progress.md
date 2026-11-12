@@ -256,3 +256,8 @@
 - Служебные слоты — в начале функции (`entryAlloca`), чтобы ввод в цикле не растил стек.
 - Тесты: `input-line-whole`, `input-line-crlf`, `input-line-long` (100000 символов), `input-str-eof-empty`, `input-int-garbage`/`-trailing`/`-overflow`/`-eof`, `file-read-lines`; `memory-safety file-roundtrip-eof` обновлён (`read` больше не возвращает `\n`).
 - AGENTS.md: правило про кредиты (порог 1000, письмо — `docs/handoff.md` целиком).
+
+## `SC runtime error` — в stderr (D-007)
+- Было: диагностика выполнения печаталась в stdout (`puts`/`printf`) и смешивалась с выводом программы.
+- Стало: одна точка `emitRuntimeFailureIf` печатает через `dprintf(2, …)`; проверка границ массива больше не дублирует её своим `puts`.
+- Тесты: `expect_runtime_error` и `tests/memory-safety.sh` (режим runtime) теперь требуют сообщение в stderr и его отсутствие в stdout; новый `runtime-error-stderr` (stdout ровно `before`). `file-read-lines` пишет временный файл в `$TMP_DIR`, а не в корень репозитория.

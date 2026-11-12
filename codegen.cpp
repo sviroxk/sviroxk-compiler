@@ -67,6 +67,7 @@ llvm::Function* CodeGen::runtimeFunction(const std::string& name) {
     const std::map<std::string, Signature> table = {
         {"puts",    {i32, {ptr}, false}},
         {"printf",  {i32, {ptr}, true}},
+        {"dprintf", {i32, {i32, ptr}, true}},
         {"scanf",   {i32, {ptr}, true}},
         {"abort",   {voidTy, {}, false}},
         {"exit",    {voidTy, {i32}, false}},
@@ -239,10 +240,13 @@ void CodeGen::emitRuntimeFailureIf(llvm::Value* failed, const std::string& messa
     builder.SetInsertPoint(fail);
     const std::string text = "SC runtime error: " + message + " at line " +
         std::to_string(location.line) + ", column " + std::to_string(location.column);
+    // Диагностика — в stderr (D-007), stdout программы остаётся чистым.
+    llvm::Function* report = runtimeFunction("dprintf");
+    llvm::Value* stderrFd = builder.getInt32(2);
     if (detail)
-        builder.CreateCall(printfFunc, {getStringPtr(text + "\n"), detail});
+        builder.CreateCall(report, {stderrFd, getStringPtr(text + "\n"), detail});
     else
-        builder.CreateCall(putsFunc, {getStringPtr(text)});
+        builder.CreateCall(report, {stderrFd, getStringPtr("%s\n"), getStringPtr(text)});
     builder.CreateCall(runtimeFunction("exit"), {builder.getInt32(1)});
     builder.CreateUnreachable();
     builder.SetInsertPoint(ok);
@@ -395,19 +399,7 @@ void CodeGen::emitArrayBoundsCheck(llvm::Value* index, llvm::Value* length,
         : builder.CreateICmpSGE(index, builder.getInt64(0));
     llvm::Value* belowLength = builder.CreateICmpULT(index, length);
     llvm::Value* inBounds = builder.CreateAnd(nonNegative, belowLength);
-    llvm::Function* function = builder.GetInsertBlock()->getParent();
-    llvm::BasicBlock* valid = llvm::BasicBlock::Create(context, "index_valid", function);
-    llvm::BasicBlock* invalid = llvm::BasicBlock::Create(context, "index_invalid", function);
-    builder.CreateCondBr(inBounds, valid, invalid);
-
-    builder.SetInsertPoint(invalid);
-    const std::string message = "SC runtime error: array index out of bounds at line " +
-        std::to_string(location.line) + ", column " + std::to_string(location.column);
-    builder.CreateCall(putsFunc, {getStringPtr(message)});
-    llvm::Function* exitF = runtimeFunction("exit");
-    builder.CreateCall(exitF, {builder.getInt32(1)});
-    builder.CreateUnreachable();
-    builder.SetInsertPoint(valid);
+    emitRuntimeFailureIf(builder.CreateNot(inBounds), "array index out of bounds", location);
 }
 
 llvm::StructType* CodeGen::dynArrayType() {

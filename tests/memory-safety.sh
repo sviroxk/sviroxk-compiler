@@ -35,8 +35,10 @@ check_case() {
                 exit 1
             fi ;;
         runtime)
-            if (( status != 1 )) || [[ -s "$work/stderr.txt" ]] ||
-               ! grep -Fq "$expected" "$work/stdout.txt"; then
+            # SC diagnostic goes to stderr (D-007); any sanitizer report there is a failure.
+            if (( status != 1 )) || grep -q "Sanitizer" "$work/stderr.txt" ||
+               ! grep -Fq "$expected" "$work/stderr.txt" ||
+               grep -Fq "SC runtime error" "$work/stdout.txt"; then
                 echo "FAIL: memory safety '$name': expected SC runtime diagnostic, not an ASan fault (status $status)" >&2
                 cat "$work/stdout.txt" "$work/stderr.txt" >&2
                 exit 1
