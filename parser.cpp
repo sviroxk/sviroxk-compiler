@@ -473,7 +473,8 @@ Node parseUnary() {
     }
     if (peek().type == MINUS) {
         Token minus = consume();
-        if (peek().type == NUMBER) {
+        // Литерал сворачивается в отрицательное число, кроме -a ** b: это -(a ** b).
+        if (peek().type == NUMBER && peek(1).type != POWER) {
             Token num = consume();
             Node n;
             n.type = NODE_NUMBER;
@@ -492,7 +493,7 @@ Node parseUnary() {
         n.left = makeNode();
         n.left->type = NODE_NUMBER;
         n.left->value = "0";
-        n.right = makeNode(parseUnary());
+        n.right = makeNode(parsePower());
         return n;
     }
     return parsePrimary();

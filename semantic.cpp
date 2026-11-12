@@ -1,3 +1,5 @@
+#include <optional>
+#include <cctype>
 #include "semantic.h"
 #include "diagnostics.h"
 #include "type.h"
@@ -533,8 +535,11 @@ private:
                   typeName(trueType) + "' и '" + typeName(falseType) + "'");
             return "<error>";
         }
-        case NODE_BINOP:
-            return binary(node);
+        case NODE_BINOP: {
+            const std::string result = binary(node);
+            if (result != "<error>") checkConstantArithmetic(node, result);
+            return result;
+        }
         case NODE_FUNC_CALL:
             return call(node);
         case NODE_ARRAY_PUSH: {
@@ -619,6 +624,112 @@ private:
         if (floatingLiteral && targetTy.isInteger()) return false;
         if (targetTy.isInteger() && targetTy.width < 32) return false;
         return targetTy.fitsLiteral(node.value);
+    }
+
+    // Значение целочисленного константного выражения (литералы и + - * / // % **).
+    static std::optional<__int128> constantInteger(const Node& node) {
+        if (node.type == NODE_NUMBER) {
+            if (node.value.find_first_of(".eE") != std::string::npos &&
+                node.value.rfind("0x", 0) != 0 && node.value.rfind("-0x", 0) != 0) return std::nullopt;
+            std::string text;
+            for (char c : node.value) if (c != '_') text += c;
+            bool negative = false;
+            size_t i = 0;
+            if (i < text.size() && (text[i] == '-' || text[i] == '+')) negative = text[i++] == '-';
+            unsigned base = 10;
+            if (text.size() > i + 1 && text[i] == '0' && (text[i + 1] == 'x' || text[i + 1] == 'X')) { base = 16; i += 2; }
+            else if (text.size() > i + 1 && text[i] == '0' && (text[i + 1] == 'b' || text[i + 1] == 'B')) { base = 2; i += 2; }
+            else if (text.size() > i + 1 && text[i] == '0' && (text[i + 1] == 'o' || text[i + 1] == 'O')) { base = 8; i += 2; }
+            if (i >= text.size()) return std::nullopt;
+            __int128 value = 0;
+            for (; i < text.size(); ++i) {
+                const char c = static_cast<char>(std::tolower(static_cast<unsigned char>(text[i])));
+                unsigned digit;
+                if (c >= '0' && c <= '9') digit = static_cast<unsigned>(c - '0');
+                else if (c >= 'a' && c <= 'f') digit = static_cast<unsigned>(c - 'a' + 10);
+                else return std::nullopt;  // суффиксы и прочее — не константа
+                if (digit >= base) return std::nullopt;
+                value = value * base + digit;
+                if (value > (static_cast<__int128>(1) << 65)) return std::nullopt;
+            }
+            return negative ? -value : value;
+        }
+        if (node.type != NODE_BINOP || !node.left || !node.right) return std::nullopt;
+        const auto left = constantInteger(*node.left);
+        const auto right = constantInteger(*node.right);
+        if (!left || !right) return std::nullopt;
+        const __int128 limit = static_cast<__int128>(1) << 65;
+        auto bounded = [&](__int128 v) -> std::optional<__int128> {
+            if (v > limit || v < -limit) return std::nullopt;
+            return v;
+        };
+        if (node.op == "+") return bounded(*left + *right);
+        if (node.op == "-") return bounded(*left - *right);
+        if (node.op == "*") {
+            if ((*left > limit / 4 || *left < -limit / 4) && *right != 0 && *right != 1 && *right != -1) return std::nullopt;
+            if ((*right > limit / 4 || *right < -limit / 4) && *left != 0 && *left != 1 && *left != -1) return std::nullopt;
+            if (*left != 0 && (*left * *right) / *left != *right) return std::nullopt;
+            return bounded(*left * *right);
+        }
+        if (node.op == "/" || node.op == "//") { if (*right == 0) return std::nullopt; return *left / *right; }
+        if (node.op == "%") { if (*right == 0) return std::nullopt; return *left % *right; }
+        if (node.op == "**") {
+            if (*right < 0) {  // целая степень с отрицательным показателем усекается к нулю
+                if (*left == 1) return 1;
+                if (*left == -1) return (*right % 2 == 0) ? 1 : -1;
+                if (*left == 0) return std::nullopt;
+                return 0;
+            }
+            if (*right > 200) return std::nullopt;
+            __int128 v = 1;
+            for (__int128 k = 0; k < *right; ++k) {
+                v *= *left;
+                if (v > limit || v < -limit) return std::nullopt;
+            }
+            return v;
+        }
+        return std::nullopt;
+    }
+
+    static std::string int128ToString(__int128 v) {
+        if (v == 0) return "0";
+        const bool negative = v < 0;
+        std::string digits;
+        while (v != 0) {
+            int d = static_cast<int>(v % 10);
+            digits += static_cast<char>('0' + (d < 0 ? -d : d));
+            v /= 10;
+        }
+        if (negative) digits += '-';
+        return std::string(digits.rbegin(), digits.rend());
+    }
+
+    // Целочисленная политика: деление на константный ноль и константы вне типа — ошибки компиляции.
+    void checkConstantArithmetic(const Node& node, const std::string& resultType) const {
+        const sc::Type result = ty(resultType);
+        if (!result.isInteger() || !node.right) return;
+        const bool division = node.op == "/" || node.op == "//" || node.op == "%";
+        if (division) {
+            const auto divisor = constantInteger(*node.right);
+            if (divisor && *divisor == 0) {
+                error(*node.right, "деление на ноль");
+                return;
+            }
+        }
+        if (!division && node.op != "+" && node.op != "-" && node.op != "*" && node.op != "**") return;
+        const auto left = constantInteger(*node.left);
+        const auto right = constantInteger(*node.right);
+        if (!left || !right) return;
+        const unsigned width = result.width < 32 ? 32 : result.width;
+        const __int128 low = result.isUnsigned() ? 0 : -(static_cast<__int128>(1) << (width - 1));
+        const __int128 high = result.isUnsigned() ? (static_cast<__int128>(1) << width) - 1
+                                                  : (static_cast<__int128>(1) << (width - 1)) - 1;
+        if (*left < low || *left > high || *right < low || *right > high) return;  // уже сообщено ниже по дереву
+        const auto value = constantInteger(node);
+        if (!value || *value < low || *value > high)
+            error(node, "переполнение: значение константного выражения " +
+                  (value ? int128ToString(*value) + " " : std::string()) +
+                  "не помещается в тип '" + typeName(resultType) + "'");
     }
 
     std::string binary(const Node& node) {

@@ -948,6 +948,27 @@ expect_program_output "defer-after-return-call" $'fn int g() { print(1); return 
 expect_program_output "defer-assign-after-return-value" $'fn int f() { ptr v = nw rox[1]; v[0] = 4; defer v[0] = 100; return v[0]; }\nprint(f());' '4'
 expect_program_output "defer-struct-param-return" $'tip P { int x = 0; }\nfn int f(tip P value) { defer value.x = 100; return value.x; }\nsvi tip P lor p = { x = 3; };\nprint(f(p));\nprint(p.x);' $'3\n3'
 
+# Целые (шаг 5а): деление на ноль, сдвиги, переполнение — ошибка, а не молчаливая порча значения.
+int_runtime() { printf '%s' "$2" > "$RUNTIME_DIR/int_$1.svx"; expect_runtime_error "int-$1" "$RUNTIME_DIR/int_$1.svx" "$3"; }
+int_runtime div-zero $'int a = 5;\nint b = 0;\nprint(a / b);' "division by zero at line 3, column 9"
+int_runtime rem-zero $'int a = 5;\nint b = 0;\nprint(a % b);' "division by zero at line 3, column 9"
+int_runtime min-div-minus-one $'int a = -2147483647 - 1;\nint b = -1;\nprint(a / b);' "integer overflow at line 3, column 9"
+int_runtime shift-range $'int a = 1;\nint s = 40;\nprint(a << s);' "shift amount out of range at line 3, column 9"
+int_runtime add-overflow $'int a = 2147483647;\nprint(a + 1);' "integer overflow at line 2, column 9"
+int_runtime sub-overflow $'int a = -2147483647;\nprint(a - 2);' "integer overflow at line 2, column 9"
+int_runtime mul-overflow-i64 $'i64 a = 4611686018427387904;\nprint(a * 2);' "integer overflow at line 2, column 9"
+int_runtime unsigned-underflow $'u32 a = 0;\nprint(a - 1);' "integer overflow at line 2, column 9"
+int_runtime negate-min $'int a = -2147483647 - 1;\nprint(-a);' "integer overflow at line 2, column 7"
+int_runtime pow-overflow $'int a = 2;\nprint(a ** 40);' "integer overflow at line 2, column 9"
+expect_program_output "int-checked-ok" $'int a = 7;\nint b = -2;\nprint(a / b);\nprint(a % b);\nint s = 4;\nprint(1 << s);\nint m = 2147483646;\nprint(m + 1);\nint x = 3;\nprint(2 ** 10);\nprint(x * x - 10);' $'-3\n1\n16\n2147483647\n1024\n-1'
+expect_program_output "neg-power-precedence" $'print(-2 ** 2);\nint x = 3;\nprint(-x ** 2);\nprint(2 ** -1 + 1);' $'-4\n-9\n1'
+expect_compile_error "int-const-div-zero" $'int a = 5;\nprint(a / 0);' 'деление на ноль'
+expect_compile_error "int-const-rem-zero" $'int a = 5;\nprint(a % 0);' 'деление на ноль'
+expect_compile_error "int-const-shift" $'int a = 1;\nprint(a << 40);' 'счётчик сдвига должен быть меньше ширины левого операнда'
+expect_compile_error "int-const-add-overflow" 'print(2147483647 + 1);' "переполнение: значение константного выражения 2147483648 не помещается в тип 'int/i32'"
+expect_compile_error "int-const-mul-overflow" 'print(65536 * 65536);' "переполнение: значение константного выражения 4294967296"
+expect_compile_error "int-const-pow-overflow" 'print(2 ** 40);' "переполнение: значение константного выражения 1099511627776"
+
 # Step 4b: PR22 struct parameters are aggregate copies, not aliases.
 expect_program_output "struct-by-value-copy" "$(cat examples/struct_by_value.svx)" $'17\n3\n4\n3'
 expect_program_output "struct-by-value-nested" $'tip Inner { int x = 2; }\ntip Outer { tip Inner inner = { x = 7; }; int y = 3; }\nfn int change(tip Outer value) { svi tip Inner lor replacement = { x = 9; }; value.inner = replacement; return value.inner.x + value.y; }\nsvi tip Outer lor original = { inner = { x = 5; }; y = 4; };\nprint(change(original)); print(original.inner.x);' $'13\n5'
