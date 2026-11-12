@@ -26,6 +26,9 @@ for ((i = 0; i < ${#LLVM_CXXFLAG_ARRAY[@]}; ++i)); do
         LLVM_COMPILE_FLAGS+=("$flag")
     fi
 done
+# Our code is C++20 whatever -std= llvm-config reports (LLVM 18–21 say c++17);
+# this flag comes after the llvm-config flags, so it wins.
+LLVM_COMPILE_FLAGS+=("-std=c++20")
 
 for source in main lexer parser type semantic codegen; do
     "$CXX" -c "$source.cpp" "${LLVM_COMPILE_FLAGS[@]}" \
