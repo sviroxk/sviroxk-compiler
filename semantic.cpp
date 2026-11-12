@@ -213,6 +213,12 @@ private:
                   "', записать значение типа '" + typeName(value) + "' нельзя" + castHint(element, value));
     }
 
+    // const защищает и содержимое массива: элементы и push/pop/resize (раньше не защищал).
+    void rejectConstArray(const Node& node, const Symbol* array) const {
+        if (array && array->isConst)
+            error(node, "нельзя изменять константный массив '" + node.varName + "'");
+    }
+
     bool compatible(const std::string& expectedRaw, const std::string& actualRaw) const {
         const sc::Type expected = sc::Type::from(expectedRaw);
         const sc::Type actual = sc::Type::from(actualRaw);
@@ -616,6 +622,7 @@ private:
             return call(node);
         case NODE_ARRAY_PUSH: {
             const Symbol* array = use(node, node.varName);
+            rejectConstArray(node, array);
             if (!array) {
                 error(node, "неизвестный массив '" + node.varName + "'");
                 for (const Node& arg : node.args) expression(arg);
@@ -636,6 +643,7 @@ private:
         }
         case NODE_ARRAY_POP: {
             const Symbol* array = use(node, node.varName);
+            rejectConstArray(node, array);
             if (!array) {
                 error(node, "неизвестный массив '" + node.varName + "'");
                 return "void";
@@ -648,6 +656,7 @@ private:
         }
         case NODE_ARRAY_RESIZE: {
             const Symbol* array = use(node, node.varName);
+            rejectConstArray(node, array);
             if (!array) {
                 error(node, "неизвестный массив '" + node.varName + "'");
                 for (const Node& arg : node.args) expression(arg);
@@ -1301,7 +1310,7 @@ private:
             sym.ty = arrayType;
             sym.line = node.line;
             sym.column = node.column;
-            sym.isConst = false;
+            sym.isConst = node.isConst;  // const a: int[] = [...] — раньше константность терялась
             sym.isInitialized = true;
             sym.isDynArray = false;
             scope[node.varName] = sym;
@@ -1503,6 +1512,7 @@ private:
         }
         case NODE_ARRAY_ASSIGN: {
             const Symbol* array = use(node, node.varName);
+            rejectConstArray(node, array);
             if (!array) error(node, "неизвестный массив '" + node.varName + "'");
             // Definite assignment: array must be initialized before element assignment
             if (array) checkInitialized(node, node.varName);
@@ -1749,6 +1759,7 @@ private:
         }
         case NODE_ARRAY_PUSH: {
             const Symbol* array = use(node, node.varName);
+            rejectConstArray(node, array);
             if (!array) {
                 error(node, "неизвестный массив '" + node.varName + "'");
                 if (!node.args.empty()) expression(node.args[0]);
@@ -1770,12 +1781,14 @@ private:
         }
         case NODE_ARRAY_POP: {
             const Symbol* array = use(node, node.varName);
+            rejectConstArray(node, array);
             if (!array) error(node, "неизвестный массив '" + node.varName + "'");
             else if (!array->isDynArray) error(node, "pop поддерживается только для динамических массивов");
             break;
         }
         case NODE_ARRAY_RESIZE: {
             const Symbol* array = use(node, node.varName);
+            rejectConstArray(node, array);
             if (!array) {
                 error(node, "неизвестный массив '" + node.varName + "'");
                 if (!node.args.empty()) expression(node.args[0]);
