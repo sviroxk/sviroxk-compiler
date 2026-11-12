@@ -331,7 +331,23 @@ private:
         }
     }
 
+    // Бинарный оператор проверяется отдельно от остальных узлов: цепочка `a + b + …`
+    // рекурсивно проходит только expression → binaryExpression → binary, а большой
+    // кадр otherExpression в неё не попадает (предел длины выражения, spec §1).
     std::string expression(const Node& node) {
+        if (node.type == NODE_BINOP) return binaryExpression(node);
+        return otherExpression(node);
+    }
+
+    [[gnu::noinline]] std::string binaryExpression(const Node& node) {
+        // Левый операнд проверяется здесь, а не в binary: её кадр большой.
+        std::string left = expression(*node.left);
+        const std::string result = binary(node, std::move(left));
+        if (result != "<error>") checkConstantArithmetic(node, result);
+        return result;
+    }
+
+    [[gnu::noinline]] std::string otherExpression(const Node& node) {
         switch (node.type) {
         case NODE_NUMBER: {
             const bool floatingLiteral = node.value.find_first_of(".eE") != std::string::npos;
@@ -566,11 +582,8 @@ private:
                   typeName(trueType) + "' и '" + typeName(falseType) + "'");
             return "<error>";
         }
-        case NODE_BINOP: {
-            const std::string result = binary(node);
-            if (result != "<error>") checkConstantArithmetic(node, result);
-            return result;
-        }
+        case NODE_BINOP:
+            return binaryExpression(node);
         case NODE_FUNC_CALL:
             return call(node);
         case NODE_ARRAY_PUSH: {
@@ -828,8 +841,7 @@ private:
         return "";
     }
 
-    std::string binary(const Node& node) {
-        std::string left = expression(*node.left);
+    [[gnu::noinline]] std::string binary(const Node& node, std::string left) {
         if (node.op == "!") {
             if (left == "<error>") return "<error>";
             if (left != "bool" && !ty(left).isInteger())

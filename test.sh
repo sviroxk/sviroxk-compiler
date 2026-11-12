@@ -1012,13 +1012,29 @@ expect_compile_error "ternary-chain-100000" "int x = $(printf '1 ? 1 : %.0s' $(s
 
 # Цепочка из 10000 операторов: линейное время (было O(n²): 10000 слагаемых ≈ 29 с), 10001 — ошибка, не segfault.
 long_sum="1$(printf ' + 1%.0s' $(seq 10000))"
-start_seconds=$SECONDS
 expect_program_output "sum-10000-operators" "int x = ${long_sum};"$'\nprint(x);' '10001'
-if (( SECONDS - start_seconds > 20 )); then
-    echo "FAIL: 10000-operator sum took $((SECONDS - start_seconds)) s (expected linear time)" >&2
+# Время меряется только у ./sc: llc 23 сам по себе тратит на эти 130000 строк IR ~8 с.
+printf 'int x = %s;\nprint(x);\n' "$long_sum" > "$TMP_DIR/sum-10000.svx"
+start_ms=$(date +%s%N)
+timeout --signal=TERM 60s ./sc "$TMP_DIR/sum-10000.svx" > /dev/null
+compile_seconds=$(( ($(date +%s%N) - start_ms) / 1000000000 ))
+if (( compile_seconds > 20 )); then
+    echo "FAIL: 10000-operator sum took ${compile_seconds} s to compile (expected linear time)" >&2
     exit 1
 fi
-expect_compile_error "sum-10001-operators" "int x = ${long_sum} + 1;" "слишком длинное выражение: больше 10000 операторов в одной инструкции"
+# Граница предела длины выражения: ровно 250000 операторов компилируется (без llc и запуска —
+# под ASan это ~2 мин), 250001 — ошибка, а не переполнение стека.
+limit_sum="1$(printf ' + 1%.0s' $(seq 250000))"
+printf 'int x = %s;\nprint(x);\n' "$limit_sum" > "$TMP_DIR/sum-250000.svx"
+if (ulimit -c 0; timeout --signal=TERM 600s ./sc "$TMP_DIR/sum-250000.svx" >"$TMP_DIR/sum-250000.ll" 2>"$TMP_DIR/sum-250000.err") \
+        && grep -q 'define' "$TMP_DIR/sum-250000.ll"; then
+    echo "PASS: program 'sum-250000-operators' compiled"
+else
+    echo "FAIL: 250000-operator sum did not compile" >&2
+    head -5 "$TMP_DIR/sum-250000.err" >&2
+    exit 1
+fi
+expect_compile_error "sum-250001-operators" "int x = ${limit_sum} + 1;" "слишком длинное выражение: больше 250000 операторов в одной инструкции"
 expect_program_output "sum-two-long-statements" "int x = ${long_sum};"$'\n'"int y = ${long_sum};"$'\nprint(x + y);' '20002'
 expect_program_output "sum-2000-terms" "int x = 1$(printf ' + 1%.0s' $(seq 1999));"$'\nprint(x);' '2000'
 elif_chain=$(for i in $(seq 0 999); do printf ' else if (x == %d) { print(%d); }' "$i" "$i"; done)

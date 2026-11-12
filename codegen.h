@@ -111,6 +111,11 @@ public:
     void initStructLiteral(llvm::Value* storage, llvm::StructType* aggregateType,
                            const std::string& structName, const Node& literal);
     llvm::Value* genExpr(const Node& node);
+    // Не встраиваются: иначе большой кадр genOtherExpr попадёт в каждый уровень
+    // рекурсии по цепочке операторов (предел длины выражения, spec §1).
+    [[gnu::noinline]] llvm::Value* genBinary(const Node& node, llvm::Value* left);
+    [[gnu::noinline]] llvm::Value* genOtherExpr(const Node& node);
+    [[gnu::noinline]] llvm::Value* genCallExpr(const Node& node);
     void genNode(const Node& node);
     void generate(const Node& program);
     bool verify(std::string& diagnostic) const;
