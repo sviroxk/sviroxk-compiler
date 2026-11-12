@@ -1770,6 +1770,10 @@ void CodeGen::genNode(const Node& node) {
             sf.name = field.varName;
             if (field.left) {
                 sf.defaultVal = *field.left;
+            } else if (sc::Type::from(field.varType).isStruct()) {
+                // Вложенная структура без значения: пустой литерал — поля получают
+                // свои значения по умолчанию (раньше весь вложенный объект был нулями).
+                sf.defaultVal.type = NODE_STRUCT_LITERAL;
             } else {
                 // Field has no default value: use a zero literal as a neutral
                 // placeholder so initStructLiteral can still fill it in.
