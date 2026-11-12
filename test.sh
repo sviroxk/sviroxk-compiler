@@ -971,6 +971,9 @@ expect_compile_error "ptr-index-assign-float" $'int x = 1;\nptr p = &x;\np[0] = 
 expect_compile_error "ptr-retarget-other-type" $'int x = 1;\nf64 y = 2.0;\nptr p = &x;\np = &y;' "присвоить ему адрес значения типа 'double/f64' нельзя"
 expect_compile_error "ptr-assign-other-pointee" $'int x = 1;\nf64 y = 2.0;\nptr p = &x;\nptr q = &y;\np = q;' "присвоить ему адрес значения типа 'double/f64' нельзя"
 expect_program_output "ptr-typed-access" $'i64 x = 5000000000;\nptr p = &x;\nprint(p[0]);\np[0] = 6000000000;\nprint(x);\nint a = 1;\nint b = 2;\nptr q = &a;\nq = &b;\n*q = 7;\nprint(b);\nf64 d = 1.5;\nptr r = &d;\n*r = 2;\nprint(d);' $'5000000000\n6000000000\n7\n2.000000'
+expect_compile_error "max-signed-unsigned" $'u32 a = 5;\nint b = -1;\nprint(max(a, b));' "max: нельзя смешивать signed- и unsigned-типы"
+expect_compile_error "min-signed-unsigned" $'u8 a = 5;\ni64 b = -1;\nprint(min(b, a));' "min: нельзя смешивать signed- и unsigned-типы"
+expect_program_output "max-unsigned-literal" $'u32 a = 5;\nprint(max(a, 3));\nprint(min(7, a));\nint b = -1;\nprint(max((int) a, b));' $'5\n5\n5'
 expect_program_output "defer-return-in-loop" $'fn int run() { defer print(9); for i in 0..3 { defer print(i); if (i == 1) { return 7; } } return 0; }\nprint(run());' $'0\n1\n9\n7'
 expect_program_output "defer-loop-forms" $'int n = 0; while (n < 2) { n = n + 1; defer print(n); }\nrepeat (2) { defer print(3); }\nwhile (n < 3) { n = n + 1; defer print(n); }\nfor i in 4..6 { defer print(i); }\nint[] values = [6, 7]; for item in values { defer print(item); }' $'1\n2\n3\n3\n3\n4\n5\n6\n7'
 expect_program_output "defer-break-continue" $'defer print(9); for i in 0..4 { defer print(i); if (i == 0) { continue; } if (i == 2) { break; } print(8); }' $'0\n8\n1\n2\n9'
