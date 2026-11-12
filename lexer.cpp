@@ -202,6 +202,18 @@ std::vector<Token> tokenize(std::string_view code, const std::string& filename) 
         if (isdigit(static_cast<unsigned char>(code[i]))) {
             std::string num;
             bool malformed = false;
+            // Разделитель `_` между цифрами (spec §3: `1_000`, как в Rust): пропускается.
+            auto digitAt = [&](int at, bool hex, bool binary) {
+                if (at >= static_cast<int>(code.size())) return false;
+                const unsigned char ch = static_cast<unsigned char>(code[at]);
+                return hex ? isxdigit(ch) != 0 : binary ? (ch == '0' || ch == '1') : isdigit(ch) != 0;
+            };
+            auto skipSeparator = [&](bool hex, bool binary) {
+                if (i > 0 && code[i] == '_' && digitAt(i - 1, hex, binary) && digitAt(i + 1, hex, binary)) {
+                    ++i;
+                    ++column;
+                }
+            };
             if (code[i] == '0' && i + 1 < static_cast<int>(code.size()) &&
                 (code[i + 1] == 'x' || code[i + 1] == 'X' || code[i + 1] == 'b' || code[i + 1] == 'B')) {
                 const char prefix = static_cast<char>(tolower(static_cast<unsigned char>(code[i + 1])));
@@ -209,6 +221,7 @@ std::vector<Token> tokenize(std::string_view code, const std::string& filename) 
                 num += code[i++]; ++column;
                 const int digitsStart = i;
                 while (i < static_cast<int>(code.size())) {
+                    if (i > digitsStart) skipSeparator(prefix == 'x', prefix == 'b');
                     const unsigned char ch = static_cast<unsigned char>(code[i]);
                     const bool valid = prefix == 'x' ? isxdigit(ch) : (ch == '0' || ch == '1');
                     if (!valid) break;
@@ -234,6 +247,7 @@ std::vector<Token> tokenize(std::string_view code, const std::string& filename) 
                    isdigit(static_cast<unsigned char>(code[i]))) {
                 num += code[i++];
                 ++column;
+                if (i < static_cast<int>(code.size())) skipSeparator(false, false);
             }
             if (i + 1 < static_cast<int>(code.size()) && code[i] == '.' && code[i + 1] == '.') {
                 add(NUMBER, num, tokLine, tokCol);
@@ -259,6 +273,7 @@ std::vector<Token> tokenize(std::string_view code, const std::string& filename) 
                        isdigit(static_cast<unsigned char>(code[i]))) {
                     num += code[i++];
                     ++column;
+                    if (i < static_cast<int>(code.size())) skipSeparator(false, false);
                 }
             }
             if (i < static_cast<int>(code.size()) && (code[i] == 'e' || code[i] == 'E')) {
@@ -274,6 +289,7 @@ std::vector<Token> tokenize(std::string_view code, const std::string& filename) 
                        isdigit(static_cast<unsigned char>(code[i]))) {
                     num += code[i++];
                     ++column;
+                    if (i < static_cast<int>(code.size())) skipSeparator(false, false);
                 }
             }
             if (i < static_cast<int>(code.size()) && code[i] == '.') {

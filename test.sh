@@ -990,6 +990,8 @@ expect_compile_error "const-dyn-array-push" $'const p: ptr = new int[1];\np.push
 expect_compile_error "const-dyn-array-pop" $'const p: ptr = new int[1];\nint x = p.pop();' "нельзя изменять константный массив 'p'"
 expect_program_output "const-array-read" $'const a: int[] = [1, 2];\nprint(a[1]);\nprint(a.len());' $'2\n2'
 expect_program_output "char-print-and-compare" $'char c = \'a\';\nprint(c == \'a\');\nprint(c != \'b\');\nprint(c < \'b\');\nprint(\'z\');\nprint((char) 66);\nint x = 1;\nprint(x > 0 ? \'y\' : \'n\');\nchar[] cs = [\'p\', \'q\'];\nprint(cs[1]);\nprint(c + 1);' $'1\n1\n1\nz\nB\ny\nq\n98'
+expect_program_output "digit-separators" $'print(1_000);\nprint(1_000_000 + 1);\nprint(0xFF_FF);\nprint(0b1010_1010);\nprint(1_000.5);\nprint(1e1_0);' $'1000\n1000001\n65535\n170\n1000.500000\n10000000000.000000'
+expect_compile_error "digit-separator-double" 'print(1__000);' "error"
 expect_program_output "defer-return-in-loop" $'fn int run() { defer print(9); for i in 0..3 { defer print(i); if (i == 1) { return 7; } } return 0; }\nprint(run());' $'0\n1\n9\n7'
 expect_program_output "defer-loop-forms" $'int n = 0; while (n < 2) { n = n + 1; defer print(n); }\nrepeat (2) { defer print(3); }\nwhile (n < 3) { n = n + 1; defer print(n); }\nfor i in 4..6 { defer print(i); }\nint[] values = [6, 7]; for item in values { defer print(item); }' $'1\n2\n3\n3\n3\n4\n5\n6\n7'
 expect_program_output "defer-break-continue" $'defer print(9); for i in 0..4 { defer print(i); if (i == 0) { continue; } if (i == 2) { break; } print(8); }' $'0\n8\n1\n2\n9'
