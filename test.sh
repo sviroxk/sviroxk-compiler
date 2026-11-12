@@ -957,6 +957,8 @@ expect_program_output "unsigned-argument-widening" $'fn void g(i64 x) { print(x)
 expect_program_output "repeat-count-widths" $'i64 n = 2;\nrepeat (n) { print(7); }\nu8 m = 200;\nint c = 0;\nrepeat (m) { c += 1; }\nprint(c);\nu64 big = 3;\nrepeat (big) { print(1); }\ni8 neg = -1;\nrepeat (neg) { print(0); }' $'7\n7\n200\n1\n1\n1'
 expect_compile_error "read-not-file" $'int x = 1;\nprint(read(x));' "ожидался file, получен 'int/i32'"
 expect_compile_error "read-string-not-file" $'string s = "a";\nstring t = read(s);' "ожидался file, получен 'str'"
+expect_compile_error "array-assign-whole" $'int[] a = [1, 2];\nint[] b = [3, 4];\na = b;' "массив 'a' нельзя присвоить целиком"
+expect_compile_error "array-assign-scalar" $'int[] a = [1, 2];\na = 5;' "массив 'a' нельзя присвоить целиком"
 expect_program_output "defer-return-in-loop" $'fn int run() { defer print(9); for i in 0..3 { defer print(i); if (i == 1) { return 7; } } return 0; }\nprint(run());' $'0\n1\n9\n7'
 expect_program_output "defer-loop-forms" $'int n = 0; while (n < 2) { n = n + 1; defer print(n); }\nrepeat (2) { defer print(3); }\nwhile (n < 3) { n = n + 1; defer print(n); }\nfor i in 4..6 { defer print(i); }\nint[] values = [6, 7]; for item in values { defer print(item); }' $'1\n2\n3\n3\n3\n4\n5\n6\n7'
 expect_program_output "defer-break-continue" $'defer print(9); for i in 0..4 { defer print(i); if (i == 0) { continue; } if (i == 2) { break; } print(8); }' $'0\n8\n1\n2\n9'

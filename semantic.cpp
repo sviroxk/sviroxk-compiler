@@ -1304,6 +1304,13 @@ private:
                 expression(*node.left);
                 break;
             }
+            // Массив целиком не присваивается (codegen падал на `a = b`): только элементы.
+            if (symbol->ty.isArray()) {
+                error(node, "массив '" + node.varName + "' нельзя присвоить целиком: присваивайте элементы, '" +
+                      node.varName + "[i] = …'");
+                expression(*node.left);
+                break;
+            }
             // Check for struct assignment with owning fields (dyn array, ptr, etc.)
             sc::Type destTy = symbol->ty;
             if (destTy.isStruct() && structs_.contains(destTy.structName)) {
