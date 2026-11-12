@@ -1049,6 +1049,8 @@ expect_compile_error "removed-word-cop" "fn int f() { return 1; } print(cop f())
 expect_compile_error "removed-form-cert-usy" "int n = 0; cert usy (n < 2) { n = n + 1; }" "форма 'cert usy (...)' удалена: пишите 'while (...)'"
 expect_program_output "removed-word-in-string-ok" 'print("fucn slov rox");' 'fucn slov rox'
 expect_program_output "kept-cert-ceh" 'cert ceh (2) { print(1); }' $'1\n1'
+expect_compile_error "dyn-array-argument" $'fn int g(ptr p) { return 1; }\nptr v = nw int[2];\nprint(g(v));' "динамический массив 'v' пока нельзя передать в функцию"
+expect_program_output "print-bool-builtin" $'string s = "a";\nprint(ser(s, "a"));\nprint(ser(s, "b"));' $'1\n0'
 
 # Step 4b: PR22 struct parameters are aggregate copies, not aliases.
 expect_program_output "struct-by-value-copy" "$(cat examples/struct_by_value.svx)" $'17\n3\n4\n3'
@@ -1222,4 +1224,6 @@ else
     echo "SKIP: clang cannot build with -fsanitize=address here; ASan check of compiled programs skipped"
 fi
 
+# Каждый пример из docs/spec.md компилируется, запускается и даёт указанный вывод.
+bash tests/spec-examples.sh
 echo "All compiler tests passed."

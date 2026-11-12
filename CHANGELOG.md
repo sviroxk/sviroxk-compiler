@@ -18,4 +18,4 @@
 
 - Добавлены short-circuit `&&`/`||`, bounds checks статических массивов, source-based math helpers.
 - Семантическая проверка фиксированных scalar types, numeric literals и явных numeric casts.
-- Текущие известные ограничения перечисляются в `STATUS.md`.
+- Текущие известные ограничения перечисляются в `docs/spec.md` (раздел 17).

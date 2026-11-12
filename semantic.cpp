@@ -985,6 +985,14 @@ private:
         }
         size_t count = std::min(node.args.size(), function->second.parameters.size());
         for (size_t i = 0; i < node.args.size(); ++i) {
+            if (node.args[i].type == NODE_IDENTIFIER) {
+                const Symbol* argument = lookup(node.args[i].value);
+                if (argument && argument->isDynArray) {
+                    error(node.args[i], "динамический массив '" + node.args[i].value +
+                          "' пока нельзя передать в функцию (параметр ptr не знает длину массива)");
+                    continue;
+                }
+            }
             std::string actual = expression(node.args[i]);
             const std::string expectedType = i < count
                 ? normalize(function->second.parameters[i]) : std::string();
