@@ -72,6 +72,7 @@ constexpr std::pair<std::string_view, TokenType> kKeywords[] = {
     {"ceh", CEH},
     {"usy", USY},
     {"fn", FUCN},
+    {"div", INTEGER_DIV},  // целочисленное деление с округлением вниз (D-010)
     {"return", REV},
     {"print", SLOV},
     {"fucn", FUCN},
@@ -144,17 +145,12 @@ std::vector<Token> tokenize(std::string_view code, const std::string& filename) 
             continue;
         }
         if (code[i] == '/' && i + 1 < (int)code.size() && code[i + 1] == '/') {
-            const TokenType previous = tokens.empty() ? END : tokens.back().type;
-            const bool followsExpression = previous == NUMBER || previous == CHAR_LITERAL ||
-                previous == IDENTIFIER || previous == RPAREN || previous == RBRACKET ||
-                previous == TRUE_T || previous == FALSE_T;
-            if (!followsExpression) {
-                while (i < (int)code.size() && code[i] != '\n') {
-                    ++i;
-                    ++column;
-                }
-                continue;
+            // `//` — всегда комментарий до конца строки (D-010); деление нацело — слово `div`.
+            while (i < (int)code.size() && code[i] != '\n') {
+                ++i;
+                ++column;
             }
+            continue;
         }
         if (code[i] == '/' && i + 1 < (int)code.size() && code[i + 1] == '*') {
             const int commentLine = line;
@@ -445,8 +441,6 @@ std::vector<Token> tokenize(std::string_view code, const std::string& filename) 
             case '/':
                 if (i + 1 < static_cast<int>(code.size()) && code[i + 1] == '=') {
                     add(SLASH_EQ, "/=", tokLine, tokCol); ++i; ++column;
-                } else if (i + 1 < static_cast<int>(code.size()) && code[i + 1] == '/') {
-                    add(INTEGER_DIV, "//", tokLine, tokCol); ++i; ++column;
                 } else add(SLASH, "/", tokLine, tokCol);
                 break;
             case '%':

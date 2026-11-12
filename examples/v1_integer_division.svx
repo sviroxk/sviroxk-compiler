@@ -1,2 +1,6 @@
-print(17 // 5);
-print(-17 // 5);
+print(17 div 5);
+print(-17 div 5);
+print(17 div -5);
+print(-15 div 5);
+print(7 // 2 — это комментарий
+);
