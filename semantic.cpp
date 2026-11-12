@@ -33,6 +33,7 @@ struct Symbol {
     int dynArrayLength = 0;   // current length (for bounds checking)
     int dynArrayCapacity = 0; // allocated capacity
     int droppedLine = 0;      // строка drop/close; дальше имя использовать нельзя
+    bool pointsToLocal = false; // ptr p = &x, где x — локальная функции (возвращать нельзя)
     const char* releasedBy = "drop"; // чем освобождено: "drop" или "close" (для текста ошибки)
     int deferDropLine = 0;    // строка defer drop; освобождение при выходе из области
 };
@@ -140,6 +141,7 @@ private:
     std::map<std::string, const Node*> structs_;
     std::vector<std::string> returnTypes_;
     unsigned loopDepth_ = 0;
+    size_t functionScope_ = 0; // индекс области параметров текущей функции
     size_t dropBarrier_ = 0;  // drop можно только для имён из областей с индексом >= этого
 
     static bool isBuiltinFunction(const std::string& name) {
@@ -279,6 +281,12 @@ private:
             return nullptr;
         }
         return symbol;
+    }
+
+    // Имя объявлено внутри текущей функции (параметр или локальная)?
+    bool isFunctionLocal(const std::string& name) {
+        size_t index = 0;
+        return !returnTypes_.empty() && lookupMutable(name, &index) && index >= functionScope_;
     }
 
     std::vector<std::vector<int>> droppedState() const {
@@ -1104,6 +1112,7 @@ private:
     void checkFunction(const Node& node) {
         const size_t savedBarrier = dropBarrier_;
         dropBarrier_ = scopes_.size();
+        functionScope_ = scopes_.size();
         scopes_.emplace_back();
         returnTypes_.push_back(normalize(node.varType));
         for (const std::string& param : node.params) {
@@ -1164,6 +1173,7 @@ private:
             if (node.left->type == NODE_ADDR && scopes_.back().count(node.varName)) {
                 if (const Symbol* target = lookup(node.left->varName))
                     scopes_.back()[node.varName].pointee = target->type;
+                scopes_.back()[node.varName].pointsToLocal = isFunctionLocal(node.left->varName);
             }
             break;
         }
@@ -1437,8 +1447,15 @@ private:
                 error(node, "функция с результатом должна вернуть значение");
                 break;
             }
+            // D-007 / аудит 07f: адрес локальной переменной после return висит.
+            if (node.left->type == NODE_ADDR && isFunctionLocal(node.left->varName))
+                error(node, "возврат адреса локальной переменной '" + node.left->varName +
+                      "': после выхода из функции она перестаёт существовать");
             if (node.left->type == NODE_IDENTIFIER) {
                 const Symbol* returned = use(node, node.left->value);
+                if (returned && returned->pointsToLocal)
+                    error(node, "возврат '" + node.left->value +
+                          "' — адреса локальной переменной: после выхода из функции она перестаёт существовать");
                 if (returned && returned->isDynArray) {
                     error(node, "возврат динамического массива из функции пока не поддержан");
                     break;
