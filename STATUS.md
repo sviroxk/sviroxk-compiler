@@ -9,7 +9,7 @@ SC находится на ранней стадии разработки. На�
 - Добавлен GitHub Actions workflow: warning-clean build, conformance/regression suite, ASan/UBSan. Локально обе конфигурации проходят; удалённый Actions run после push ещё требует проверки.
 - Deprecated warnings пока не поддерживаются; legacy syntax остаётся рабочим и не помечен deprecated.
 
-- Generated ARM64 binaries, object files, LLVM/assembly output and empty build log removed from Git tracking; `.gitignore` excludes local build products. `test.svx` retained as an actual source regression fixture; stale `test` executable and unreferenced `test.txt` removed.
+- Generated ARM64 binaries, object files, LLVM/assembly output and empty build log removed from Git tracking; `.gitignore` excludes local build products. `tests/fixtures/string_basics.svx` retained as an actual source regression fixture; stale `test` executable and unreferenced `test.txt` removed.
 - Parser state is per invocation; `ParseResult` owns its error status. Copied AST nodes retain expression subtrees through shared ownership, without a global arena; repeated parsing and subtree lifetime have an ASan/UBSan regression.
 - Legacy `rep` now replaces the first occurrence into a dynamically sized heap buffer; callers release it with `del`. Long input, match/no-match and sanitizer cases pass; OOM/size overflow currently abort.
 - `build.sh` accepts `CXXFLAGS`; `-Wall -Wextra -Werror` and ASan/UBSan+LeakSanitizer verification passed.
@@ -53,7 +53,7 @@ SC находится на ранней стадии разработки. На�
 git pull
 chmod +x build.sh run.sh test.sh
 ./test.sh          # все примеры
-./run.sh hello.svx # сборка и запуск примера SC
+./run.sh examples/hello.svx # сборка и запуск примера SC
 ```
 
 Синтаксис короткой формы проверяется в `examples/modern.svx`. Старые `.svx` примеры остаются для совместимости.
