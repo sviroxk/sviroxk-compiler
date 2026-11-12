@@ -11,6 +11,17 @@
 
 namespace sc {
 
+// Внутренний суффикс своей функции с именем встроенной (parser.cpp, D-013).
+inline constexpr std::string_view kUserBuiltinSuffix = ".sc_user";
+
+inline std::string withoutUserSuffix(std::string_view message) {
+    std::string text(message);
+    for (size_t at = text.find(kUserBuiltinSuffix); at != std::string::npos;
+         at = text.find(kUserBuiltinSuffix, at))
+        text.erase(at, kUserBuiltinSuffix.size());
+    return text;
+}
+
 // std::less<> — поиск по string_view без временной std::string.
 inline std::map<std::string, std::vector<std::string>, std::less<>>& sourceFiles() {
     static std::map<std::string, std::vector<std::string>, std::less<>> files;
@@ -32,7 +43,7 @@ inline void reportDiagnostic(std::string_view filename, int line, int column,
                              std::string_view category, std::string_view message) {
     std::string text(filename.empty() ? "<source>" : filename);
     text.append(":").append(std::to_string(line)).append(":").append(std::to_string(column));
-    text.append(": error[").append(category).append("]: ").append(message).append("\n");
+    text.append(": error[").append(category).append("]: ").append(withoutUserSuffix(message)).append("\n");
 
     auto source = sourceFiles().find(filename);
     if (source != sourceFiles().end() && line >= 1 &&
