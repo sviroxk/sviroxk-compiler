@@ -1036,6 +1036,13 @@ private:
                     return "<error>";
                 }
             }
+            if (node.varName == "abs" && argumentTypes.size() == 1 && ty(argumentTypes[0]).isUnsigned()) {
+                // abs беззнакового не определён ни в C++ (std::abs(unsigned) — неоднозначный вызов),
+                // ни в Rust (у u32 нет abs): значение и так неотрицательно.
+                error(node, "abs: значение беззнакового типа '" + typeName(argumentTypes[0]) +
+                      "' и так неотрицательно");
+                return "<error>";
+            }
             if (node.varName == "abs" || node.varName == "max" || node.varName == "min") {
                 sc::Type resultTy = sc::Type::from(argumentTypes.empty() ? "i32" : argumentTypes.front());
                 for (size_t index = 1; index < argumentTypes.size(); ++index) {
