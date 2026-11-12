@@ -1582,7 +1582,7 @@ private:
             }
             if (returnTypes_.back() == "void") {
                 if (node.left) {
-                    error(node, "процедура без типа результата не может возвращать значение");
+                    error(node, "функция без типа результата ничего не возвращает: укажите тип, например 'fn int имя(…)'");
                     expression(*node.left);
                 }
                 break;

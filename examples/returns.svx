@@ -1,4 +1,4 @@
-fn choose(bool flag) {
+fn int choose(bool flag) {
     if (flag) {
         return 1;
     } else {

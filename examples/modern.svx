@@ -1,5 +1,5 @@
 // Short, readable English-keyword syntax
-fn add(int left, int right) {
+fn int add(int left, int right) {
     return left + right;
 }
 
