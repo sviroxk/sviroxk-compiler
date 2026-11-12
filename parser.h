@@ -70,8 +70,8 @@ struct Node {
     bool inclusiveRange = false;
     bool isForwardDecl = false;  // fn T name(...); без тела
     std::string op;
-    int line = 1;
-    int column = 1;
+    int line = 0;    // 0 = позиция не задана (tests/ast-positions.cpp ловит такие узлы)
+    int column = 0;
     std::string file;
     // A copy retains expression subtrees; mutations remain shared (not a deep clone).
     std::shared_ptr<Node> left;
