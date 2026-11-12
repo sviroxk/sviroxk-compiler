@@ -1,3 +1,4 @@
+#include <llvm/IR/Intrinsics.h>
 #include "codegen.h"
 #include "type.h"
 #include <llvm/Support/raw_ostream.h>
@@ -741,6 +742,15 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
                 return (L->getType()->isDoubleTy() || R->getType()->isDoubleTy())
                     ? result : builder.CreateFPTrunc(result, builder.getFloatTy());
             llvm::Type* integerResult = builder.getIntNTy(std::max(32U, resultWidth));
+            {
+                const unsigned width = integerResult->getIntegerBitWidth();
+                const double low = unsignedResult ? 0.0 : -std::ldexp(1.0, static_cast<int>(width) - 1);
+                const double high = std::ldexp(1.0, static_cast<int>(unsignedResult ? width : width - 1));
+                llvm::Value* inRange = builder.CreateAnd(
+                    builder.CreateFCmpOGE(result, llvm::ConstantFP::get(builder.getDoubleTy(), low)),
+                    builder.CreateFCmpOLT(result, llvm::ConstantFP::get(builder.getDoubleTy(), high)));
+                emitRuntimeFailureIf(builder.CreateNot(inRange), "integer overflow", node);
+            }
             return unsignedResult ? builder.CreateFPToUI(result, integerResult)
                                   : builder.CreateFPToSI(result, integerResult);
         }
@@ -784,25 +794,35 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
                 llvm::Value* nonNegative = builder.CreateICmpSGE(R, builder.getIntN(width, 0));
                 valid = builder.CreateAnd(nonNegative, belowWidth);
             }
-            llvm::Function* function = builder.GetInsertBlock()->getParent();
-            llvm::BasicBlock* validBlock = llvm::BasicBlock::Create(context, "shift_valid", function);
-            llvm::BasicBlock* trapBlock = llvm::BasicBlock::Create(context, "shift_invalid", function);
-            llvm::Function* abortFunction = runtimeFunction("abort");
-            builder.CreateCondBr(valid, validBlock, trapBlock);
-            builder.SetInsertPoint(trapBlock);
-            builder.CreateCall(abortFunction, {});
-            builder.CreateUnreachable();
-            builder.SetInsertPoint(validBlock);
+            emitRuntimeFailureIf(builder.CreateNot(valid), "shift amount out of range", node);
             if (node.op == "<<") return builder.CreateShl(L, R);
             return isUnsignedExpr(*node.left) ? builder.CreateLShr(L, R) : builder.CreateAShr(L, R);
         }
-        if (node.op == "+") return builder.CreateAdd(L, R);
-        if (node.op == "-") return builder.CreateSub(L, R);
-        if (node.op == "*") return builder.CreateMul(L, R);
-        if (node.op == "/" || node.op == "//") return isUnsignedExpr(*node.left)
-            ? builder.CreateUDiv(L, R) : builder.CreateSDiv(L, R);
-        if (node.op == "%") return isUnsignedExpr(*node.left)
-            ? builder.CreateURem(L, R) : builder.CreateSRem(L, R);
+        // Целые: переполнение, деление на ноль и MIN / -1 — ошибка выполнения, не порча значения.
+        const bool unsignedArith = isUnsignedExpr(*node.left) || isUnsignedExpr(*node.right);
+        if (node.op == "+" || node.op == "-" || node.op == "*") {
+            llvm::Intrinsic::ID id =
+                node.op == "+" ? (unsignedArith ? llvm::Intrinsic::uadd_with_overflow : llvm::Intrinsic::sadd_with_overflow) :
+                node.op == "-" ? (unsignedArith ? llvm::Intrinsic::usub_with_overflow : llvm::Intrinsic::ssub_with_overflow) :
+                                 (unsignedArith ? llvm::Intrinsic::umul_with_overflow : llvm::Intrinsic::smul_with_overflow);
+            llvm::Function* checked = llvm::Intrinsic::getDeclaration(&module, id, {common});
+            llvm::Value* pair = builder.CreateCall(checked, {L, R});
+            emitRuntimeFailureIf(builder.CreateExtractValue(pair, 1), "integer overflow", node);
+            return builder.CreateExtractValue(pair, 0);
+        }
+        if (node.op == "/" || node.op == "//" || node.op == "%") {
+            const unsigned width = common->getIntegerBitWidth();
+            emitRuntimeFailureIf(builder.CreateICmpEQ(R, builder.getIntN(width, 0)),
+                                 "division by zero", node);
+            if (!unsignedArith) {
+                llvm::Value* minimum = builder.CreateICmpEQ(L,
+                    builder.getInt(llvm::APInt::getSignedMinValue(width)));
+                llvm::Value* minusOne = builder.CreateICmpEQ(R, llvm::ConstantInt::getSigned(common, -1));
+                emitRuntimeFailureIf(builder.CreateAnd(minimum, minusOne), "integer overflow", node);
+            }
+            if (node.op == "%") return unsignedArith ? builder.CreateURem(L, R) : builder.CreateSRem(L, R);
+            return unsignedArith ? builder.CreateUDiv(L, R) : builder.CreateSDiv(L, R);
+        }
         if (node.op == ">") return isUnsignedExpr(*node.left)
             ? builder.CreateICmpUGT(L, R) : builder.CreateICmpSGT(L, R);
         if (node.op == "<") return isUnsignedExpr(*node.left)
