@@ -1778,7 +1778,10 @@ private:
         case NODE_DELETE: {
             const Symbol* symbol = use(node, node.varName);
             if (!symbol) error(node, "неизвестное имя '" + node.varName + "'");
-            else if (!symbol->isDynArray && !symbol->ty.isArray() && !symbol->ty.isPtr())
+            else if (symbol->ty.isArray() && !symbol->isDynArray)
+                error(node, "освобождать нечего: массив '" + node.varName +
+                      "' не создан через new (его память освобождается сама)");
+            else if (!symbol->isDynArray && !symbol->ty.isPtr())
                 error(node, "освободить можно только динамический массив или ptr");
             break;
         }
