@@ -933,7 +933,7 @@ Node parseOne() {
         node.column = peek().column;
         node.file = peek().file;
         consume();
-        node.varType = "i32";
+        node.varType = "void";  // D-012: без типа результата — ничего не возвращает (как в Rust)
         if (peek().type == VOID_T) {
             consume();
             node.varType = "void";
