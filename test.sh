@@ -45,6 +45,7 @@ fi
 
 sources=(
     "examples/hello.svx"
+    "examples/legacy_square.svx"
     "tests/fixtures/string_basics.svx"
     "examples/struct.svx"
     "examples/struct_init.svx"
