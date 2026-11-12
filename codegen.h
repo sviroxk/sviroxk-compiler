@@ -8,6 +8,7 @@
 #include <map>
 #include <unordered_map>
 #include <string>
+#include <string_view>
 
 class CodeGen {
     struct ScopeSnapshot {
@@ -86,7 +87,7 @@ public:
     llvm::Type* svType(const std::string& name);
     static llvm::Type* storageType(llvm::Value* storage);
     llvm::Value* createStorage(llvm::Type* type, const std::string& name);
-    llvm::Function* runtimeFunction(const std::string& name);
+    llvm::Function* runtimeFunction(std::string_view name);
     llvm::Value* castTo(llvm::Value* val, llvm::Type* ty, bool sourceUnsigned = false);
     llvm::Value* toBool(llvm::Value* val);
     void emitRuntimeFailureIf(llvm::Value* failed, const std::string& message,
