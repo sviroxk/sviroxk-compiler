@@ -208,3 +208,7 @@
 - Исправлено в `parser.cpp`: `setPos`, `parseMul`/`parseAdd` через `makeBinary`, инициализатор поля — `NODE_ASSIGN` с позицией. После: 1875 узлов, все с позицией.
 - Найденный баг: ошибка типа в инициализаторе поля (`P p = { a = "x"; };`) печаталась в `1:1`, теперь в позиции поля (`3:9`); тест `struct-field-init-position`.
 - Парсер без глобального состояния уже сделан в PR #28 (класс `Parser`); пункт снят с очереди.
+
+
+## Уточнение к записи о версиях LLVM
+- Пересборка коммита до правки (`7ed2790`) показала точнее: на 20.1.8 и 21.1.8 — `'getDeclaration' is deprecated [-Werror,-Wdeprecated-declarations]`, на 22.1.8 функции уже нет (`no member named 'getDeclaration' in namespace 'llvm::Intrinsic'`, ошибка и без `-Werror`); на 23.1.5 — 19 × `[-Werror,-Wunused-parameter]` в заголовках LLVM. `llvm-config --cxxflags` во всех версиях 18–23 даёт `-std=c++17`; ни одна ошибка со стандартом C++ не связана.
