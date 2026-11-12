@@ -983,6 +983,20 @@ expect_compile_error "drop-raw-pointer" $'int x = 1;\nptr p = &x;\ndrop p;' 'dro
 expect_compile_error "drop-outer-in-loop" $'ptr v = new int[3];\nwhile (true) { drop v; }' "drop 'v' внутри цикла или функции"
 expect_compile_error "drop-global-in-function" $'ptr v = new int[3];\nfn void f() { drop v; }\nf();' "drop 'v' внутри цикла или функции"
 expect_compile_error "drop-without-name" 'drop 5;' 'после drop ожидалось имя переменной'
+# Аудит, класс 1: вложенность до 256 уровней работает, глубже — синтаксическая ошибка, а не segfault;
+# длинные цепочки и else-if не упираются в стек (компиляция идёт в потоке с большим стеком).
+nest_open=$(printf 'if (x == 1) {\n%.0s' $(seq 256)); nest_close=$(printf '}%.0s' $(seq 256))
+expect_program_output "nesting-256-if" $'int x = 1;\n'"$nest_open"$'\nprint(x);\n'"$nest_close" '1'
+expect_compile_error "nesting-257-if" $'int x = 1;\nif (x == 1) {\n'"$nest_open"$'\nprint(x);\n'"$nest_close"$'\n}' "слишком глубокая вложенность: больше 256 уровней"
+parens_open=$(printf '(%.0s' $(seq 256)); parens_close=$(printf ')%.0s' $(seq 256))
+expect_program_output "nesting-256-parens" "int x = ${parens_open}1${parens_close};"$'\nprint(x);' '1'
+expect_compile_error "nesting-257-parens" "int x = (${parens_open}1${parens_close});" "слишком глубокая вложенность: больше 256 уровней"
+expect_compile_error "nesting-100000-parens" "int x = $(printf '(%.0s' $(seq 100000))1;" "слишком глубокая вложенность"
+expect_compile_error "nesting-300-not" "bool b = $(printf '!%.0s' $(seq 300))true;" "слишком глубокая вложенность"
+expect_program_output "sum-2000-terms" "int x = 1$(printf ' + 1%.0s' $(seq 1999));"$'\nprint(x);' '2000'
+elif_chain=$(for i in $(seq 0 999); do printf ' else if (x == %d) { print(%d); }' "$i" "$i"; done)
+expect_program_output "else-if-chain-1000" $'int x = 999;\nif (x < 0) { print(-1); }'"$elif_chain" '999'
+
 # D-007 / аудит 07f: вернуть адрес локальной переменной или параметра — ошибка компиляции.
 expect_compile_error "return-addr-local" 'fn ptr g() { int x = 5; return &x; }' "возврат адреса локальной переменной 'x'"
 expect_compile_error "return-addr-param" 'fn ptr g(int a) { return &a; }' "возврат адреса локальной переменной 'a'"
