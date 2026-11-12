@@ -901,6 +901,18 @@ printf '%s\n' 'file f = atk("no-such-dir/missing.txt", "r");' 'str t = pro(f);' 
 expect_runtime_error "open-missing-file" "$RUNTIME_DIR/missing_file.svx" "cannot open file 'no-such-dir/missing.txt' at line 1, column 10"
 expect_compile_error "push-string-into-int-array" $'ptr v = nw rox[3];\nv.push("hello");' "элемент массива ожидает тип"
 
+# Step 4b: PR22 struct parameters are aggregate copies, not aliases.
+expect_program_output "struct-by-value-copy" "$(cat examples/struct_by_value.svx)" $'17\n3\n4\n3'
+expect_program_output "struct-by-value-nested" $'tip Inner { int x = 2; }\ntip Outer { tip Inner inner = { x = 7; }; int y = 3; }\nfn int change(tip Outer value) { svi tip Inner lor replacement = { x = 9; }; value.inner = replacement; return value.inner.x + value.y; }\nsvi tip Outer lor original = { inner = { x = 5; }; y = 4; };\nprint(change(original)); print(original.inner.x);' $'13\n5'
+expect_program_output "struct-by-value-forward" $'fn int total(int offset, tip Pair value);\ntip Pair { int x = 0; }\nfn int total(int offset, tip Pair value) { return offset + value.x; }\nsvi tip Pair lor value = { x = 5; }; print(total(10, value));' '15'
+expect_program_output "struct-by-value-layout" $'tip Sample { u8 tag = 1; f64 weight = 2.5; }\nfn f64 weight(tip Sample value) { value.weight = 4.25; return value.weight; }\nsvi tip Sample lor value; print(weight(value)); print(value.weight); print(value.tag);' $'4.250000\n2.500000\n1'
+expect_compile_error "struct-param-unknown-type" 'fn int read(tip Missing value) { return 0; }' "неизвестный тип параметра 'Missing'"
+expect_compile_error "struct-param-wrong-type" $'tip Pair { int x = 0; }\nfn int read(tip Pair value) { return value.x; }\nprint(read(1));' "аргумент 1 функции 'read': ожидался 'Pair'"
+expect_compile_error "struct-param-missing-field" $'tip Pair { int x = 0; }\nfn int read(tip Pair value) { return value.missing; }' "у структуры 'Pair' нет поля 'missing'"
+expect_compile_error "struct-param-forward-mismatch" $'tip A { int x = 0; } tip B { int x = 0; }\nfn int read(tip A value); fn int read(tip B value) { return value.x; }' "сигнатура функции 'read' не совпадает"
+expect_compile_error "struct-field-tip-unknown" 'tip Outer { tip Missing inner; }' "неизвестный тип поля 'Missing'"
+expect_compile_error "struct-field-tip-recursive" 'tip Recursive { tip Recursive next; }' 'рекурсивное определение структуры'
+
 # pop() expression: both PHI incoming blocks must be actual CFG predecessors.
 expect_program_output "pop-expression-after-growth" 'ptr v = nw rox[0]; v.push(1); print(v.pop()); print(v.len()); del v;' $'1\n0'
 expect_program_output "pop-expression-empty" 'ptr v = nw rox[0]; print(v.pop()); print(v.pop()); print(v.len()); del v;' $'0\n0\n0'

@@ -19,9 +19,11 @@ variable-decl = "let", identifier, ":", type, "=", expression, ";"
 function-decl = "fn", [ "void" | type ], identifier, "(", [ parameters ], ")", block
               | "fucn", [ type ], identifier, "(", [ legacy-parameters ], ")", block ;
 parameters    = parameter, { ",", parameter } ;
-parameter     = type, identifier ;
-legacy-parameters = type, identifier, { ",", type, identifier } ;
-struct-decl   = "tip", identifier, "{", { type, identifier, "=", expression, ";" }, "}" ;
+parameter     = (type | "tip", identifier), identifier ;
+legacy-parameters = parameter, { ",", parameter } ;
+struct-decl   = "tip", identifier, "{", { field-decl }, "}" ;
+field-decl    = (type | identifier | "tip", identifier), identifier,
+                [ "=", expression ], ";" ;
 import-decl   = "imp", string, ";" ;
 block         = "{", { statement }, "}" ;
 statement     = variable-decl | assignment | return-stmt | print-stmt
@@ -67,6 +69,28 @@ EBNF — удобочитаемая схема покрытия, не форма
 - Относительные `imp "path.svx";` раскрывают исходники рекурсивно; проверяются отсутствующий файл и циклы. Namespaces, `use`, `pub` и изоляция символов отсутствуют.
 - Функции без явного return type используют текущую legacy-семантику `int`; `fn void name(...)` объявляет процедуру.
 - Диагностика semantic errors имеет форму `file:line:column: error[semantic]`. Parser сообщает синтаксическую ошибку и останавливается на первой ошибке.
+
+## Структуры в параметрах функций (шаг 4б PR22)
+
+```sc
+tip Pair { int x = 0; int y = 0; }
+fn int sum(tip Pair value) { return value.x + value.y; }
+svi tip Pair lor point = { x = 3; y = 4; };
+print(sum(point)); // 7
+```
+
+Параметр `tip Pair value` получает копию aggregate по значению. Изменение
+скалярного поля параметра не меняет исходную структуру. Вложенный aggregate
+копируется так же: доступны чтение `value.inner.x` и замена `value.inner` целиком.
+В определении вложенного поля принимаются `Inner inner` и `tip Inner inner`;
+вложенный тип пока нужно определить раньше содержащего. Объявления функций
+без тела поддерживают те же типы параметров и проверяют совпадение сигнатур.
+Проверенный пример изменения копии: `examples/struct_by_value.svx`.
+
+Это перенос поведения PR22, не новая модель владения: pointer-поля не клонируют
+свою heap-память, автоматического освобождения/передачи владения нет. Существующий
+запрет присваивания owning-структур не снят. Возврат структур, анонимные struct
+literals как аргументы, `defer` и `drop` этим шагом не добавлены.
 
 ## Пока не специфицировано как поддерживаемое
 
