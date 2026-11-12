@@ -1005,6 +1005,11 @@ expect_program_output "nesting-256-parens" "int x = ${parens_open}1${parens_clos
 expect_compile_error "nesting-257-parens" "int x = (${parens_open}1${parens_close});" "слишком глубокая вложенность: больше 256 уровней"
 expect_compile_error "nesting-100000-parens" "int x = $(printf '(%.0s' $(seq 100000))1;" "слишком глубокая вложенность"
 expect_compile_error "nesting-300-not" "bool b = $(printf '!%.0s' $(seq 300))true;" "слишком глубокая вложенность"
+# Фаззер: цепочка тернарных операторов вкладывается вправо — 256 уровней работают, 100000 — ошибка, а не segfault.
+ternary_chain=$(printf '0 ? 1 : %.0s' $(seq 256))
+expect_program_output "ternary-chain-256" "int x = ${ternary_chain}7;"$'\nprint(x);' '7'
+expect_compile_error "ternary-chain-100000" "int x = $(printf '1 ? 1 : %.0s' $(seq 100000))2;" "слишком глубокая вложенность"
+
 # Цепочка из 10000 операторов: линейное время (было O(n²): 10000 слагаемых ≈ 29 с), 10001 — ошибка, не segfault.
 long_sum="1$(printf ' + 1%.0s' $(seq 10000))"
 start_seconds=$SECONDS
@@ -1381,6 +1386,18 @@ expect_runtime_error "input-int-overflow" "$RUNTIME_DIR/input_int.svx" "integer 
 expect_runtime_error "input-int-eof" "$RUNTIME_DIR/input_int.svx" "unexpected end of input" ''
 lines_file="$TMP_DIR/input-lines.tmp"
 expect_program_output "file-read-lines" "file o = open(\"$lines_file\", \"w\");"$'\nwrite(o, "line one\\nline two");\nclose(o);\n'"file i = open(\"$lines_file\", \"r\");"$'\nprint(read(i));\nprint(read(i));\nprint(len(read(i)));\nclose(i);' $'line one\nline two\n0'
+
+# Ограниченный фаззер (аудит 2026-11-12): 400 входов с фиксированным seed; любой код 3, сигнал,
+# зависание, ошибка без текста или отчёт санитайзера — провал. Проверяет и ASan-сборку в CI.
+if command -v python3 >/dev/null 2>&1; then
+    if ! timeout --signal=TERM 600s python3 tests/fuzz.py "$SC_BIN" 400 20251112 "$TMP_DIR/fuzz"; then
+        echo "FAIL: fuzzer found compiler crashes (inputs saved in $TMP_DIR/fuzz)" >&2
+        exit 1
+    fi
+    echo "PASS: fuzzer (400 inputs, seed 20251112)"
+else
+    echo "SKIP: python3 not found; fuzzer skipped"
+fi
 
 # Каждый пример из docs/spec.md компилируется, запускается и даёт указанный вывод.
 bash tests/spec-examples.sh
