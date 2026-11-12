@@ -601,6 +601,15 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         auto ready = precomputed_.find(&node);
         if (ready != precomputed_.end()) return ready->second;
     }
+    if (node.type == NODE_BINOP) {
+        // Левый операнд генерируется здесь, а не в genBinary: её кадр большой.
+        llvm::Value* left = genExpr(*node.left);
+        return genBinary(node, left);
+    }
+    return genOtherExpr(node);
+}
+
+llvm::Value* CodeGen::genOtherExpr(const Node& node) {
     if (node.type == NODE_CHAR) {
         return builder.getInt8(static_cast<uint8_t>(std::stoul(node.value)));
     }
@@ -971,8 +980,13 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         result->addIncoming(falseValue, falseEnd);
         return result;
     }
+    return genCallExpr(node);
+}
+
+// Бинарные операторы отдельно от остальных узлов: цепочка `a + b + …` рекурсивно
+// рекурсивно проходит только через маленький кадр genExpr.
+llvm::Value* CodeGen::genBinary(const Node& node, llvm::Value* L) {
     if (node.type == NODE_BINOP) {
-        llvm::Value* L = genExpr(*node.left);
         if (node.op == "!")
             return builder.CreateNot(toBool(L));
         if (node.op == "~")
@@ -1130,6 +1144,10 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         if (node.op == "==") return builder.CreateICmpEQ(L, R);
         if (node.op == "!=") return builder.CreateICmpNE(L, R);
     }
+    codegenFailure(node, "неподдерживаемый бинарный узел");
+}
+
+llvm::Value* CodeGen::genCallExpr(const Node& node) {
     if (node.type == NODE_FUNC_CALL) {
         std::string name = node.varName;
         // математика
