@@ -452,3 +452,8 @@
 ## 2026-11-13 — 1.1: сравнения строк < > <= >=
 - Строки сравниваются через `< > <= >=` (раньше — только `==`/`!=`): по байтам без знака, как C++ `std::string` и Rust `String` (D-020).
 - spec §11, §17; тесты `string-ordering` (теперь положительный), `string-ordering-bytes`, `string-ordering-number`.
+
+## 2026-11-13 — char — буква Юникода (32 бита)
+- `char` теперь 32 бита, как в Rust (D-021): литералы `'é'`, `'я'`, `'😀'`, `print` печатает UTF-8, `(char) n` проверяет номер (`invalid char`), `char` → `u8` — с проверкой; `data(s)` — указатель на байты `u8`.
+- Байт строки сравнивается только с буквой ASCII; литерал не UTF-8 — ошибка лексера.
+- spec §2 (таблица), §11 «Буква: char»; тесты `char-unicode`, `char-byte-vs-letter`, `char-literal-*`, `char-invalid-number`, `char-to-byte-overflow`.

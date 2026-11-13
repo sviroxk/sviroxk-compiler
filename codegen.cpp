@@ -551,7 +551,7 @@ llvm::Type* sc::Type::llvmType(llvm::LLVMContext& ctx) const {
     case TypeKind::Integer: return llvm::Type::getIntNTy(ctx, width);
     case TypeKind::Float:   return width == 64 ? llvm::Type::getDoubleTy(ctx) : llvm::Type::getFloatTy(ctx);
     case TypeKind::Bool:    return llvm::Type::getInt8Ty(ctx);
-    case TypeKind::Char:    return llvm::Type::getInt8Ty(ctx);
+    case TypeKind::Char:    return llvm::Type::getInt32Ty(ctx);  // буква Юникода (D-021)
     case TypeKind::Str:     return llvm::PointerType::get(ctx, 0);
     case TypeKind::Ptr:     return llvm::PointerType::get(ctx, 0);
     case TypeKind::Void:    return llvm::Type::getVoidTy(ctx);
@@ -682,6 +682,40 @@ llvm::Value* CodeGen::allocateStringBuffer(llvm::Value* bytes, const Node& locat
 // sc.read_line(file, status): строка любой длины без '\n' (и '\r' перед ним) в
 // буфере из malloc. file == null — стандартный ввод. status: 0 — прочитано,
 // 1 — конец ввода до первого символа, 2 — не хватило памяти.
+// sc.utf8_encode(letter, out): буква в UTF-8 (1–4 байта) и завершающий 0 в out[5].
+llvm::Function* CodeGen::utf8EncodeFunction() {
+    if (llvm::Function* existing = module.getFunction("sc.utf8_encode")) return existing;
+    llvm::Type* i32 = builder.getInt32Ty();
+    llvm::Type* i8 = builder.getInt8Ty();
+    llvm::Function* function = llvm::Function::Create(
+        llvm::FunctionType::get(builder.getInt64Ty(), {i32, builder.getPtrTy()}, false),
+        llvm::Function::InternalLinkage, "sc.utf8_encode", module);
+    llvm::IRBuilderBase::InsertPointGuard guard(builder);
+    builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", function));
+    llvm::Value* c = function->getArg(0);
+    llvm::Value* out = function->getArg(1);
+    auto below = [&](uint32_t limit) { return builder.CreateICmpULT(c, builder.getInt32(limit)); };
+    auto pick = [&](uint32_t one, uint32_t two, uint32_t three, uint32_t four) {
+        return builder.CreateSelect(below(0x80), builder.getInt32(one), builder.CreateSelect(below(0x800),
+            builder.getInt32(two), builder.CreateSelect(below(0x10000), builder.getInt32(three), builder.getInt32(four))));
+    };
+    llvm::Value* length = pick(1, 2, 3, 4);
+    llvm::Value* lead = builder.CreateOr(pick(0, 0xC0, 0xE0, 0xF0),
+                                         builder.CreateLShr(c, builder.CreateMul(builder.CreateSub(length, builder.getInt32(1)), builder.getInt32(6))));
+    builder.CreateStore(builder.CreateTrunc(lead, i8), out);
+    for (unsigned k = 1; k < 4; ++k) {  // байт k: 10xxxxxx из бит c >> 6*(length-1-k)
+        llvm::Value* shift = builder.CreateMul(builder.CreateSub(length, builder.getInt32(k + 1)), builder.getInt32(6));
+        llvm::Value* safeShift = builder.CreateSelect(builder.CreateICmpSGE(shift, builder.getInt32(0)), shift, builder.getInt32(0));
+        llvm::Value* bits = builder.CreateOr(builder.getInt32(0x80),
+            builder.CreateAnd(builder.CreateLShr(c, safeShift), builder.getInt32(0x3F)));
+        builder.CreateStore(builder.CreateTrunc(bits, i8), builder.CreateInBoundsGEP(i8, out, builder.getInt64(k)));
+    }
+    llvm::Value* length64 = builder.CreateZExt(length, builder.getInt64Ty());
+    builder.CreateStore(builder.getInt8(0), builder.CreateInBoundsGEP(i8, out, length64));
+    builder.CreateRet(length64);
+    return function;
+}
+
 llvm::Function* CodeGen::readLineFunction() {
     if (llvm::Function* existing = module.getFunction("sc.read_line")) return existing;
     llvm::Type* ptrTy = builder.getPtrTy();
@@ -1061,7 +1095,7 @@ void CodeGen::bindFieldArray(const Node& node) {
 llvm::Value* CodeGen::genOtherExpr(const Node& node) {
     bindFieldArray(node);
     if (node.type == NODE_CHAR) {
-        return builder.getInt8(static_cast<uint8_t>(std::stoul(node.value)));
+        return builder.getInt32(static_cast<uint32_t>(std::stoul(node.value)));  // буква (D-021)
     }
     if (node.type == NODE_NUMBER) {
         if (node.value.find_first_of(".eE") != std::string::npos) {
@@ -1348,6 +1382,15 @@ llvm::Value* CodeGen::genOtherExpr(const Node& node) {
             llvm::Value* converted = isUnsignedExpr(*node.left)
                 ? builder.CreateUIToFP(val, target) : builder.CreateSIToFP(val, target);
             return converted;
+        }
+        if (targetType.isChar() && val->getType()->isIntegerTy()) {
+            // (char) n: только номер буквы Юникода — 0..0x10FFFF без суррогатов (как char::from_u32 в Rust).
+            llvm::Value* n = isUnsignedExpr(*node.left) ? builder.CreateZExtOrTrunc(val, builder.getInt64Ty())
+                                                        : builder.CreateSExtOrTrunc(val, builder.getInt64Ty());
+            llvm::Value* bad = builder.CreateOr(builder.CreateICmpUGT(n, builder.getInt64(0x10FFFF)),
+                builder.CreateICmpULT(builder.CreateSub(n, builder.getInt64(0xD800)), builder.getInt64(0x800)));
+            emitRuntimeFailureIf(bad, "invalid char", node);
+            return builder.CreateTrunc(n, builder.getInt32Ty());
         }
         if (val->getType()->isIntegerTy() && target->isIntegerTy()) {
             // Значение должно помещаться в целевой тип: проверка в общем типе шире обоих на бит.
@@ -1938,9 +1981,10 @@ void CodeGen::genNode(const Node& node) {
                 builder.CreateCall(printfFunc, {fmt, val});
             } else if (node.varType == "char" || (node.left->type == NODE_IDENTIFIER &&
                        charVars.contains(node.left->value) && charVars[node.left->value])) {
-                llvm::Value* promoted = builder.CreateZExt(val, builder.getInt32Ty());
-                llvm::Value* fmt = getStringPtr("%c\n");
-                builder.CreateCall(printfFunc, {fmt, promoted});
+                llvm::Value* letter = builder.CreateZExtOrTrunc(val, builder.getInt32Ty());
+                llvm::Value* text = entryAlloca(llvm::ArrayType::get(builder.getInt8Ty(), 5), "sc.letter");
+                builder.CreateCall(utf8EncodeFunction(), {letter, text});
+                builder.CreateCall(printfFunc, {getStringPtr("%s\n"), text});
             } else if (val->getType()->isIntegerTy() &&
                        val->getType()->getIntegerBitWidth() < 32) {
                 const bool isUnsigned = isUnsignedExpr(*node.left) ||

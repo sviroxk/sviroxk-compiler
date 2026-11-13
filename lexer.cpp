@@ -317,7 +317,7 @@ std::vector<Token> tokenize(std::string_view code, const std::string& filename) 
             if (i >= static_cast<int>(code.size()) || code[i] == '\n' || code[i] == '\'') {
                 sc::failAt(filename, tokLine, tokCol, "lexer", "ожидался один символ между одинарными кавычками");
             }
-            unsigned char charVal;
+            uint32_t charVal;  // номер буквы Юникода (D-021)
             if (code[i] == '\\') {
                 ++i; ++column;
                 if (i >= static_cast<int>(code.size()) || code[i] == '\n') {
@@ -334,7 +334,22 @@ std::vector<Token> tokenize(std::string_view code, const std::string& filename) 
                         sc::failAt(filename, tokLine, tokCol, "lexer", "неизвестная escape-последовательность в символьном литерале");
                 }
             } else {
-                charVal = static_cast<unsigned char>(code[i]);
+                // 'é', 'я': буква UTF-8 из 1–4 байт — один номер Юникода.
+                const unsigned char lead = static_cast<unsigned char>(code[i]);
+                const int extra = lead < 0x80 ? 0 : (lead >> 5) == 0x6 ? 1 : (lead >> 4) == 0xE ? 2 : (lead >> 3) == 0x1E ? 3 : -1;
+                charVal = extra == 0 ? lead : extra == 1 ? (lead & 0x1Fu) : extra == 2 ? (lead & 0x0Fu) : (lead & 0x07u);
+                for (int k = 0; k < extra; ++k) {
+                    const int at = i + 1 + k;
+                    if (at >= static_cast<int>(code.size()) || (static_cast<unsigned char>(code[at]) & 0xC0) != 0x80) {
+                        charVal = 0xFFFFFFFFu;
+                        break;
+                    }
+                    charVal = (charVal << 6) | (static_cast<unsigned char>(code[at]) & 0x3Fu);
+                }
+                if (extra < 0 || charVal > 0x10FFFF || (charVal >= 0xD800 && charVal <= 0xDFFF) ||
+                    (extra == 1 && charVal < 0x80) || (extra == 2 && charVal < 0x800) || (extra == 3 && charVal < 0x10000))
+                    sc::failAt(filename, tokLine, tokCol, "lexer", "в символьном литерале не буква UTF-8");
+                i += extra;
             }
             ++i;
             ++column;
