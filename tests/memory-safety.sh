@@ -337,6 +337,39 @@ fn void run() {
 }
 run();
 SC
+# 1.3: массив-переменная освобождается сам на всех выходах (return, break, continue,
+# цикл, верхний уровень); drop, del и defer drop раньше конца блока — без двойного free.
+check_case dynamic-auto-release clean $'1\n6\n2\n3\n9' 1 <<'SC'
+fn i64 f(int n) {
+    ptr v = new int[n];
+    v.push(n);
+    if (n > 2) { return v.len(); }
+    for i in 0..3 { ptr w = new int[1]; w.push(i); if (i == 1) { continue; } if (i == 2) { break; } }
+    int k = 0;
+    while (k < 2) { ptr t = new int[2]; t[0] = k; k += 1; }
+    return v.len() - 1;
+}
+fn void g(int c) {
+    ptr a = new int[2];
+    ptr b = new int[2];
+    defer drop b;
+    if (c > 0) { drop a; }
+    ptr d = new int[1];
+    del d;
+}
+print(f(1)); print(f(5));
+g(1); g(0);
+ptr top = new int[1];
+top.push(2);
+print(top.len());
+if (top.len() > 0) { ptr inner = new int[3]; print(inner.len()); }
+top.push(9);
+print(top[2]);
+SC
+check_case dynamic-new-reassign clean $'3\n0' 1 <<'SC'
+fn void g() { ptr v = new int[2]; v[0] = 4; v = new int[3]; print(v.len()); print(v[0]); }
+g();
+SC
 check_case dynamic-grow-release clean $'5\n10\n50\n4' 1 <<'SC'
 ptr values = new int[0];
 values.push(10); values.push(20); values.push(30);
