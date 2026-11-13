@@ -639,7 +639,7 @@ private:
             return literalType;
         }
         case NODE_CHAR:
-            return "u8";
+            return "char";  // буква Юникода, 32 бита (D-021)
         case NODE_STRING:
             return "str";
         case NODE_IDENTIFIER: {
@@ -1252,7 +1252,18 @@ private:
             error(node, "указатели можно сравнивать только между собой и с null через == и !=");
             return "<error>";
         }
-        // c == 'a': символ с символом (литерал 'a' имеет тип u8) сравнивается как в C++ и Rust.
+        // s[0] == 'é': байт с буквой не из ASCII почти всегда ошибка (é — два байта, D-021).
+        if (comparison && ((leftTy.isInteger() && leftTy.width == 8 && node.right->type == NODE_CHAR &&
+                            std::stoul(node.right->value) > 127) ||
+                           (rightTy.isInteger() && rightTy.width == 8 && node.left->type == NODE_CHAR &&
+                            std::stoul(node.left->value) > 127))) {
+            error(node, "байт сравнивается только с буквой ASCII: буква не из ASCII занимает в строке несколько байт");
+            return "<error>";
+        }
+        if (comparison && ((leftTy.isInteger() && leftTy.isUnsigned() && leftTy.width == 8 && node.right->type == NODE_CHAR) ||
+                           (rightTy.isInteger() && rightTy.isUnsigned() && rightTy.width == 8 && node.left->type == NODE_CHAR)))
+            return "bool";
+        // c == 'a': буква с буквой, байт с буквой ASCII ('a' — char) — как в C++.
         if (comparison && (leftTy.isChar() || rightTy.isChar()) &&
             (leftTy.isChar() || charLike(*node.left)) && (rightTy.isChar() || charLike(*node.right)))
             return "bool";
@@ -1666,7 +1677,7 @@ private:
             if (dynArrayInit && scopes_.back().contains(node.varName))
                 scopes_.back()[node.varName].dynArrayCapacity = dynCapacity;
             if (isStringAddress(*node.left) && scopes_.back().contains(node.varName))
-                scopes_.back()[node.varName].pointee = "char";
+                scopes_.back()[node.varName].pointee = "u8";  // байты строки (D-021)
             if (node.left->type == NODE_ADDR && scopes_.back().contains(node.varName)) {
                 if (const Symbol* target = lookup(node.left->varName))
                     scopes_.back()[node.varName].pointee = target->type;
@@ -1824,7 +1835,7 @@ private:
                 const bool address = node.left->type == NODE_ADDR;
                 const Symbol* source = isStringAddress(*node.left) ? nullptr
                     : lookup(address ? node.left->varName : node.left->value);
-                std::string target = isStringAddress(*node.left) ? "char" : "";
+                std::string target = isStringAddress(*node.left) ? "u8" : "";
                 if (source && address) target = normalize(source->type);
                 else if (source && source->ty.isPtr() && !source->isDynArray) target = pointeeOf(*source);
                 if (!target.empty() && target != pointeeOf(*symbol))

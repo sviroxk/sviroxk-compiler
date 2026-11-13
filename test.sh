@@ -1311,11 +1311,11 @@ expect_program_output "replace-returns-string" $'string s = replace("a-b", "-", 
 expect_compile_error "replace-into-ptr" 'ptr r = replace("a-b", "-", "+");' "string неявно в ptr не превращается: храните строку в string (string r = replace(…);), del для строки не пишется; адрес строки — data(s) или as_ptr(s)"
 expect_compile_error "string-into-ptr-assign" $'string s = "a";\nptr p = null;\np = s;' "string неявно в ptr не превращается"
 expect_compile_error "string-into-ptr-argument" $'fn int g(ptr p) { return 1; }\nprint(g(replace("a", "a", "b")));' "string неявно в ptr не превращается"
-expect_program_output "string-data-as-ptr" $'string s = "abc";\nptr p = data(s);\nptr q = as_ptr(s);\nprint(p[1]); print(*q); print(p == q);\nptr r = data(s);\nr = as_ptr(s); print(r[2]);\nchar c = p[0]; print(c);' $'b\na\n1\nc\na'
+expect_program_output "string-data-as-ptr" $'string s = "abc";\nptr p = data(s);\nptr q = as_ptr(s);\nprint(p[1]); print(*q); print(p == q);\nptr r = data(s);\nr = as_ptr(s); print(r[2]);\nchar c = p[0]; print(c);' $'98\n97\n1\n99\na'
 expect_compile_error "string-address-sign" $'string s = "abc";\nptr p = &s;' "'&s' для строки не пишется: адрес строки — data(s) или as_ptr(s)"
 expect_compile_error "string-data-of-int" $'int x = 1;\nptr p = data(x);' "аргумент 1 функции 'data' должен иметь тип str"
 expect_compile_error "del-string-data" $'string s = "abc";\nptr p = as_ptr(s);\nptr q = p;\ndel q;' "освобождать нечего: 'q' указывает на переменную (&…) или строку (data/as_ptr)"
-expect_compile_error "string-data-into-int-ptr" $'int x = 1;\nptr p = &x;\nstring s = "a";\np = data(s);' "'p' указывает на тип 'int/i32', присвоить ему адрес значения типа 'char' нельзя"
+expect_compile_error "string-data-into-int-ptr" $'int x = 1;\nptr p = &x;\nstring s = "a";\np = data(s);' "'p' указывает на тип 'int/i32', присвоить ему адрес значения типа 'byte/u8' нельзя"
 expect_program_output "string-copy-independent" $'string a = "ab";\nstring b = a;\nptr p = data(b);\np[0] = \'X\';\nprint(a); print(b);\nfn string twice(string s) { s = replace(s, "a", "aa"); return s; }\nstring c = twice(a);\nprint(a); print(c);' $'ab\nXb\nab\naab'
 expect_compile_error "string-data-of-temporary" 'ptr p = data(str(1));' "data(…) берёт адрес строки с именем: временная строка освобождается в конце оператора, сначала положите её в переменную (string s = …;)"
 # D-015: перенос строки — только move(имя); после него старое имя нельзя, присваивание оживляет.
@@ -1394,6 +1394,15 @@ printf '%s\n' 'string s = "ab";' 'int i = 0 - 1;' 'print(s[i]);' > "$RUNTIME_DIR
 expect_runtime_error "string-byte-negative" "$RUNTIME_DIR/string_byte_negative.svx" "string index out of bounds at line 3, column 7"
 printf '%s\n' 'string s = "";' 'print(s[0]);' > "$RUNTIME_DIR/string_byte_empty.svx"
 expect_runtime_error "string-byte-empty" "$RUNTIME_DIR/string_byte_empty.svx" "string index out of bounds at line 2, column 7"
+# D-021: char — буква Юникода (32 бита, как char в Rust); байт — u8.
+expect_program_output "char-unicode" $'char a = \'é\';\nprint(a);\nprint(\'я\');\nprint((int) \'я\');\nprint((char) 128512);\nprint(a < \'я\');\nu8 x = \'h\';\nprint(x);\nstring s = "hé";\nprint(s[0] == \'h\');\nchar z = s[0];\nprint(z);\nchar[] cs = [\'ж\', \'q\'];\nprint(cs[0]);\nprint(a + 1);' $'é\nя\n1103\n😀\n1\n104\n1\nh\nж\n234'
+expect_compile_error "char-byte-vs-letter" $'string s = "é";\nprint(s[0] == \'é\');' "байт сравнивается только с буквой ASCII: буква не из ASCII занимает в строке несколько байт"
+expect_compile_error "char-literal-bad-utf8" $'char c = \'\xff\';' "в символьном литерале не буква UTF-8"
+expect_compile_error "char-literal-two-letters" $'char c = \'éa\';' "символьный литерал должен содержать один символ"
+printf '%s\n' 'int n = 55296;' 'char c = (char) n;' 'print(c);' > "$RUNTIME_DIR/char_surrogate.svx"
+expect_runtime_error "char-invalid-number" "$RUNTIME_DIR/char_surrogate.svx" "invalid char at line 2, column 11"
+printf '%s\n' "char c = 'я';" 'u8 b = c;' 'print(b);' > "$RUNTIME_DIR/char_to_byte.svx"
+expect_runtime_error "char-to-byte-overflow" "$RUNTIME_DIR/char_to_byte.svx" "integer overflow at line 2, column 1"
 # 1.3: move в цикле, если тот же оператор присваивает имени новое значение (D-015, уточнение владельца).
 expect_program_output "move-in-loop-reassign" $'struct Queue { int[] items; string name; }\nfn Queue enqueue(Queue q, int x) { q.items.push(x); return q; }\nfn int[] add(int[] v, int x) { v.push(x); return v; }\nfn string grow(string s) { return replace(s, "a", "ab"); }\nQueue q;\nq.name = "очередь";\nint[] v = new int[0];\nstring s = "a";\nfor i in 0..4 {\n    q = enqueue(move(q), i * 10);\n    v = add(move(v), i);\n    s = grow(move(s));\n}\nint k = 0;\nwhile (k < 2) { v = add(move(v), 100); k += 1; }\nprint(q.items.len()); print(q.items[3]); print(v.len()); print(v[5]); print(s); print(q.name);' $'4\n30\n6\n100\nabbbb\nочередь'
 expect_compile_error "move-in-loop-reassign-other" $'fn int[] add(int[] v, int x) { v.push(x); return v; }\nint[] v = new int[0];\nint[] w = new int[0];\nfor i in 0..3 { w = add(move(v), i); }' "move 'v' внутри цикла или функции, а объявлена она снаружи"
