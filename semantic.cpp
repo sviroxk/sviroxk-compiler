@@ -773,6 +773,10 @@ private:
             if (symbol->isDynArray)
                 return symbol->dynArrayElementType.empty() ? "i32" : symbol->dynArrayElementType;
             if (symbol->ty.isPtr()) return pointeeOf(*symbol);
+            if (symbol->ty.isStr()) {  // D-019: s[i] — байт строки (u8), границы — по len(s)
+                node.varType = "string";
+                return "u8";
+            }
             error(node, "значение '" + node.varName + "' не является массивом");
             return "<error>";
         }
@@ -1994,6 +1998,9 @@ private:
                     error(node, "элемент массива ожидает тип '" + typeName(element) + "'" + castHint(element, value));
             } else if (array && array->ty.isPtr()) {
                 checkPointeeStore(node, node.varName, *array, *node.right, value);
+            } else if (array && array->ty.isStr()) {
+                error(node, "байт строки '" + node.varName + "' по номеру можно только читать; "
+                      "изменить — через ptr p = data(" + node.varName + "); p[i] = ...");
             } else if (array) error(node, "значение не является массивом");
             break;
         }

@@ -1,0 +1,17 @@
+// s[i] — байт строки по номеру (u8), номер от 0 до len(s) - 1 (D-019).
+fn int count(string t, char c) {
+    int n = 0;
+    for i in 0..len(t) {
+        if (t[i] == (u8) c) { n += 1; }
+    }
+    return n;
+}
+string s = "hello";
+print(s[0]);
+print(s[1] == 'e');
+print(count(s, 'l'));
+print(count(str(1001), '0'));
+string u = "é";
+print(len(u));
+print(u[0]);
+print(u[1]);
