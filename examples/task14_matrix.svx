@@ -1,0 +1,36 @@
+struct Matrix { int rows = 0; int cols = 0; int[] data; }
+
+fn Matrix zeros(int rows, int cols) {
+    Matrix m = { rows = rows; cols = cols; };
+    m.data.resize(rows * cols);
+    return m;
+}
+
+fn Matrix from(int rows, int cols, int[] values) {
+    Matrix m = zeros(rows, cols);
+    for i in 0..values.len() { m.data[i] = values[i]; }
+    return m;
+}
+
+fn Matrix mul(Matrix a, Matrix b) {
+    Matrix c = zeros(a.rows, b.cols);
+    for i in 0..a.rows {
+        for j in 0..b.cols {
+            int s = 0;
+            for k in 0..a.cols { s += a.data[i * a.cols + k] * b.data[k * b.cols + j]; }
+            c.data[i * c.cols + j] = s;
+        }
+    }
+    return c;
+}
+
+int[] left = [1, 2, 3, 4, 5, 6];
+int[] right = [7, 8, 9, 10, 11, 12];
+Matrix a = from(2, 3, left);
+Matrix b = from(3, 2, right);
+Matrix c = mul(a, b);
+for i in 0..c.rows {
+    print(c.data[i * c.cols]);
+    print(c.data[i * c.cols + 1]);
+}
+print(a.data.len());

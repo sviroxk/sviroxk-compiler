@@ -1,0 +1,44 @@
+struct Person { string name = ""; int age = 0; int[] scores; }
+
+fn Person make(string name, int age) {
+    Person p = { name = name; age = age; };
+    return p;
+}
+
+fn Person[] add(Person[] list, Person p) {
+    list.push(p);
+    return list;
+}
+
+fn int find(Person[] list, string name) {
+    for i in 0..list.len() {
+        if (list[i].name == name) { return i; }
+    }
+    return -1;
+}
+
+fn Person[] birthday(Person[] list) {
+    for i in 0..list.len() { list[i].age += 1; }
+    return list;
+}
+
+Person[] people = new Person[0];
+people = add(move(people), make("Ann", 30));
+people = add(move(people), make("Bob", 41));
+Person eve = make("Eve", 25);
+eve.scores.push(5);
+people = add(move(people), eve);
+eve.name = "Eva";
+people = birthday(move(people));
+Person[] before = people;
+people = birthday(move(people));
+print(people.len());
+print(find(people, "Eve"));
+print(find(people, "Zed"));
+print(people[2].name);
+print(people[2].age);
+Person last = people[2];
+print(last.scores[0]);
+print(before[0].age);
+print(people[0].age);
+print(eve.name);

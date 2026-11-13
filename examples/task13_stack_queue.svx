@@ -1,0 +1,45 @@
+struct Queue { int[] items; int head = 0; }
+
+fn int[] push_n(int[] stack, int n) {
+    for i in 1..n + 1 { stack.push(i * 10); }
+    return stack;
+}
+
+fn int sum_pop(int[] stack) {
+    int s = 0;
+    while (stack.len() > 0) { s += stack.pop(); }
+    return s;
+}
+
+fn Queue enqueue(Queue q, int x) {
+    q.items.push(x);
+    return q;
+}
+
+fn Queue fill(Queue q, int n) {
+    for i in 1..n + 1 { q.items.push(i); }
+    return q;
+}
+
+fn int front(Queue q) { return q.items[q.head]; }
+
+fn i64 size(Queue q) { return q.items.len() - q.head; }
+
+fn Queue dequeue(Queue q) {
+    q.head += 1;
+    return q;
+}
+
+int[] stack = new int[0];
+stack = push_n(move(stack), 3);
+print(stack.pop());
+print(sum_pop(stack));
+print(stack.len());
+
+Queue q;
+q = fill(move(q), 3);
+q = enqueue(move(q), 4);
+print(front(q));
+q = dequeue(move(q));
+print(front(q));
+print(size(q));
