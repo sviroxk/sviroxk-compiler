@@ -586,6 +586,19 @@ print(len(big));
 big = "x";
 print(big);
 SC
+check_case string-plus clean $'ab, cd!\n0123\nxyxy\n1' 1 <<'SC'
+fn string twice(string t) { return t + t; }
+string a = "ab";
+string b = a + ", " + "cd";
+b += "!";
+print(b);
+string acc = "";
+int i = 0;
+while (i < 10) { acc = acc + str(i); i++; if (i == 4) { break; } }
+print(acc);
+print(twice("x" + "y"));
+print(str(1) + "" == "1");
+SC
 check_case string-bytes clean $'104\n1\n2\n2\n2\n195\n169' 1 < "$EXAMPLES/string_bytes.svx"
 check_case move-in-loop-reassign clean $'4\n30\n6\n100\nabbbb\nочередь' 1 <<'SC'
 struct Queue { int[] items; string name; }

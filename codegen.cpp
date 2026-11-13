@@ -159,6 +159,7 @@ bool CodeGen::isOwnedString(const std::string& name) const {
 // ввода, read() и функции, возвращающей string.
 bool CodeGen::isFreshString(const Node& expr) const {
     if (expr.type == NODE_FILE_READ) return true;
+    if (expr.type == NODE_BINOP) return expr.varType == "string-concat";  // a + b (D-024)
     if (expr.type == NODE_INPUT) return sc::Type::from(expr.varType).isStr();
     if (expr.type != NODE_FUNC_CALL) return false;
     if (expr.varName == "move")  // move(структура) — не строка (freshStruct), move(массив) — isFreshArray
@@ -1116,7 +1117,9 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
     if (node.type == NODE_BINOP) {
         // Левый операнд генерируется здесь, а не в genBinary: её кадр большой.
         llvm::Value* left = genExpr(*node.left);
-        return genBinary(node, left);
+        llvm::Value* result = genBinary(node, left);
+        if (isFreshString(node)) registerTemporary(node, result);  // a + b — временная строка (D-024)
+        return result;
     }
     llvm::Value* value = genOtherExpr(node);
     if (isFreshString(node) || !freshStruct(node).empty() || isFreshArray(node))
@@ -1650,6 +1653,28 @@ llvm::Value* CodeGen::genBinary(const Node& node, llvm::Value* L) {
             }
             return unsignedResult ? builder.CreateFPToUI(result, integerResult)
                                   : builder.CreateFPToSI(result, integerResult);
+        }
+        if (node.varType == "string-concat") {  // a + b: malloc(len a + len b + 1), обе части копией
+            llvm::Value* null = llvm::ConstantPointerNull::get(builder.getPtrTy());
+            llvm::Value* left = builder.CreateSelect(builder.CreateICmpEQ(L, null), getStringPtr(""), L);
+            llvm::Value* right = builder.CreateSelect(builder.CreateICmpEQ(R, null), getStringPtr(""), R);
+            llvm::Value* leftLength = builder.CreateCall(runtimeFunction("strlen"), {left});
+            llvm::Value* rightLength = builder.CreateAdd(builder.CreateCall(runtimeFunction("strlen"), {right}),
+                                                         builder.getInt64(1));
+            llvm::Value* joined = builder.CreateCall(runtimeFunction("malloc"),
+                                                     {builder.CreateAdd(leftLength, rightLength)});
+            llvm::Function* function = builder.GetInsertBlock()->getParent();
+            llvm::BasicBlock* failed = llvm::BasicBlock::Create(context, "string_concat_failed", function);
+            llvm::BasicBlock* done = llvm::BasicBlock::Create(context, "string_concat_done", function);
+            builder.CreateCondBr(builder.CreateICmpEQ(joined, null), failed, done);
+            builder.SetInsertPoint(failed);
+            builder.CreateCall(runtimeFunction("abort"), {});
+            builder.CreateUnreachable();
+            builder.SetInsertPoint(done);
+            builder.CreateCall(runtimeFunction("memcpy"), {joined, left, leftLength});
+            builder.CreateCall(runtimeFunction("memcpy"),
+                {builder.CreateInBoundsGEP(builder.getInt8Ty(), joined, leftLength), right, rightLength});
+            return joined;
         }
         if (node.varType == "string-compare") {  // == != < > <= >= для строк: знак strcmp
             llvm::Value* order = builder.CreateCall(runtimeFunction("strcmp"), {L, R});

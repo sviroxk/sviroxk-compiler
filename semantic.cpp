@@ -1248,6 +1248,15 @@ private:
         const sc::Type rightTy = ty(right);
         const bool comparison = node.op == ">" || node.op == "<" || node.op == ">=" ||
             node.op == "<=" || node.op == "==" || node.op == "!=";
+        if (node.op == "+" && (leftTy.isStr() || rightTy.isStr())) {  // a + b: новая строка (D-024)
+            if (leftTy.isStr() && rightTy.isStr()) {
+                node.varType = "string-concat";
+                return "str";
+            }
+            error(node, "строку складывают только со строкой: '" + typeName(left) + "' + '" + typeName(right) +
+                  "'; число — через str(x), букву — через s.push(c)");
+            return "<error>";
+        }
         if (comparison && leftTy.isStr() && rightTy.isStr()) {
             node.varType = "string-compare";  // codegen: strcmp, байты как беззнаковые (D-020)
             return "bool";
