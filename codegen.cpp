@@ -2706,16 +2706,18 @@ void CodeGen::genNode(const Node& node) {
         loopDeferredBase_ = savedLoopBase;
     }
     else if (node.type == NODE_FOR_EACH) {
-        if (!arrays.contains(node.left->value) || !arrayLengths.contains(node.left->value))
+        // Обычный массив — длина известна; растущий массив или окно — описатель {data, len, cap},
+        // данные и длина читаются на каждом шаге (длину внутри цикла менять нельзя, семантика).
+        llvm::Value* desc = dynArrays.contains(node.left->value) ? dynArrays[node.left->value] : nullptr;
+        if (!desc && (!arrays.contains(node.left->value) || !arrayLengths.contains(node.left->value)))
             return;
-        llvm::Value* array = arrays[node.left->value];
-        const unsigned length = arrayLengths[node.left->value];
-        llvm::ArrayType* arrayType = llvm::dyn_cast<llvm::ArrayType>(storageType(array));
-        if (!arrayType) return;
-        llvm::Type* elementType = arrayType->getElementType();
+        llvm::Value* array = desc ? nullptr : arrays[node.left->value];
+        llvm::ArrayType* arrayType = desc ? nullptr : llvm::dyn_cast<llvm::ArrayType>(storageType(array));
+        if (!desc && !arrayType) return;
+        llvm::Type* elementType = desc ? dynArrayElementTypes[node.left->value] : arrayType->getElementType();
         llvm::Function* function = builder.GetInsertBlock()->getParent();
-        llvm::AllocaInst* index = builder.CreateAlloca(builder.getInt32Ty(), nullptr, "foreach_index");
-        builder.CreateStore(builder.getInt32(0), index);
+        llvm::AllocaInst* index = builder.CreateAlloca(builder.getInt64Ty(), nullptr, "foreach_index");
+        builder.CreateStore(builder.getInt64(0), index);
         llvm::AllocaInst* element = builder.CreateAlloca(elementType, nullptr, node.varName);
         llvm::BasicBlock* conditionBlock = llvm::BasicBlock::Create(context, "foreach_cond", function);
         llvm::BasicBlock* bodyBlock = llvm::BasicBlock::Create(context, "foreach_body", function);
@@ -2729,18 +2731,23 @@ void CodeGen::genNode(const Node& node) {
         vars[node.varName] = element;
         if (auto structName = arrayStructNames.find(node.left->value); structName != arrayStructNames.end())
             structTypesByVariable[node.varName] = structName->second;  // for p in people { p.age }
-        unsignedVars[node.varName] = false;
+        unsignedVars[node.varName] = desc && unsignedElements[node.left->value];  // for b in bytes: u8
         charVars[node.varName] = false;
         integerWidths[node.varName] = elementType->isIntegerTy() ? elementType->getIntegerBitWidth() : 32;
         breakBlock = afterBlock;
         continueBlock = stepBlock;
         builder.CreateBr(conditionBlock);
         builder.SetInsertPoint(conditionBlock);
-        llvm::Value* current = builder.CreateLoad(builder.getInt32Ty(), index);
-        builder.CreateCondBr(builder.CreateICmpULT(current, builder.getInt32(length)), bodyBlock, afterBlock);
+        llvm::Value* current = builder.CreateLoad(builder.getInt64Ty(), index);
+        llvm::Value* length = desc
+            ? builder.CreateLoad(builder.getInt64Ty(), builder.CreateStructGEP(dynArrayType(), desc, 1))
+            : static_cast<llvm::Value*>(builder.getInt64(arrayLengths[node.left->value]));
+        builder.CreateCondBr(builder.CreateICmpULT(current, length), bodyBlock, afterBlock);
         builder.SetInsertPoint(bodyBlock);
-        llvm::Value* address = builder.CreateInBoundsGEP(
-            arrayType, array, {builder.getInt32(0), current});
+        llvm::Value* address = desc
+            ? builder.CreateGEP(elementType, builder.CreateLoad(builder.getPtrTy(),
+                  builder.CreateStructGEP(dynArrayType(), desc, 0)), {current})
+            : builder.CreateInBoundsGEP(arrayType, array, {builder.getInt64(0), current});
         llvm::Value* value = builder.CreateLoad(elementType, address);
         builder.CreateStore(value, element);
         std::string ownedElement;  // for p in a: p — своя копия элемента (D-016), освобождается на каждом шаге
@@ -2757,8 +2764,8 @@ void CodeGen::genNode(const Node& node) {
         }
         if ((builder.GetInsertBlock()->empty() || !builder.GetInsertBlock()->back().isTerminator())) builder.CreateBr(stepBlock);
         builder.SetInsertPoint(stepBlock);
-        current = builder.CreateLoad(builder.getInt32Ty(), index);
-        builder.CreateStore(builder.CreateAdd(current, builder.getInt32(1)), index);
+        current = builder.CreateLoad(builder.getInt64Ty(), index);
+        builder.CreateStore(builder.CreateAdd(current, builder.getInt64(1)), index);
         builder.CreateBr(conditionBlock);
         builder.SetInsertPoint(afterBlock);
         restoreScope(parentScope);

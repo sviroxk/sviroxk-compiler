@@ -42,6 +42,7 @@ struct Symbol {
     int deferDropLine = 0;    // строка defer drop; освобождение при выходе из области
     std::map<std::string, int> droppedFields; // поле-массив после drop t.scores: путь -> строка (D-017)
     bool isView = false;      // параметр-окно int[..] / slice int[]: часть чужого массива (D-018)
+    int iteratedLine = 0;     // строка for x in v, внутри которого длину v менять нельзя
 };
 
 // Тип поля по пути "a.b" в структуре (пусто — нет такого поля).
@@ -288,9 +289,18 @@ private:
     void rejectConstArray(const Node& node, const Symbol* array, bool resizes = true) const {
         if (array && array->isConst)
             error(node, "нельзя изменять константный массив '" + node.varName + "'");
+        else if (resizes && array && array->iteratedLine)
+            iteratedError(node, node.varName, *array);
         else if (resizes && array && array->isView)
             error(node, "'" + node.varName + "' — окно на часть чужого массива: длину окна менять нельзя "
                   "(push, pop, resize, clear); нужен свой массив — скопируйте: int[] c = " + node.varName + ";");
+    }
+
+    // Внутри for x in v длина и сам массив v не меняются (как в Rust; в C++ — UB).
+    void iteratedError(const Node& node, const std::string& name, const Symbol& array) const {
+        error(node, "нельзя менять длину массива '" + name + "' внутри цикла for по нему (строка " +
+              std::to_string(array.iteratedLine) + "): push, pop, resize, clear, drop, присваивание; "
+              "элементы меняются через for i in 0.." + name + ".len() { " + name + "[i] = …; }");
     }
 
     // Выражение-символ по форме: литерал 'a', приведение (char), тернарный из символов.
@@ -1763,6 +1773,7 @@ private:
         }
         case NODE_ASSIGN: {
             Symbol* released = lookupMutable(node.varName);
+            if (released && released->iteratedLine) iteratedError(node, node.varName, *released);
             const Symbol* savedReassigned = reassigned_;
             reassigned_ = released;
             struct Restore { const Symbol*& slot; const Symbol* value; ~Restore() { slot = value; } }
@@ -2113,11 +2124,20 @@ private:
         }
         case NODE_FOR_EACH: {
             const std::string collectionType = expression(*node.left);
-            if (collectionType.rfind("array<", 0) != 0) {
-                error(*node.left, "for-each сейчас требует статический массив с известной длиной");
+            Symbol* collection = lookupMutable(node.left->value);
+            const bool growing = collection && collection->isDynArray;  // растущий массив или окно
+            if (collectionType == "<error>") break;
+            if (collectionType.rfind("array<", 0) != 0 && !growing) {
+                error(*node.left, "for x in v: '" + node.left->value + "' — не массив, а '" +
+                      typeName(collectionType) + "'");
                 break;
             }
-            const std::string elementType = collectionType.substr(6, collectionType.size() - 7);
+            const std::string elementType = growing ? normalize(collection->dynArrayElementType)
+                                                    : collectionType.substr(6, collectionType.size() - 7);
+            const int savedIterated = growing ? collection->iteratedLine : 0;
+            if (growing && !collection->iteratedLine) collection->iteratedLine = node.line;
+            struct Restore { Symbol* symbol; int line; ~Restore() { if (symbol) symbol->iteratedLine = line; } }
+                restoreIterated{growing ? collection : nullptr, savedIterated};
             scopes_.emplace_back();
             declare(node.varName, elementType, node, false, true);
             ++loopDepth_;
@@ -2198,7 +2218,9 @@ private:
             break;
         }
         case NODE_DROP:
-            if (Symbol* symbol = checkDrop(node)) {
+            if (const Symbol* iterated = lookup(node.varName); iterated && iterated->iteratedLine)
+                iteratedError(node, node.varName, *iterated);
+            else if (Symbol* symbol = checkDrop(node)) {
                 symbol->droppedLine = node.line;
                 symbol->releasedBy = "drop";
             }
@@ -2209,6 +2231,7 @@ private:
             size_t index = 0;
             Symbol* symbol = lookupMutable(node.varName, &index);
             if (!symbol) error(node, "неизвестное имя '" + node.varName + "'");
+            else if (symbol->iteratedLine) iteratedError(node, node.varName, *symbol);
             else if (symbol->isView)
                 error(node, "окно '" + node.varName + "' освобождать нечего: память у хозяина массива");
             else if (symbol->droppedLine)

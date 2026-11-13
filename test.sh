@@ -1371,6 +1371,15 @@ expect_compile_error "slice-store" $'int[] v = [1, 2, 3];\nint[] w = v[0..2];' "
 expect_compile_error "slice-element-type" $'fn int f(int[..] part) { return 0; }\nptr b = new u8[2];\nprint(f(b));' "аргумент 1 функции 'f': ожидалось окно 'int[..]', получен массив 'byte[]'"
 expect_compile_error "slice-not-array" $'fn int f(int[..] part) { return 0; }\nint x = 3;\nprint(f(x));' "ожидалось окно 'int[..]' (v[a..b], slice(v, a, n) или массив целиком), получен 'int/i32'"
 expect_compile_error "slice-bound-type" $'fn int f(int[..] part) { return 0; }\nint[] v = [1, 2];\nprint(f(v[0..1.5]));' "граница среза должна быть целым числом"
+# for x in v по растущему массиву, окну, массиву структур; длину v в цикле менять нельзя.
+expect_program_output "for-each-grow" "$(cat examples/for_each_grow.svx)" $'10\n20\n30\n40\n50\n100\n200\n0\nAnn\n3\nBob\n3\n2\n40'
+expect_compile_error "for-each-grow-push" $'int[] v = new int[2];\nfor x in v { v.push(x); }' "нельзя менять длину массива 'v' внутри цикла for по нему (строка 2)"
+expect_compile_error "for-each-grow-pop" $'int[] v = new int[2];\nfor x in v { int y = v.pop(); }' "нельзя менять длину массива 'v' внутри цикла for по нему"
+expect_compile_error "for-each-grow-drop" $'int[] v = new int[2];\nfor x in v { drop v; }' "нельзя менять длину массива 'v' внутри цикла for по нему"
+expect_compile_error "for-each-grow-assign" $'int[] v = new int[2];\nfor x in v { v = new int[1]; }' "нельзя менять длину массива 'v' внутри цикла for по нему"
+expect_compile_error "for-each-window-clear" $'fn void f(int[..] p) { for x in p { p.clear(); } }' "нельзя менять длину массива 'p' внутри цикла for по нему"
+expect_compile_error "for-each-not-array" $'int n = 3;\nfor x in n { print(x); }' "for x in v: 'n' — не массив, а 'int/i32'"
+expect_program_output "for-each-grow-after" $'int[] v = new int[1];\nfor x in v { print(x); }\nv.push(5);\nprint(v.len());' $'0\n2'
 # 1.3: move в цикле, если тот же оператор присваивает имени новое значение (D-015, уточнение владельца).
 expect_program_output "move-in-loop-reassign" $'struct Queue { int[] items; string name; }\nfn Queue enqueue(Queue q, int x) { q.items.push(x); return q; }\nfn int[] add(int[] v, int x) { v.push(x); return v; }\nfn string grow(string s) { return replace(s, "a", "ab"); }\nQueue q;\nq.name = "очередь";\nint[] v = new int[0];\nstring s = "a";\nfor i in 0..4 {\n    q = enqueue(move(q), i * 10);\n    v = add(move(v), i);\n    s = grow(move(s));\n}\nint k = 0;\nwhile (k < 2) { v = add(move(v), 100); k += 1; }\nprint(q.items.len()); print(q.items[3]); print(v.len()); print(v[5]); print(s); print(q.name);' $'4\n30\n6\n100\nabbbb\nочередь'
 expect_compile_error "move-in-loop-reassign-other" $'fn int[] add(int[] v, int x) { v.push(x); return v; }\nint[] v = new int[0];\nint[] w = new int[0];\nfor i in 0..3 { w = add(move(v), i); }' "move 'v' внутри цикла или функции, а объявлена она снаружи"
