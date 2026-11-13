@@ -1544,10 +1544,15 @@ llvm::Value* CodeGen::genBinary(const Node& node, llvm::Value* L) {
             return unsignedResult ? builder.CreateFPToUI(result, integerResult)
                                   : builder.CreateFPToSI(result, integerResult);
         }
-        if (node.varType == "string-compare") {  // a == b / a != b для строк
+        if (node.varType == "string-compare") {  // == != < > <= >= для строк: знак strcmp
             llvm::Value* order = builder.CreateCall(runtimeFunction("strcmp"), {L, R});
-            return node.op == "==" ? builder.CreateICmpEQ(order, builder.getInt32(0))
-                                   : builder.CreateICmpNE(order, builder.getInt32(0));
+            llvm::Value* zero = builder.getInt32(0);
+            if (node.op == "==") return builder.CreateICmpEQ(order, zero);
+            if (node.op == "!=") return builder.CreateICmpNE(order, zero);
+            if (node.op == "<") return builder.CreateICmpSLT(order, zero);
+            if (node.op == ">") return builder.CreateICmpSGT(order, zero);
+            if (node.op == "<=") return builder.CreateICmpSLE(order, zero);
+            return builder.CreateICmpSGE(order, zero);
         }
         if (L->getType()->isPointerTy() || R->getType()->isPointerTy()) {
             if (node.op == "==") return builder.CreateICmpEQ(L, R);

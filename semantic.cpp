@@ -1244,12 +1244,8 @@ private:
         const bool comparison = node.op == ">" || node.op == "<" || node.op == ">=" ||
             node.op == "<=" || node.op == "==" || node.op == "!=";
         if (comparison && leftTy.isStr() && rightTy.isStr()) {
-            if (node.op == "==" || node.op == "!=") {
-                node.varType = "string-compare";  // codegen: strcmp
-                return "bool";
-            }
-            error(node, "строки сравниваются только через == и !=");
-            return "<error>";
+            node.varType = "string-compare";  // codegen: strcmp, байты как беззнаковые (D-020)
+            return "bool";
         }
         if (comparison && (leftTy.isPtr() || rightTy.isPtr())) {
             if ((node.op == "==" || node.op == "!=") && leftTy.isPtr() && rightTy.isPtr()) return "bool";
