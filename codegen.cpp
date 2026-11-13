@@ -1379,6 +1379,8 @@ llvm::Value* CodeGen::genCallExpr(const Node& node) {
             llvm::Function* f = runtimeFunction("rand");
             return builder.CreateCall(f, {});
         }
+        if (name == "data" || name == "as_ptr")  // D-014: адрес символов строки
+            return genExpr(node.args[0]);
         if (name == "len") {
             llvm::Function* strlenF = runtimeFunction("strlen");
             llvm::Value* str = genExpr(node.args[0]);
@@ -1495,6 +1497,8 @@ void CodeGen::genNode(const Node& node) {
         pointeeTypes.erase(node.varName);
         if (node.left->type == NODE_ADDR && vars.contains(node.left->varName) && vars[node.left->varName])
             pointeeTypes[node.varName] = storageType(vars[node.left->varName]);
+        if (node.left->type == NODE_FUNC_CALL && (node.left->varName == "data" || node.left->varName == "as_ptr"))
+            pointeeTypes[node.varName] = builder.getInt8Ty();  // символы строки
         llvm::Value* val = genExpr(*node.left);
         llvm::Type* ty = node.varType.empty()
             ? val->getType() : svType(node.varType);
