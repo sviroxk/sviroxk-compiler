@@ -159,8 +159,9 @@ bool CodeGen::isFreshString(const Node& expr) const {
     if (expr.type == NODE_FILE_READ) return true;
     if (expr.type == NODE_INPUT) return sc::Type::from(expr.varType).isStr();
     if (expr.type != NODE_FUNC_CALL) return false;
-    if (expr.varName == "move")  // move(структура) — не строка (freshStruct)
-        return expr.args.size() == 1 && !structTypesByVariable.contains(expr.args[0].value);
+    if (expr.varName == "move")  // move(структура) — не строка (freshStruct), move(массив) — isFreshArray
+        return expr.args.size() == 1 && !structTypesByVariable.contains(expr.args[0].value) &&
+               !dynArrays.contains(expr.args[0].value);
     if (expr.varName == "str" || expr.varName == "replace") return true;
     const auto result = funcReturnTypes.find(expr.varName);
     return funcs.contains(expr.varName) && result != funcReturnTypes.end() &&
@@ -265,6 +266,58 @@ void CodeGen::copyStructStrings(llvm::Value* address, const std::string& structN
         else if (fieldType.isStruct() && structOwnsMemory(fieldType.structName))
             copyStructStrings(field, fieldType.structName);
     }
+}
+
+// Новый растущий массив, которым никто не владеет: результат `fn int[] f()` или move(имя).
+bool CodeGen::isFreshArray(const Node& expr) const {
+    if (expr.type != NODE_FUNC_CALL) return false;
+    if (expr.varName == "move")
+        return expr.args.size() == 1 && expr.args[0].type == NODE_IDENTIFIER && dynArrays.contains(expr.args[0].value);
+    const auto result = funcReturnTypes.find(expr.varName);
+    return funcs.contains(expr.varName) && result != funcReturnTypes.end() && result->second.starts_with("dyn<");
+}
+
+// Описатель {data, len, cap} со своей копией буфера (ёмкость минимум 1, как у copyStructStrings).
+llvm::Value* CodeGen::copyDynArray(llvm::Value* data, llvm::Value* length, llvm::Value* capacity,
+                                   llvm::Type* element) {
+    llvm::Value* size = builder.getInt64(element->getPrimitiveSizeInBits() / 8);
+    capacity = builder.CreateSelect(builder.CreateICmpEQ(capacity, builder.getInt64(0)), builder.getInt64(1), capacity);
+    llvm::Value* copy = builder.CreateCall(runtimeFunction("malloc"), {builder.CreateMul(capacity, size)});
+    emitRuntimeFailureIf(builder.CreateIsNull(copy), "out of memory", Node{});
+    builder.CreateCall(runtimeFunction("memcpy"), {copy, data, builder.CreateMul(length, size)});
+    llvm::Value* desc = llvm::UndefValue::get(dynArrayType());
+    desc = builder.CreateInsertValue(desc, copy, {0});
+    desc = builder.CreateInsertValue(desc, length, {1});
+    return builder.CreateInsertValue(desc, capacity, {2});
+}
+
+// Значение для параметра/переменной/return типа T[] (D-018): f() и move(a) забрать,
+// имя растущего или обычного массива — скопировать (как vector в C++).
+llvm::Value* CodeGen::arrayValue(const Node& expr) {
+    if (isFreshArray(expr)) {
+        llvm::Value* value = genExpr(expr);
+        consumeTemporary(expr);
+        return value;
+    }
+    if (auto found = dynArrays.find(expr.value); found != dynArrays.end()) {
+        llvm::Value* desc = found->second;
+        auto field = [&](unsigned index, llvm::Type* type) {
+            return builder.CreateLoad(type, builder.CreateStructGEP(dynArrayType(), desc, index));
+        };
+        return copyDynArray(field(0, builder.getPtrTy()), field(1, builder.getInt64Ty()),
+                            field(2, builder.getInt64Ty()), dynArrayElementTypes[expr.value]);
+    }
+    llvm::Value* length = builder.getInt64(arrayLengths[expr.value]);
+    return copyDynArray(arrays[expr.value], length, length, arrayElementTypes[expr.value]);
+}
+
+// Имя растущего массива: описатель desc, освобождается в конце блока (1.3).
+void CodeGen::bindDynArray(const std::string& name, llvm::Value* desc, const std::string& elementType) {
+    dynArrays[name] = desc;
+    dynArrayElementTypes[name] = svType(elementType);
+    unsignedElements[name] = sc::Type::from(elementType).isUnsigned();
+    vars[name] = desc;
+    deferred_.push_back({nullptr, {}, desc});
 }
 
 // Переменная-структура со строками освобождает их в конце своего блока (как string, D-014).
@@ -419,6 +472,7 @@ llvm::Type* sc::Type::llvmType(llvm::LLVMContext& ctx) const {
 }
 
 llvm::Type* CodeGen::svType(const std::string& name) {
+    if (name.starts_with("dyn<")) return dynArrayType();  // int[] в параметре/результате (D-018)
     return sc::Type::from(name).llvmType(context);
 }
 
@@ -873,7 +927,8 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         return genBinary(node, left);
     }
     llvm::Value* value = genOtherExpr(node);
-    if (isFreshString(node) || !freshStruct(node).empty()) registerTemporary(node, value);  // D-014, D-016
+    if (isFreshString(node) || !freshStruct(node).empty() || isFreshArray(node))
+        registerTemporary(node, value);  // D-014, D-016, D-018
     return value;
 }
 
@@ -1705,6 +1760,10 @@ llvm::Value* CodeGen::genCallExpr(const Node& node) {
             llvm::Function* fn = funcs[name];
             const auto& ptypes = funcParamTypes[name];
             for (size_t i = 0; i < node.args.size(); i++) {
+                if (i < ptypes.size() && ptypes[i].starts_with("dyn<")) {  // int[] v — копия или move (D-018)
+                    argVals.push_back(arrayValue(node.args[i]));
+                    continue;
+                }
                 llvm::Value* v = genExpr(node.args[i]);
                 if (i < ptypes.size()) {
                     checkNarrowStore(v, node.args[i], svType(ptypes[i]), unsignedTypeName(ptypes[i]),
@@ -1810,6 +1869,22 @@ void CodeGen::genNode(const Node& node) {
             deferred_.push_back({nullptr, {}, desc});
             return;
         }
+        // int[] b = a / move(a) / f(); ptr b = f() / move(a) — растущий массив (D-018).
+        if (node.varType.starts_with("dyn<") || (sc::Type::from(node.varType).isPtr() && isFreshArray(*node.left))) {
+            const bool moved = !node.varType.starts_with("dyn<") && node.left->varName == "move";
+            const std::string source = moved ? node.left->args[0].value : "";
+            llvm::Type* movedElement = moved ? dynArrayElementTypes[source] : nullptr;
+            const bool movedUnsigned = moved && unsignedElements[source];
+            const std::string type = node.varType.starts_with("dyn<") ? node.varType
+                : moved ? "dyn<i32>" : funcReturnTypes[node.left->varName];
+            llvm::Value* value = arrayValue(*node.left);
+            llvm::Value* desc = createStorage(dynArrayType(), node.varName);
+            builder.CreateStore(value, desc);
+            bindDynArray(node.varName, desc, sc::Type::from(type).element->toString());
+            if (moved) { dynArrayElementTypes[node.varName] = movedElement; unsignedElements[node.varName] = movedUnsigned; }
+            constVars[node.varName] = node.isConst;
+            return;
+        }
         // ptr p = &x: запомнить тип x, чтобы *p читал и писал значение нужного типа.
         pointeeTypes.erase(node.varName);
         if (node.left->type == NODE_ADDR && vars.contains(node.left->varName) && vars[node.left->varName])
@@ -1852,6 +1927,14 @@ void CodeGen::genNode(const Node& node) {
     }
     else if (node.type == NODE_ASSIGN) {
         llvm::Value* alloca = vars[node.varName];
+        if (alloca && !constVars[node.varName] && dynArrays.contains(node.varName) && (isFreshArray(*node.left) ||
+            (node.left->type == NODE_IDENTIFIER && (dynArrays.contains(node.left->value) || arrays.contains(node.left->value))))) {  // v = a (копия), v = move(a), v = f(): старый буфер — free
+            llvm::Value* value = arrayValue(*node.left);
+            llvm::Value* dataSlot = builder.CreateStructGEP(dynArrayType(), dynArrays[node.varName], 0);
+            builder.CreateCall(runtimeFunction("free"), {builder.CreateLoad(builder.getPtrTy(), dataSlot)});
+            builder.CreateStore(value, dynArrays[node.varName]);
+            return;
+        }
         if (alloca && !constVars[node.varName] && dynArrays.contains(node.varName) &&
             node.left->type == NODE_DYN_ARRAY) {  // v = new T[n]: новый буфер, старый освободить (1.3)
             llvm::Value* desc = dynArrays[node.varName];
@@ -2026,6 +2109,19 @@ void CodeGen::genNode(const Node& node) {
         if (retTy->isVoidTy()) {
             emitDeferred(0);
             builder.CreateRetVoid();
+        } else if (node.left && retTy == dynArrayType()) {
+            // return v локального массива или параметра — без копии (слот обнуляется), иначе arrayValue.
+            llvm::Value* slot = node.left->type == NODE_IDENTIFIER && dynArrays.contains(node.left->value)
+                ? dynArrays[node.left->value] : nullptr;
+            llvm::Value* v = nullptr;
+            if (slot && llvm::isa<llvm::AllocaInst>(slot)) {
+                v = builder.CreateLoad(dynArrayType(), slot);
+                builder.CreateStore(llvm::Constant::getNullValue(dynArrayType()), slot);
+            } else {
+                v = arrayValue(*node.left);
+            }
+            emitDeferred(0);
+            builder.CreateRet(v);
         } else if (node.left) {
             llvm::Value* v = genExpr(*node.left);
             // Имя функции в модуле — "sc.fn." + имя SC (generate()).
@@ -2282,6 +2378,12 @@ void CodeGen::genNode(const Node& node) {
             llvm::Type* ty = svType(ptype);
             llvm::AllocaInst* alloca =
                 builder.CreateAlloca(ty, nullptr, pname);
+            if (ptype.starts_with("dyn<")) {  // int[] v: своя копия (её сделал вызывающий), free в конце (D-018)
+                builder.CreateStore(&arg, alloca);
+                bindDynArray(pname, alloca, sc::Type::from(ptype).element->toString());
+                constVars[pname] = false;
+                continue;
+            }
             const bool ownedString = sc::Type::from(ptype).isStr();  // параметр — своя копия
             builder.CreateStore(ownedString ? copyString(&arg) : static_cast<llvm::Value*>(&arg), alloca);
             vars[pname] = alloca;
@@ -2315,6 +2417,10 @@ void CodeGen::genNode(const Node& node) {
             std::vector<llvm::Value*> argVals;
             const auto& ptypes = funcParamTypes[node.varName];
             for (size_t i = 0; i < node.args.size(); i++) {
+                if (i < ptypes.size() && ptypes[i].starts_with("dyn<")) {  // int[] v — копия или move (D-018)
+                    argVals.push_back(arrayValue(node.args[i]));
+                    continue;
+                }
                 llvm::Value* v = genExpr(node.args[i]);
                 if (i < ptypes.size()) {
                     checkNarrowStore(v, node.args[i], svType(ptypes[i]), unsignedTypeName(ptypes[i]),
@@ -2324,7 +2430,7 @@ void CodeGen::genNode(const Node& node) {
                 argVals.push_back(v);
             }
             llvm::Value* result = builder.CreateCall(funcs[node.varName], argVals);
-            if (isFreshString(node) || !freshStruct(node).empty())
+            if (isFreshString(node) || !freshStruct(node).empty() || isFreshArray(node))
                 registerTemporary(node, result);  // f(); с результатом string или структурой со строками
         } else {
             genExpr(node);

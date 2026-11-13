@@ -408,3 +408,8 @@
 - Тесты: `tests/memory-safety.sh` `dynamic-auto-release` (LeakSanitizer; до правки — утечка), `test.sh` `dynamic-array-auto-release`, `dynamic-array-del-then-drop`. Spec §8, §10.
 - Исправлено (без него `del v` + `v = new int[1]` ломалось): `v = new T[n]` теперь даёт новый буфер с нулями и `len`/`cap` = n, старый освобождается (было: сырой malloc без нулей, старая длина, утечка). Тесты `dynamic-array-new-reassign`, `dynamic-new-reassign`.
 - В письмо: баг `int u;` («ожидалась '='», из PR #121).
+
+## 2026-11-13 — растущий массив (1.3), шаг 2: массив в функцию и из функции (D-018)
+- Параметр `int[] v` — копия (как `vector` в C++), обычный массив — тоже копией; `move(a)` — перенос, `a` нельзя до присваивания (как в Rust); `fn int[] f()` — локальный/параметр возвращается без копии, глобальный — копией; `int[] b = a`/`b = a` — копия, `int[] b = move(a)`, `ptr b = f()`, `int[] v = new int[n]`; результат, не положенный в переменную, освобождается в конце оператора.
+- Ошибки: «ожидался массив 'int[]', получен массив 'byte[]'», «return: ожидался массив …», параметр `ptr` — с подсказкой `int[] v`; `fn ptr` с `return v` — подсказка `fn int[]`.
+- Тесты: `test.sh` `array-function-copy-move`, `array-use-after-move`, `array-argument-element`, `array-return-type`, `array-param-type`; `memory-safety.sh` `array-function-release` (LeakSanitizer). Spec §8, §17.

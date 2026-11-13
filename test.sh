@@ -804,7 +804,7 @@ expect_garbage_input() {
 expect_garbage_input "stray-rbrace" $'}\n' "лишняя '}'" 1
 expect_garbage_input "stray-rbraces" $'}}}\n' "лишняя '}'"
 expect_garbage_input "if-without-parens" $'let x: int = 1;\nif x == 1 { print(1); }\nprint(2);\n' "получено 'x'"
-expect_garbage_input "array-param-type" $'fn int first(int[] a) { return 0; }\nprint(1);\n' "ожидалось имя параметра"
+expect_garbage_input "array-param-type" $'fn int first(int[] a) { return 0; }\nprint(first(1));\n' "аргумент 1 функции 'first': ожидался массив 'int[]', получен 'int/i32'"
 expect_garbage_input "struct-param-type" $'struct P { int x = 0; }\nfn int getx(Q p) { return 1; }\nprint(1);\n' "неизвестный тип параметра 'Q'"
 expect_garbage_input "keyword-function-name" $'fn int f32(int a) { return a; }\nprint(1);\n' "'f32' — зарезервированное слово"
 expect_garbage_input "truncated-fn" 'fn int f(' ""
@@ -939,7 +939,7 @@ expect_program_output "ternary-mixed-int-width" $'short s = 1;\nprint(true ? 5 :
 expect_program_output "ternary-f32-f64" $'f32 s = 1.5;\nprint(true ? 5.0 : s);\nprint(false ? 5.0 : s);' $'5.000000\n1.500000'
 expect_program_output "user-fn-named-strlen" $'fn int strlen(int x) { return x + 1; }\nprint(strlen(4));\nprint(len("abcd"));' $'5\n4'
 expect_compile_error "user-main-reserved" $'fn void main() { print(111); }\nprint(1);' "имя функции 'main' зарезервировано"
-expect_compile_error "return-dynamic-array" $'fn ptr make() { ptr v = new int[3]; return v; }\nprint(1);' "возврат динамического массива из функции пока не поддержан"
+expect_compile_error "return-dynamic-array" $'fn ptr make() { ptr v = new int[3]; return v; }\nprint(1);' "возврат массива: объявите результат функции массивом"
 
 # Шаг 3: строки в куче, файлы, new, push, разыменование.
 expect_program_output "str-huge-double" 'print(len(str(1e300)));' '308'
@@ -1323,7 +1323,7 @@ expect_compile_error "string-move-without-parens" $'string a = "abc";\nstring b 
 expect_compile_error "string-move-in-loop" $'string a = "abc";\nrepeat (2) { string b = move(a); }' "move 'a' внутри цикла или функции, а объявлена она снаружи"
 expect_compile_error "string-move-not-name" 'string b = move("abc");' "move(…) переносит строку или структуру из переменной: пишите move(имя)"
 expect_compile_error "del-string" $'string r = replace("a-b", "-", "+");\ndel r;' "del для строки не пишется: 'r' — string, её память освобождает язык"
-expect_compile_error "dyn-array-argument" $'fn int g(ptr p) { return 1; }\nptr v = new int[2];\nprint(g(v));' "динамический массив 'v' пока нельзя передать в функцию"
+expect_compile_error "dyn-array-argument" $'fn int g(ptr p) { return 1; }\nptr v = new int[2];\nprint(g(v));' "динамический массив 'v' нельзя передать в параметр ptr (он не знает длину массива)"
 expect_program_output "print-bool-builtin" $'string s = "a";\nprint((s == "a"));\nprint((s == "b"));' $'1\n0'
 
 # Step 4b: PR22 struct parameters are aggregate copies, not aliases.
@@ -1340,6 +1340,10 @@ expect_program_output "struct-array-field" $'struct Stats { string name; int[] s
 # 1.3: растущий массив-переменная освобождается сам в конце блока; drop/del раньше — по желанию.
 expect_program_output "dynamic-array-auto-release" $'fn i64 count(int n) {\n    ptr v = new int[0];\n    for i in 0..n { v.push(i); }\n    if (n > 2) { return v.len(); }\n    return 0;\n}\nprint(count(1));\nprint(count(4));\nptr w = new int[1];\ndel w;\nptr u = new int[2];\nu.push(5);\nprint(u.len());' $'0\n4\n3'
 expect_program_output "dynamic-array-new-reassign" $'ptr v = new int[2];\nv[1] = 9;\nv = new int[3];\nprint(v.len());\nprint(v[1]);\nv.push(5);\nprint(v[3]);' $'3\n0\n5'
+expect_program_output "array-function-copy-move" $'fn i64 total(int[] v) { i64 s = 0; for i in 0..v.len() { s += v[i]; } v.push(100); return s; }\nfn int[] make(int n) { int[] r = new int[0]; for i in 0..n { r.push(i * 10); } return r; }\nfn int[] grow(int[] v) { v.push(7); return v; }\nptr a = new int[0];\na.push(1);\na.push(2);\nprint(total(a));\nprint(a.len());\nint[] st = [5, 6, 7];\nprint(total(st));\nint[] m = make(4);\nprint(total(make(3)));\nmake(2);\nint[] c = m;\nc[0] = 99;\nprint(m[0] + c[0]);\nint[] d = move(c);\nc = make(1);\nprint(c.len() + d.len());\nm = grow(move(m));\nprint(m.len() + m[4]);' $'3\n2\n18\n30\n99\n5\n12'
+expect_compile_error "array-use-after-move" $'int[] a = new int[2];\nint[] b = move(a);\nprint(a.len());' "'a' используется после move (строка 2)"
+expect_compile_error "array-argument-element" $'fn i64 total(int[] v) { return v.len(); }\nptr b = new u8[2];\nprint(total(b));' "ожидался массив 'int[]', получен массив 'byte[]'"
+expect_compile_error "array-return-type" $'fn int[] f() { return 5; }' "return: ожидался массив 'int[]', получен 'int/i32'"
 expect_compile_error "dynamic-array-del-then-drop" $'ptr v = new int[2];\ndel v;\ndrop v;' "повторный drop 'v' (уже освобождено в строке 2)"
 expect_compile_error "struct-array-field-assign" $'struct S { int[] a; }\nS s;\ns.a = 5;' "полю-массиву 's.a' присваивается только список"
 expect_compile_error "struct-array-field-use-after-drop" $'struct S { int[] a; }\nS s;\ndrop s.a;\ns.a.push(1);' "'s.a' используется после drop (строка 3)"

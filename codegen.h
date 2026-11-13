@@ -52,6 +52,11 @@ class CodeGen {
     bool structOwnsMemory(const std::string& structName, int depth = 0) const;
     void dropStruct(llvm::Value* address, const std::string& structName);
     void bindFieldArray(const Node& node);
+    // 1.3 (D-018): растущий массив в параметре, переменной, return — копия, move или результат.
+    bool isFreshArray(const Node& expr) const;
+    llvm::Value* copyDynArray(llvm::Value* data, llvm::Value* length, llvm::Value* capacity, llvm::Type* element);
+    llvm::Value* arrayValue(const Node& expr);
+    void bindDynArray(const std::string& name, llvm::Value* desc, const std::string& elementType);
     void copyStructStrings(llvm::Value* address, const std::string& structName);
     void ownStructSlot(llvm::Value* slot, const std::string& structName);
     bool storeOwnedField(const Node& assign, llvm::Value* address, llvm::Type* fieldType);
