@@ -298,6 +298,11 @@ private:
 
     // Внутри for x in v длина и сам массив v не меняются (как в Rust; в C++ — UB).
     void iteratedError(const Node& node, const std::string& name, const Symbol& array) const {
+        if (array.ty.isStr()) {
+            error(node, "нельзя менять строку '" + name + "' внутри цикла for по её буквам (строка " +
+                  std::to_string(array.iteratedLine) + ")");
+            return;
+        }
         error(node, "нельзя менять длину массива '" + name + "' внутри цикла for по нему (строка " +
               std::to_string(array.iteratedLine) + "): push, pop, resize, clear, drop, присваивание; "
               "элементы меняются через for i in 0.." + name + ".len() { " + name + "[i] = …; }");
@@ -2139,6 +2144,27 @@ private:
         case NODE_FOR_EACH: {
             const std::string collectionType = expression(*node.left);
             Symbol* collection = lookupMutable(node.left->value);
+            if (node.op == "letters") {  // for c in letters(s): c — char; s в цикле не меняется (D-022)
+                if (collectionType == "<error>") break;
+                if (!sc::Type::from(collectionType).isStr()) {
+                    error(*node.left, "letters(s): '" + node.left->value + "' — не строка, а '" +
+                          typeName(collectionType) + "'");
+                    break;
+                }
+                const int savedLine = collection ? collection->iteratedLine : 0;
+                if (collection && !collection->iteratedLine) collection->iteratedLine = node.line;
+                scopes_.emplace_back();
+                declare(node.varName, "char", node, false, true);
+                ++loopDepth_;
+                const size_t savedBarrier = dropBarrier_;
+                dropBarrier_ = scopes_.size() - 1;
+                checkStatements(node.children);
+                --loopDepth_;
+                dropBarrier_ = savedBarrier;
+                scopes_.pop_back();
+                if (collection) collection->iteratedLine = savedLine;
+                break;
+            }
             const bool growing = collection && collection->isDynArray;  // растущий массив или окно
             if (collectionType == "<error>") break;
             if (collectionType.rfind("array<", 0) != 0 && !growing) {

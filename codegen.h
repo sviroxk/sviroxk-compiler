@@ -142,6 +142,7 @@ public:
     llvm::Value* allocateStringBuffer(llvm::Value* bytes, const Node& location);
     llvm::Function* readLineFunction();
     llvm::Function* utf8EncodeFunction();
+    llvm::Function* utf8DecodeFunction();
     llvm::AllocaInst* entryAlloca(llvm::Type* type, const char* name);
     llvm::Value* emitReadLine(llvm::Value* file, const Node& location, bool eofIsError);
     void emitArrayBoundsCheck(llvm::Value* index, llvm::Value* length, const Node& location);

@@ -457,3 +457,7 @@
 - `char` теперь 32 бита, как в Rust (D-021): литералы `'é'`, `'я'`, `'😀'`, `print` печатает UTF-8, `(char) n` проверяет номер (`invalid char`), `char` → `u8` — с проверкой; `data(s)` — указатель на байты `u8`.
 - Байт строки сравнивается только с буквой ASCII; литерал не UTF-8 — ошибка лексера.
 - spec §2 (таблица), §11 «Буква: char»; тесты `char-unicode`, `char-byte-vs-letter`, `char-literal-*`, `char-invalid-number`, `char-to-byte-overflow`.
+
+## 2026-11-13 — 1.1: обход строки по буквам
+- `for c in letters(s)` — буквы строки по очереди (`char`), не UTF-8 — U+FFFD на неверный байт; менять строку в цикле нельзя (D-022).
+- spec §11 «Буквы по очереди», §17; тесты `letters-loop`, `letters-bad-utf8`, `letters-change-string`, `letters-not-string`, `letters-not-name`.
