@@ -1087,7 +1087,14 @@ private:
                 return "str";
             }
             if (node.varName == "replace") return "str";  // D-014: только строка
-            if (isStringAddress(node)) return "ptr";  // D-014: адрес строки — только явно
+            if (isStringAddress(node)) {  // D-014: адрес строки — только явно
+                const Node& source = node.args[0];
+                if (source.type != NODE_IDENTIFIER && source.type != NODE_STRUCT_FIELD &&
+                    argumentTypes[0] == "str")  // временная строка живёт до конца оператора
+                    error(source, node.varName + "(…) берёт адрес строки с именем: временная строка "
+                          "освобождается в конце оператора, сначала положите её в переменную (string s = …;)");
+                return "ptr";
+            }
             if (node.varName == "sqrt" || node.varName == "pow" ||
                 node.varName == "floor" || node.varName == "ceil" || node.varName == "round") {
                 // D-009: целые аргументы. pow двух целых — целое, как `**` (с проверкой

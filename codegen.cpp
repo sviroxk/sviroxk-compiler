@@ -135,10 +135,11 @@ void CodeGen::emitDeferred(size_t base) {
     for (size_t i = deferred_.size(); i > base; --i) {
         if (llvm::Value* slot = deferred_[i - 1].freeSlot) {  // free(NULL) — ничего не делает
             builder.CreateCall(runtimeFunction("free"), {builder.CreateLoad(builder.getPtrTy(), slot)});
+            builder.CreateStore(llvm::ConstantPointerNull::get(builder.getPtrTy()), slot);
             continue;
         }
         restoreScope(deferred_[i - 1].bindings);
-        genNode(*deferred_[i - 1].statement);
+        genStatement(*deferred_[i - 1].statement);
     }
     restoreScope(current);
 }
@@ -181,7 +182,9 @@ llvm::Value* CodeGen::copyString(llvm::Value* value) {
 // Значение для string-переменной: свежую строку забрать, остальное (литерал,
 // другая переменная, поле) скопировать — `string b = a` копирует (D-014).
 llvm::Value* CodeGen::ownString(const Node& expr, llvm::Value* value) {
-    return isFreshString(expr) ? value : copyString(value);
+    if (!isFreshString(expr)) return copyString(value);
+    consumeTemporary(expr);
+    return value;
 }
 
 // Запись строки в поле, элемент массива: такие места строку не освобождают, поэтому
@@ -189,6 +192,7 @@ llvm::Value* CodeGen::ownString(const Node& expr, llvm::Value* value) {
 llvm::Value* CodeGen::stableString(const Node& expr, llvm::Value* value) {
     const bool borrowed = (expr.type == NODE_IDENTIFIER && isOwnedString(expr.value)) ||
         (expr.type == NODE_TERNARY && value->getType()->isPointerTy());
+    if (isFreshString(expr)) consumeTemporary(expr);
     return borrowed ? copyString(value) : value;
 }
 
@@ -197,11 +201,52 @@ void CodeGen::ownStringSlot(llvm::Value* slot) {
     deferred_.push_back({nullptr, {}, slot});
 }
 
+// Временная строка (результат str()/replace/ввода/функции, не положенный в
+// переменную или поле) живёт до конца оператора: слот в начале функции (NULL), на
+// выходах из блока (return/break/continue) освобождается вместе с переменными.
+void CodeGen::registerTemporary(const Node& expr, llvm::Value* value) {
+    llvm::BasicBlock& entry = builder.GetInsertBlock()->getParent()->getEntryBlock();
+    llvm::IRBuilder<> at(&entry, entry.getFirstInsertionPt());
+    llvm::AllocaInst* slot = at.CreateAlloca(builder.getPtrTy(), nullptr, "sc.tmp.str");
+    at.CreateStore(llvm::ConstantPointerNull::get(builder.getPtrTy()), slot);
+    builder.CreateStore(value, slot);
+    deferred_.push_back({nullptr, {}, slot, &expr});
+}
+
+// Значение забрала переменная, поле или return: временной строкой оно больше не считается.
+void CodeGen::consumeTemporary(const Node& expr) {
+    for (size_t i = deferred_.size(); i > 0; --i)
+        if (deferred_[i - 1].temporary == &expr) {
+            deferred_.erase(deferred_.begin() + static_cast<std::ptrdiff_t>(i - 1));
+            return;
+        }
+}
+
+// Конец оператора: освободить его временные строки (после return/break их уже освободил выход).
+void CodeGen::releaseTemporaries(size_t mark) {
+    const bool reachable = !blockHasTerminator(builder.GetInsertBlock());
+    for (size_t i = deferred_.size(); i > mark; --i) {
+        if (!deferred_[i - 1].temporary) continue;
+        if (reachable) {
+            llvm::Value* slot = deferred_[i - 1].freeSlot;
+            builder.CreateCall(runtimeFunction("free"), {builder.CreateLoad(builder.getPtrTy(), slot)});
+            builder.CreateStore(llvm::ConstantPointerNull::get(builder.getPtrTy()), slot);
+        }
+        deferred_.erase(deferred_.begin() + static_cast<std::ptrdiff_t>(i - 1));
+    }
+}
+
+void CodeGen::genStatement(const Node& statement) {
+    const size_t mark = deferred_.size();
+    genNode(statement);
+    releaseTemporaries(mark);
+}
+
 void CodeGen::genScope(const std::vector<Node>& statements) {
     const size_t base = deferred_.size();
     for (const Node& statement : statements) {
         if (blockHasTerminator(builder.GetInsertBlock())) break;
-        genNode(statement);
+        genStatement(statement);
     }
     if (!blockHasTerminator(builder.GetInsertBlock())) emitDeferred(base);
     deferred_.resize(base);
@@ -677,7 +722,9 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         llvm::Value* left = genExpr(*node.left);
         return genBinary(node, left);
     }
-    return genOtherExpr(node);
+    llvm::Value* value = genOtherExpr(node);
+    if (isFreshString(node)) registerTemporary(node, value);  // D-014
+    return value;
 }
 
 llvm::Value* CodeGen::genOtherExpr(const Node& node) {
@@ -1972,7 +2019,8 @@ void CodeGen::genNode(const Node& node) {
                 }
                 argVals.push_back(v);
             }
-            builder.CreateCall(funcs[node.varName], argVals);
+            llvm::Value* result = builder.CreateCall(funcs[node.varName], argVals);
+            if (isFreshString(node)) registerTemporary(node, result);  // f(); с результатом string
         } else {
             genExpr(node);
         }
@@ -2235,7 +2283,9 @@ void CodeGen::genNode(const Node& node) {
         continueBlock = condBlock;
         builder.CreateBr(condBlock);
         builder.SetInsertPoint(condBlock);
+        const size_t conditionMark = deferred_.size();
         llvm::Value* cond = toBool(genExpr(*node.left));
+        releaseTemporaries(conditionMark);  // строки условия — на каждой проверке
         builder.CreateCondBr(cond, bodyBlock, afterBlock);
         builder.SetInsertPoint(bodyBlock);
         const ScopeSnapshot parentScope = saveScope();
@@ -2293,7 +2343,7 @@ void CodeGen::generate(const Node& program) {
 
     globalStorage = true;
     for (const Node& node : program.children)
-        if (node.type != NODE_FUNC_DEF && node.type != NODE_STRUCT_DEF) genNode(node);
+        if (node.type != NODE_FUNC_DEF && node.type != NODE_STRUCT_DEF) genStatement(node);
     emitDeferred(0);
     deferred_.clear();
     globalStorage = false;
