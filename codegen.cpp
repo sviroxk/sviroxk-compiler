@@ -2460,6 +2460,30 @@ void CodeGen::genNode(const Node& node) {
         builder.CreateBr(done);
         builder.SetInsertPoint(done);
     }
+    else if (node.type == NODE_ARRAY_PUSH && !dynArrays.contains(node.varName) && vars.contains(node.varName) &&
+             ownedStringSlots_.contains(vars[node.varName])) {
+        // s.push(c): строка длиннее на букву c в UTF-8 (до 4 байт и 0 в конце), D-023.
+        llvm::Value* slot = vars[node.varName];
+        llvm::Value* letter = genExpr(*node.left);
+        llvm::Value* old = builder.CreateLoad(builder.getPtrTy(), slot);
+        llvm::Value* isNull = builder.CreateICmpEQ(old, llvm::ConstantPointerNull::get(builder.getPtrTy()));
+        llvm::Value* length = builder.CreateSelect(isNull, builder.getInt64(0),
+            builder.CreateCall(runtimeFunction("strlen"), {builder.CreateSelect(isNull, getStringPtr(""), old)}));
+        llvm::Value* grown = builder.CreateCall(runtimeFunction("realloc"),
+                                                {old, builder.CreateAdd(length, builder.getInt64(5))});
+        llvm::Function* function = builder.GetInsertBlock()->getParent();
+        llvm::BasicBlock* failed = llvm::BasicBlock::Create(context, "string_push_failed", function);
+        llvm::BasicBlock* done = llvm::BasicBlock::Create(context, "string_push_done", function);
+        builder.CreateCondBr(builder.CreateICmpEQ(grown, llvm::ConstantPointerNull::get(builder.getPtrTy())),
+                             failed, done);
+        builder.SetInsertPoint(failed);
+        builder.CreateCall(runtimeFunction("abort"), {});
+        builder.CreateUnreachable();
+        builder.SetInsertPoint(done);
+        builder.CreateCall(utf8EncodeFunction(),
+                           {letter, builder.CreateInBoundsGEP(builder.getInt8Ty(), grown, length)});
+        builder.CreateStore(grown, slot);
+    }
     else if (node.type == NODE_ARRAY_PUSH) {
         auto found = dynArrays.find(node.varName);
         if (found == dynArrays.end())

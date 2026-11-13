@@ -571,6 +571,21 @@ for p in people {
 SC
 check_case slice-window clean $'9\n9\n15\n2\n4\n3\n16\n3\n5\n70\n20\n0\n41\n30' 1 < "$EXAMPLES/slice_window.svx"
 check_case for-each-grow clean $'10\n20\n30\n40\n50\n100\n200\n0\nAnn\n3\nBob\n3\n2\n40' 1 < "$EXAMPLES/for_each_grow.svx"
+check_case string-push clean $'ba\nab!\n2000\nx' 1 <<'SC'
+fn string mark(string t) { t.push('!'); return t; }
+string r = "";
+string ab = "ab";
+for c in letters(ab) { string t = ""; t.push(c); for d in letters(r) { t.push(d); } r = t; }
+print(r);
+string s = "ab";
+print(mark(s));
+string big = "";
+int i = 0;
+while (i < 1000) { big.push('é'); i++; if (i == 1000) { break; } }
+print(len(big));
+big = "x";
+print(big);
+SC
 check_case string-bytes clean $'104\n1\n2\n2\n2\n195\n169' 1 < "$EXAMPLES/string_bytes.svx"
 check_case move-in-loop-reassign clean $'4\n30\n6\n100\nabbbb\nочередь' 1 <<'SC'
 struct Queue { int[] items; string name; }
