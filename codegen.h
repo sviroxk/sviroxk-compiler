@@ -6,6 +6,7 @@
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
 #include <map>
+#include <set>
 #include <unordered_map>
 #include <string>
 #include <string_view>
@@ -28,11 +29,20 @@ class CodeGen {
 
     ScopeSnapshot saveScope() const;
     void restoreScope(const ScopeSnapshot& scope);
-    struct Deferred { const Node* statement; ScopeSnapshot bindings; };
+    // statement == nullptr: освободить строку из слота freeSlot (D-014, конец блока).
+    struct Deferred { const Node* statement; ScopeSnapshot bindings; llvm::Value* freeSlot = nullptr; };
     std::vector<Deferred> deferred_;
     size_t loopDeferredBase_ = 0;
     void emitDeferred(size_t base);
     void genScope(const std::vector<Node>& statements);
+    // D-014: string-переменная владеет своей копией в куче и освобождает её в конце блока.
+    std::set<const llvm::Value*> ownedStringSlots_;
+    bool isOwnedString(const std::string& name) const;
+    bool isFreshString(const Node& expr) const;
+    llvm::Value* copyString(llvm::Value* value);
+    llvm::Value* ownString(const Node& expr, llvm::Value* value);
+    llvm::Value* stableString(const Node& expr, llvm::Value* value);
+    void ownStringSlot(llvm::Value* slot);
 
 public:
     llvm::LLVMContext context;

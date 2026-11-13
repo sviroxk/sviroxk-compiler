@@ -84,7 +84,7 @@ constexpr RuntimeSignature kRuntimeFunctions[] = {
     {"fclose", 'i', "p", false},     {"rand", 'i', "", false},
     {"pow", 'd', "dd", false},       {"sqrt", 'd', "d", false},
     {"floor", 'd', "d", false},      {"ceil", 'd', "d", false},
-    {"round", 'd', "d", false},
+    {"round", 'd', "d", false},      {"strdup", 'p', "p", false},
 };
 } // namespace
 
@@ -133,10 +133,68 @@ void CodeGen::restoreScope(const ScopeSnapshot& scope) {
 void CodeGen::emitDeferred(size_t base) {
     const ScopeSnapshot current = saveScope();
     for (size_t i = deferred_.size(); i > base; --i) {
+        if (llvm::Value* slot = deferred_[i - 1].freeSlot) {  // free(NULL) — ничего не делает
+            builder.CreateCall(runtimeFunction("free"), {builder.CreateLoad(builder.getPtrTy(), slot)});
+            continue;
+        }
         restoreScope(deferred_[i - 1].bindings);
         genNode(*deferred_[i - 1].statement);
     }
     restoreScope(current);
+}
+
+bool CodeGen::isOwnedString(const std::string& name) const {
+    const auto found = vars.find(name);
+    return found != vars.end() && ownedStringSlots_.contains(found->second);
+}
+
+// Новая строка в куче, которой ещё никто не владеет: результат str(), replace,
+// ввода, read() и функции, возвращающей string.
+bool CodeGen::isFreshString(const Node& expr) const {
+    if (expr.type == NODE_FILE_READ) return true;
+    if (expr.type == NODE_INPUT) return sc::Type::from(expr.varType).isStr();
+    if (expr.type != NODE_FUNC_CALL) return false;
+    if (expr.varName == "str" || expr.varName == "replace") return true;
+    const auto result = funcReturnTypes.find(expr.varName);
+    return funcs.contains(expr.varName) && result != funcReturnTypes.end() &&
+           sc::Type::from(result->second).isStr();
+}
+
+// Копия строки в куче (как std::string(s)); NULL (поле string без значения) — "".
+llvm::Value* CodeGen::copyString(llvm::Value* value) {
+    llvm::Value* isNull = builder.CreateICmpEQ(value, llvm::ConstantPointerNull::get(builder.getPtrTy()));
+    llvm::Value* source = builder.CreateSelect(isNull, getStringPtr(""), value);
+    llvm::Value* copy = builder.CreateCall(runtimeFunction("strdup"), {source});
+    llvm::Function* abortF = runtimeFunction("abort");
+    llvm::Function* function = builder.GetInsertBlock()->getParent();
+    llvm::BasicBlock* failed = llvm::BasicBlock::Create(context, "strdup_failed", function);
+    llvm::BasicBlock* done = llvm::BasicBlock::Create(context, "strdup_done", function);
+    builder.CreateCondBr(builder.CreateICmpEQ(copy, llvm::ConstantPointerNull::get(builder.getPtrTy())),
+                         failed, done);
+    builder.SetInsertPoint(failed);
+    builder.CreateCall(abortF, {});
+    builder.CreateUnreachable();
+    builder.SetInsertPoint(done);
+    return copy;
+}
+
+// Значение для string-переменной: свежую строку забрать, остальное (литерал,
+// другая переменная, поле) скопировать — `string b = a` копирует (D-014).
+llvm::Value* CodeGen::ownString(const Node& expr, llvm::Value* value) {
+    return isFreshString(expr) ? value : copyString(value);
+}
+
+// Запись строки в поле, элемент массива: такие места строку не освобождают, поэтому
+// чужую string-переменную (её освободит конец блока) копировать, иначе — висячий адрес.
+llvm::Value* CodeGen::stableString(const Node& expr, llvm::Value* value) {
+    const bool borrowed = (expr.type == NODE_IDENTIFIER && isOwnedString(expr.value)) ||
+        (expr.type == NODE_TERNARY && value->getType()->isPointerTy());
+    return borrowed ? copyString(value) : value;
+}
+
+void CodeGen::ownStringSlot(llvm::Value* slot) {
+    ownedStringSlots_.insert(slot);
+    deferred_.push_back({nullptr, {}, slot});
 }
 
 void CodeGen::genScope(const std::vector<Node>& statements) {
@@ -601,7 +659,7 @@ void CodeGen::initStructLiteral(llvm::Value* storage, llvm::StructType* aggregat
             llvm::Value* loaded = builder.CreateLoad(fieldType, temp);
             builder.CreateStore(loaded, address);
         } else {
-            llvm::Value* value = genExpr(*initializer);
+            llvm::Value* value = stableString(*initializer, genExpr(*initializer));
             checkNarrowStore(value, *initializer, fieldType, unsignedTypeName(field.type), *initializer);
             value = castTo(value, fieldType, isUnsignedExpr(*initializer));
             builder.CreateStore(value, address);
@@ -1503,10 +1561,13 @@ void CodeGen::genNode(const Node& node) {
         llvm::Type* ty = node.varType.empty()
             ? val->getType() : svType(node.varType);
         llvm::Value* alloca = createStorage(ty, node.varName);
+        const bool ownedString = sc::Type::from(node.varType).isStr();
+        if (ownedString) val = ownString(*node.left, val);
         checkNarrowStore(val, *node.left, ty, unsignedTypeName(node.varType), node);
         val = castTo(val, ty, isUnsignedExpr(*node.left));
         builder.CreateStore(val, alloca);
         vars[node.varName] = alloca;
+        if (ownedString) ownStringSlot(alloca);
         constVars[node.varName] = node.isConst;
         unsignedVars[node.varName] = node.varType == "u8" || node.varType == "u16" ||
             node.varType == "u32" || node.varType == "u64" || node.varType == "char";
@@ -1534,6 +1595,13 @@ void CodeGen::genNode(const Node& node) {
         if (alloca && !constVars[node.varName]) {
             llvm::Value* val = genExpr(*node.left);
             llvm::Type* ty = storageType(alloca);
+            if (ownedStringSlots_.contains(alloca)) {  // s = …: новое значение, затем free старого
+                val = ownString(*node.left, val);
+                llvm::Value* old = builder.CreateLoad(builder.getPtrTy(), alloca);
+                builder.CreateStore(val, alloca);
+                builder.CreateCall(runtimeFunction("free"), {old});
+                return;
+            }
             checkNarrowStore(val, *node.left, ty, unsignedVars[node.varName], node);
             val = castTo(val, ty, isUnsignedExpr(*node.left));
             builder.CreateStore(val, alloca);
@@ -1549,7 +1617,7 @@ void CodeGen::genNode(const Node& node) {
         llvm::Value* address = genExpr(field);
         structFieldAddressOnly_ = false;
         llvm::Type* fieldType = lastFieldType_;
-        llvm::Value* value = genExpr(*node.left);
+        llvm::Value* value = stableString(*node.left, genExpr(*node.left));
         checkNarrowStore(value, *node.left, fieldType, fieldIsUnsigned(node.varName, node.op), node);
         builder.CreateStore(castTo(value, fieldType, isUnsignedExpr(*node.left)), address);
     }
@@ -1564,7 +1632,7 @@ void CodeGen::genNode(const Node& node) {
         llvm::Type* aggregateType = storageType(object->second);
         const unsigned index = fieldIndex->second;
         llvm::Type* fieldType = aggregateType->getStructElementType(index);
-        llvm::Value* value = genExpr(*node.left);
+        llvm::Value* value = stableString(*node.left, genExpr(*node.left));
         checkNarrowStore(value, *node.left, fieldType, fieldIsUnsigned(node.varName, node.op), node);
         value = castTo(value, fieldType, isUnsignedExpr(*node.left));
         llvm::Value* address = builder.CreateStructGEP(aggregateType, object->second, index);
@@ -1586,7 +1654,7 @@ void CodeGen::genNode(const Node& node) {
                 if (!elementType) elementType = builder.getInt32Ty();
                 llvm::Value* gep = builder.CreateGEP(elementType, dataPtr, {idx});
                 if (node.op == "compound") precomputed_[node.right->left->left.get()] = idx;
-                llvm::Value* value = genExpr(*node.right);
+                llvm::Value* value = stableString(*node.right, genExpr(*node.right));
                 precomputed_.clear();
                 checkNarrowStore(value, *node.right, elementType, unsignedElements[node.varName], node);
                 builder.CreateStore(castTo(value, elementType, isUnsignedExpr(*node.right)), gep);
@@ -1601,7 +1669,7 @@ void CodeGen::genNode(const Node& node) {
                 llvm::Type* elementType = pointee != pointeeTypes.end() ? pointee->second : builder.getInt32Ty();
                 llvm::Value* gep = builder.CreateGEP(elementType, ptr, {idx});
                 if (node.op == "compound") precomputed_[node.right->left->left.get()] = idx;
-                llvm::Value* value = genExpr(*node.right);
+                llvm::Value* value = stableString(*node.right, genExpr(*node.right));
                 precomputed_.clear();
                 builder.CreateStore(castTo(value, elementType, isUnsignedExpr(*node.right)), gep);
             } else if (arrays.contains(node.varName)) {
@@ -1615,7 +1683,7 @@ void CodeGen::genNode(const Node& node) {
                 llvm::Value* gep = builder.CreateInBoundsGEP(
                     at, arr, {builder.getInt32(0), idx});
                 if (node.op == "compound") precomputed_[node.right->left->left.get()] = idx;
-                llvm::Value* value = genExpr(*node.right);
+                llvm::Value* value = stableString(*node.right, genExpr(*node.right));
                 precomputed_.clear();
                 checkNarrowStore(value, *node.right, elementType, unsignedElements[node.varName], node);
                 builder.CreateStore(castTo(value, elementType, isUnsignedExpr(*node.right)), gep);
@@ -1650,6 +1718,11 @@ void CodeGen::genNode(const Node& node) {
                     checkNarrowStore(v, *node.left, retTy, unsignedTypeName(returnType->second), node);
             }
             v = castTo(v, retTy, isUnsignedExpr(*node.left));
+            if (name.starts_with("sc.fn.")) {  // string-результат: вызывающему — своя копия
+                const auto returnType = funcReturnTypes.find(name.drop_front(6).str());
+                if (returnType != funcReturnTypes.end() && sc::Type::from(returnType->second).isStr())
+                    v = ownString(*node.left, v);
+            }
             emitDeferred(0);
             builder.CreateRet(v);
         } else {
@@ -1674,7 +1747,7 @@ void CodeGen::genNode(const Node& node) {
         for (unsigned i = 0; i < n; i++) {
             llvm::Value* gep = builder.CreateInBoundsGEP(
                 at, arr, {builder.getInt32(0), builder.getInt32(i)});
-            llvm::Value* val = genExpr(node.args[i]);
+            llvm::Value* val = stableString(node.args[i], genExpr(node.args[i]));
             checkNarrowStore(val, node.args[i], elementType, unsignedElements[node.varName], node.args[i]);
             val = castTo(val, elementType, isUnsignedExpr(node.args[i]));
             builder.CreateStore(val, gep);
@@ -1743,7 +1816,7 @@ void CodeGen::genNode(const Node& node) {
             builder.CreateStructGEP(descType, desc, 1));
         llvm::Value* currentData = builder.CreateLoad(builder.getPtrTy(),
             builder.CreateStructGEP(descType, desc, 0));
-        llvm::Value* value = genExpr(*node.left);
+        llvm::Value* value = stableString(*node.left, genExpr(*node.left));
         checkNarrowStore(value, *node.left, elementType, unsignedElements[node.varName], *node.left);
         value = castTo(value, elementType, isUnsignedExpr(*node.left));
         llvm::Value* gep = builder.CreateGEP(elementType, currentData, {currentLength});
@@ -1857,8 +1930,10 @@ void CodeGen::genNode(const Node& node) {
             llvm::Type* ty = svType(ptype);
             llvm::AllocaInst* alloca =
                 builder.CreateAlloca(ty, nullptr, pname);
-            builder.CreateStore(&arg, alloca);
+            const bool ownedString = sc::Type::from(ptype).isStr();  // параметр — своя копия
+            builder.CreateStore(ownedString ? copyString(&arg) : static_cast<llvm::Value*>(&arg), alloca);
             vars[pname] = alloca;
+            if (ownedString) ownStringSlot(alloca);
             if (ty->isStructTy()) structTypesByVariable[pname] = ptype;
             unsignedVars[pname] = ptype == "u8" || ptype == "u16" ||
                 ptype == "u32" || ptype == "u64" || ptype == "char";
@@ -1867,6 +1942,8 @@ void CodeGen::genNode(const Node& node) {
             integerWidths[pname] = ty->isIntegerTy() ? ty->getIntegerBitWidth() : 32;
         }
         genScope(node.children);
+        if (!blockHasTerminator(builder.GetInsertBlock())) emitDeferred(0);  // параметры-строки
+        deferred_.clear();
         const bool hasRet = blockHasTerminator(builder.GetInsertBlock());
         if (!hasRet && !retTy->isVoidTy()) {
             if (retTy->isDoubleTy())

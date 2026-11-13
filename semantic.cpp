@@ -306,6 +306,11 @@ private:
         size_t index = 0;
         Symbol* symbol = lookupMutable(node.varName, &index);
         if (!symbol) { error(node, "неизвестное имя '" + node.varName + "'"); return nullptr; }
+        if (symbol->ty.isStr() && verb == "drop") {  // D-014: строка освобождается сама
+            error(node, "drop для строки не пишется: '" + node.varName +
+                  "' — string, её память освобождается в конце блока");
+            return nullptr;
+        }
         if (!symbol->isDynArray && !symbol->ty.isFile()) {
             error(node, "drop поддерживается только для динамического массива и file");
             return nullptr;

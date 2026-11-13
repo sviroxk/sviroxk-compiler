@@ -1052,7 +1052,7 @@ drop f;
 close(f);" "'f' используется после drop (строка 2)"
 expect_compile_error "drop-twice" $'ptr v = new int[3];\ndrop v;\ndrop v;' "повторный drop 'v' (уже освобождено в строке 2)"
 expect_compile_error "drop-after-defer-drop" $'ptr v = new int[3];\ndefer drop v;\ndrop v;' "повторный drop 'v' (defer drop в строке 2)"
-expect_compile_error "drop-string" $'str s = "a";\ndrop s;' 'drop поддерживается только для динамического массива и file'
+expect_compile_error "drop-string" $'str s = "a";\ndrop s;' 'drop для строки не пишется'
 expect_compile_error "drop-raw-pointer" $'int x = 1;\nptr p = &x;\ndrop p;' 'drop поддерживается только для динамического массива и file'
 expect_compile_error "drop-outer-in-loop" $'ptr v = new int[3];\nwhile (true) { drop v; }' "drop 'v' внутри цикла или функции"
 expect_compile_error "drop-global-in-function" $'ptr v = new int[3];\nfn void f() { drop v; }\nf();' "drop 'v' внутри цикла или функции"
@@ -1298,6 +1298,7 @@ expect_compile_error "string-address-sign" $'string s = "abc";\nptr p = &s;' "'&
 expect_compile_error "string-data-of-int" $'int x = 1;\nptr p = data(x);' "аргумент 1 функции 'data' должен иметь тип str"
 expect_compile_error "del-string-data" $'string s = "abc";\nptr p = as_ptr(s);\nptr q = p;\ndel q;' "освобождать нечего: 'q' указывает на переменную (&…) или строку (data/as_ptr)"
 expect_compile_error "string-data-into-int-ptr" $'int x = 1;\nptr p = &x;\nstring s = "a";\np = data(s);' "'p' указывает на тип 'int/i32', присвоить ему адрес значения типа 'char' нельзя"
+expect_program_output "string-copy-independent" $'string a = "ab";\nstring b = a;\nptr p = data(b);\np[0] = \'X\';\nprint(a); print(b);\nfn string twice(string s) { s = replace(s, "a", "aa"); return s; }\nstring c = twice(a);\nprint(a); print(c);' $'ab\nXb\nab\naab'
 expect_compile_error "del-string" $'string r = replace("a-b", "-", "+");\ndel r;' "del для строки не пишется: 'r' — string, её память освобождает язык"
 expect_compile_error "dyn-array-argument" $'fn int g(ptr p) { return 1; }\nptr v = new int[2];\nprint(g(v));' "динамический массив 'v' пока нельзя передать в функцию"
 expect_program_output "print-bool-builtin" $'string s = "a";\nprint((s == "a"));\nprint((s == "b"));' $'1\n0'
