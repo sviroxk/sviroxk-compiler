@@ -131,6 +131,50 @@ string[] items = ["a"];
 if (true) { string local = str(7); box.text = local; items[0] = local; }
 print(box.text); print(items[0]);
 SC
+# D-016: строки в полях структур освобождаются вместе со структурой на всех выходах из блока.
+check_case struct-string-fields-release clean $'Ann\nBob\nt\n5\n37\nAnn\nBob\nt\nlocal\nlocal\n0\n0\n2\nglobal' 1 <<'SC'
+struct Tag { string label = "t"; int n = 0; }
+struct Person { string name; int age = 0; Tag tag; ptr extra = null; }
+fn int total(Person p) { p.name = "changed"; p.tag.label = str(99); return len(p.name) + p.age; }
+fn void run() {
+    Person a = { name = "Ann"; age = 30; tag = { n = 0; }; };
+    Person b = a;
+    b.name = "Bob";
+    b.tag.label = str(5);
+    print(a.name);
+    print(b.name);
+    print(a.tag.label);
+    print(b.tag.label);
+    print(total(a));
+    print(a.name);
+    Person c;
+    c = b;
+    c = c;
+    c.tag = a.tag;
+    print(c.name);
+    print(c.tag.label);
+    string s = "local";
+    Tag t = { label = s; n = 1; };
+    Person d = { name = s; tag = t; };
+    s = "other";
+    print(d.name);
+    print(d.tag.label);
+    for i in 0..3 {
+        Person item = { name = str(i); tag = { n = 1; }; };
+        if (i == 1) { continue; }
+        if (i == 2) { break; }
+        print(item.name);
+    }
+    Person e;
+    print(len(e.name));
+}
+fn int early(int k) { Person p = { name = str(k); tag = { n = 1; }; }; if (k > 1) { return len(p.name); } return 0; }
+run();
+print(early(10));
+Person g = { name = "global"; tag = { n = 2; }; };
+Person h = g;
+print(h.name);
+SC
 check_case string-temporaries-release clean $'42\na+b\n5\n7\n3\n10\n1\n1\n99' 1 <<'SC'
 fn int size(string s) { return len(s); }
 fn string make(int n) { return str(n); }
@@ -233,4 +277,4 @@ ptr chars = data(text);
 print(chars[4]);
 SC
 
-echo 'PASS: memory safety suite (11 clean, 3 controlled runtime errors, 3 ASan detector self-tests)'
+echo 'PASS: memory safety suite (12 clean, 3 controlled runtime errors, 3 ASan detector self-tests)'

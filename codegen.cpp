@@ -133,6 +133,10 @@ void CodeGen::restoreScope(const ScopeSnapshot& scope) {
 void CodeGen::emitDeferred(size_t base) {
     const ScopeSnapshot current = saveScope();
     for (size_t i = deferred_.size(); i > base; --i) {
+        if (llvm::Value* slot = deferred_[i - 1].freeSlot; slot && !deferred_[i - 1].structName.empty()) {
+            dropStruct(slot, deferred_[i - 1].structName);
+            continue;
+        }
         if (llvm::Value* slot = deferred_[i - 1].freeSlot) {  // free(NULL) — ничего не делает
             builder.CreateCall(runtimeFunction("free"), {builder.CreateLoad(builder.getPtrTy(), slot)});
             builder.CreateStore(llvm::ConstantPointerNull::get(builder.getPtrTy()), slot);
@@ -199,6 +203,92 @@ llvm::Value* CodeGen::stableString(const Node& expr, llvm::Value* value) {
 void CodeGen::ownStringSlot(llvm::Value* slot) {
     ownedStringSlots_.insert(slot);
     deferred_.push_back({nullptr, {}, slot});
+}
+
+// Есть ли в структуре (или во вложенной) поле string — тогда она владеет памятью.
+bool CodeGen::structOwnsMemory(const std::string& structName, int depth) const {
+    auto def = structDefs.find(structName);
+    if (def == structDefs.end() || depth > 256) return false;
+    for (const StructField& field : def->second) {
+        const sc::Type type = sc::Type::from(field.type);
+        if (type.isStr() || (type.isStruct() && structOwnsMemory(type.structName, depth + 1))) return true;
+    }
+    return false;
+}
+
+// Освободить строки полей структуры по адресу (и во вложенных); поле обнуляется,
+// поэтому повторное освобождение (выход из блока после return) ничего не делает.
+void CodeGen::dropStruct(llvm::Value* address, const std::string& structName) {
+    llvm::StructType* type = llvmStructTypes[structName];
+    const std::vector<StructField>& fields = structDefs[structName];
+    for (unsigned i = 0; i < fields.size(); ++i) {
+        const sc::Type fieldType = sc::Type::from(fields[i].type);
+        llvm::Value* field = builder.CreateStructGEP(type, address, i);
+        if (fieldType.isStr()) {
+            builder.CreateCall(runtimeFunction("free"), {builder.CreateLoad(builder.getPtrTy(), field)});
+            builder.CreateStore(llvm::ConstantPointerNull::get(builder.getPtrTy()), field);
+        } else if (fieldType.isStruct() && structOwnsMemory(fieldType.structName)) {
+            dropStruct(field, fieldType.structName);
+        }
+    }
+}
+
+// Структура по адресу — побитовая копия чужой: дать ей свои копии строк (как в C++).
+void CodeGen::copyStructStrings(llvm::Value* address, const std::string& structName) {
+    llvm::StructType* type = llvmStructTypes[structName];
+    const std::vector<StructField>& fields = structDefs[structName];
+    for (unsigned i = 0; i < fields.size(); ++i) {
+        const sc::Type fieldType = sc::Type::from(fields[i].type);
+        llvm::Value* field = builder.CreateStructGEP(type, address, i);
+        if (fieldType.isStr())
+            builder.CreateStore(copyString(builder.CreateLoad(builder.getPtrTy(), field)), field);
+        else if (fieldType.isStruct() && structOwnsMemory(fieldType.structName))
+            copyStructStrings(field, fieldType.structName);
+    }
+}
+
+// Переменная-структура со строками освобождает их в конце своего блока (как string, D-014).
+void CodeGen::ownStructSlot(llvm::Value* slot, const std::string& structName) {
+    if (structOwnsMemory(structName)) deferred_.push_back({nullptr, {}, slot, nullptr, structName});
+}
+
+// p.name = v / p.inner = q: строка поля — своя копия, старая освобождается (D-016).
+bool CodeGen::storeOwnedField(const Node& assign, llvm::Value* address, llvm::Type* fieldType) {
+    std::string fieldTypeName;
+    if (auto root = structTypesByVariable.find(assign.varName); root != structTypesByVariable.end()) {
+        fieldTypeName = root->second;
+        for (size_t pos = 0; pos <= assign.op.size();) {
+            const size_t dot = std::min(assign.op.find('.', pos), assign.op.size());
+            const std::string name = assign.op.substr(pos, dot - pos);
+            std::string next;
+            for (const StructField& field : structDefs[fieldTypeName]) if (field.name == name) next = field.type;
+            fieldTypeName = next;
+            pos = dot + 1;
+        }
+    }
+    const sc::Type type = sc::Type::from(fieldTypeName);
+    if (type.isStr()) {
+        llvm::Value* value = ownString(*assign.left, genExpr(*assign.left));
+        llvm::Value* old = builder.CreateLoad(builder.getPtrTy(), address);
+        builder.CreateStore(value, address);
+        builder.CreateCall(runtimeFunction("free"), {old});
+        return true;
+    }
+    if (type.isStruct() && fieldType->isStructTy() && structOwnsMemory(type.structName)) {
+        replaceStruct(address, type.structName, genExpr(*assign.left));
+        return true;
+    }
+    return false;
+}
+
+// x = y / x.inner = y для структуры со строками: сначала копия нового значения, затем
+// освобождение старого (x = x тоже верно).
+void CodeGen::replaceStruct(llvm::Value* address, const std::string& structName, llvm::Value* value) {
+    llvm::AllocaInst* fresh = entryAlloca(value->getType(), "sc.struct.copy");
+    builder.CreateStore(value, fresh);
+    copyStructStrings(fresh, structName);
+    dropStruct(address, structName);
+    builder.CreateStore(builder.CreateLoad(value->getType(), fresh), address);
 }
 
 // Временная строка (результат str()/replace/ввода/функции, не положенный в
@@ -703,11 +793,15 @@ void CodeGen::initStructLiteral(llvm::Value* storage, llvm::StructType* aggregat
             initStructLiteral(temp, nestedType, field.type, *initializer);
             llvm::Value* loaded = builder.CreateLoad(fieldType, temp);
             builder.CreateStore(loaded, address);
+        } else if (sc::Type::from(field.type).isStr()) {  // поле владеет своей копией (D-016)
+            builder.CreateStore(ownString(*initializer, genExpr(*initializer)), address);
         } else {
             llvm::Value* value = stableString(*initializer, genExpr(*initializer));
             checkNarrowStore(value, *initializer, fieldType, unsignedTypeName(field.type), *initializer);
             value = castTo(value, fieldType, isUnsignedExpr(*initializer));
             builder.CreateStore(value, address);
+            if (fieldType->isStructTy() && structOwnsMemory(field.type))  // { inner = q } — копия q
+                copyStructStrings(address, field.type);
         }
     }
 }
@@ -1638,6 +1732,7 @@ void CodeGen::genNode(const Node& node) {
         vars[node.varName] = object;
         structTypesByVariable[node.varName] = node.varType;
         initStructLiteral(object, aggregateType, node.varType, *node.left);
+        ownStructSlot(object, node.varType);
         constVars[node.varName] = node.isConst;
         unsignedVars[node.varName] = false;
         charVars[node.varName] = false;
@@ -1655,6 +1750,11 @@ void CodeGen::genNode(const Node& node) {
                 builder.CreateCall(runtimeFunction("free"), {old});
                 return;
             }
+            if (auto structName = structTypesByVariable.find(node.varName);
+                structName != structTypesByVariable.end() && structOwnsMemory(structName->second)) {
+                replaceStruct(alloca, structName->second, val);  // w = q — копия, старые строки w освобождаются
+                return;
+            }
             checkNarrowStore(val, *node.left, ty, unsignedVars[node.varName], node);
             val = castTo(val, ty, isUnsignedExpr(*node.left));
             builder.CreateStore(val, alloca);
@@ -1670,6 +1770,7 @@ void CodeGen::genNode(const Node& node) {
         llvm::Value* address = genExpr(field);
         structFieldAddressOnly_ = false;
         llvm::Type* fieldType = lastFieldType_;
+        if (storeOwnedField(node, address, fieldType)) return;
         llvm::Value* value = stableString(*node.left, genExpr(*node.left));
         checkNarrowStore(value, *node.left, fieldType, fieldIsUnsigned(node.varName, node.op), node);
         builder.CreateStore(castTo(value, fieldType, isUnsignedExpr(*node.left)), address);
@@ -1685,6 +1786,8 @@ void CodeGen::genNode(const Node& node) {
         llvm::Type* aggregateType = storageType(object->second);
         const unsigned index = fieldIndex->second;
         llvm::Type* fieldType = aggregateType->getStructElementType(index);
+        if (storeOwnedField(node, builder.CreateStructGEP(aggregateType, object->second, index), fieldType))
+            return;
         llvm::Value* value = stableString(*node.left, genExpr(*node.left));
         checkNarrowStore(value, *node.left, fieldType, fieldIsUnsigned(node.varName, node.op), node);
         value = castTo(value, fieldType, isUnsignedExpr(*node.left));
@@ -1933,6 +2036,8 @@ void CodeGen::genNode(const Node& node) {
                 // Вложенная структура без значения: пустой литерал — поля получают
                 // свои значения по умолчанию (раньше весь вложенный объект был нулями).
                 sf.defaultVal.type = NODE_STRUCT_LITERAL;
+            } else if (sc::Type::from(field.varType).isStr()) {
+                sf.defaultVal.type = NODE_STRING;  // string без значения — пустая строка
             } else {
                 // Field has no default value: use a zero literal as a neutral
                 // placeholder so initStructLiteral can still fill it in.
@@ -1965,11 +2070,14 @@ void CodeGen::genNode(const Node& node) {
             vars[node.varName] = object;
             structTypesByVariable[node.varName] = node.varType;
             builder.CreateStore(value, object);
+            if (structOwnsMemory(node.varType)) copyStructStrings(object, node.varType);  // P w = q — копия
+            ownStructSlot(object, node.varType);
             return;
         }
         vars[node.varName] = object;
         structTypesByVariable[node.varName] = node.varType;
         initStructLiteral(object, aggregateType, node.varType, node);
+        ownStructSlot(object, node.varType);
     }
     else if (node.type == NODE_FUNC_DEF) {
         std::vector<std::string> ptypes = funcParamTypes[node.varName];
@@ -1994,7 +2102,11 @@ void CodeGen::genNode(const Node& node) {
             builder.CreateStore(ownedString ? copyString(&arg) : static_cast<llvm::Value*>(&arg), alloca);
             vars[pname] = alloca;
             if (ownedString) ownStringSlot(alloca);
-            if (ty->isStructTy()) structTypesByVariable[pname] = ptype;
+            if (ty->isStructTy()) {
+                structTypesByVariable[pname] = ptype;
+                if (structOwnsMemory(ptype)) copyStructStrings(alloca, ptype);  // параметр — своя копия
+                ownStructSlot(alloca, ptype);
+            }
             unsignedVars[pname] = ptype == "u8" || ptype == "u16" ||
                 ptype == "u32" || ptype == "u64" || ptype == "char";
             charVars[pname] = ptype == "char";

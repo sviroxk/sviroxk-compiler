@@ -849,7 +849,6 @@ expect_compile_error_file "examples/array_bounds_negative.svx" "индекс м�
 expect_compile_error_file "examples/array_bounds_upper.svx" "индекс массива выходит за границы"
 expect_compile_error_file "examples/continue_counted_loop.svx" "недостижимый код"
 expect_compile_error_file "examples/diagnostic_caret.svx" "^"
-expect_compile_error_file "examples/p0_struct_copy_ownership.svx" "неявное копирование структуры"
 expect_compile_error_file "examples/p0_struct_recursive.svx" "рекурсивное определение структуры"
 
 RUNTIME_DIR="$TMP_DIR/runtime-sources"
@@ -1320,12 +1319,15 @@ expect_compile_error "struct-param-unknown-type" 'fn int read(Missing value) { r
 expect_compile_error "struct-param-wrong-type" $'struct Pair { int x = 0; }\nfn int take(Pair value) { return value.x; }\nprint(take(1));' "аргумент 1 функции 'take': ожидался 'Pair'"
 # 1.2: возврат структуры со скалярными полями; P q = f(); P w = q — копия; результат передаётся дальше.
 expect_program_output "struct-return" $'struct Point { int x = 0; f64 y = 0.0; }\nstruct Box { Point a; u8 tag = 1; }\nfn Point make(int x) { Point p = { x = x; y = 1.5; }; return p; }\nfn Box wrap(Point p, u8 tag) { Box b = { a = p; tag = tag; }; return b; }\nfn int sum(Point p) { return p.x * 10; }\nPoint q = make(4);\nprint(q.x);\nprint(q.y);\nPoint w = q;\nw.x = 7;\nprint(q.x);\nq = make(9);\nprint(q.x);\nprint(sum(make(5)));\nBox b = wrap(make(2), 3);\nprint(b.a.x);\nprint(b.tag);\nfn Point later();\nPoint l = later();\nprint(l.x);\nfn Point later() { Point p = { x = 11; }; return p; }' $'4\n1.500000\n4\n9\n50\n2\n3\n11'
-expect_compile_error "struct-return-owning-field" $'struct In { string s = "x"; }\nstruct S { In i; int n = 0; }\nfn S f() { S v; return v; }' "структуру 'S' пока нельзя вернуть из функции: поле 'i.s' владеет памятью"
+expect_compile_error "struct-return-owning-field" $'struct In { string s = "x"; }\nstruct S { In i; int n = 0; }\nfn S f() { S v; return v; }' "структуру 'S' пока нельзя вернуть из функции: поле 'i.s' — строка"
 expect_compile_error "struct-return-wrong-type" $'struct P { int a = 1; }\nfn P f() { return 1; }' "функция должна вернуть 'P', получено 'int/i32'"
 expect_compile_error "struct-init-wrong-type" $'struct P { int a = 1; }\nstruct Q { int a = 1; }\nfn Q f() { Q q; return q; }\nP p = f();' "переменная 'p' имеет тип 'P', но инициализируется значением типа 'Q'"
 expect_compile_error "struct-result-into-int" $'struct P { int a = 1; }\nfn P f() { P p; return p; }\nint z = f();' "переменная 'z' имеет тип 'int/i32', но инициализируется значением типа 'P'"
-expect_compile_error "struct-copy-nested-owning" $'struct In { string s = "x"; }\nstruct S { In i; }\nS a;\nS b;\nb = a;' "неявное копирование структуры 'S' запрещено: поле 'i.s' имеет владеющий тип"
-expect_compile_error "struct-init-copy-owning" $'struct S { ptr p = null; }\nS a;\nS b = a;' "неявное копирование структуры 'S' запрещено: поле 'p' имеет владеющий тип"
+expect_program_output "struct-copy-ptr-field" "$(cat examples/p0_struct_copy_ownership.svx)" $'1\n1'  # ptr-поле копирует адрес
+# D-016: строка в поле принадлежит структуре; P w = q и w = q — полная копия.
+expect_program_output "struct-string-field-copy" $'struct In { string s = "x"; }\nstruct S { In i; string name; int n = 0; }\nfn int size(S v) { v.name = "changed"; v.i.s = str(12345); return len(v.name) + len(v.i.s); }\nS a = { name = "Ann"; i = { s = "in"; }; };\nS b = a;\nb.name = "Bob";\nb.i.s = "other";\nprint(a.name);\nprint(a.i.s);\nprint(b.name);\nprint(b.i.s);\nS c;\nprint(len(c.name));\nc = b;\nc = c;\nc.i = a.i;\nprint(c.name);\nprint(c.i.s);\nprint(size(a));\nprint(a.name);' $'Ann\nin\nBob\nother\n0\nBob\nin\n12\nAnn'
+expect_program_output "struct-ptr-field-copy" $'struct S { ptr p = null; int n = 1; }\nint x = 5;\nS a;\na.p = &x;\nS b = a;\nb.n = 2;\nprint(b.p == a.p);\nprint(a.n);' $'1\n1'
+expect_compile_error "struct-string-field-wrong-type" $'struct S { string name = ""; }\nS a;\na.name = 5;' "поле ожидает тип 'str', получен 'int/i32'"
 expect_compile_error "struct-param-missing-field" $'struct Pair { int x = 0; }\nfn int read(Pair value) { return value.missing; }' "у структуры 'Pair' нет поля 'missing'"
 expect_compile_error "struct-param-forward-mismatch" $'struct A { int x = 0; } struct B { int x = 0; }\nfn int read(A value); fn int read(B value) { return value.x; }' "сигнатура функции 'read' не совпадает"
 expect_compile_error "struct-field-unknown" 'struct Outer { Missing inner; }' "неизвестный тип поля 'Missing'"
@@ -1373,7 +1375,6 @@ expect_compile_error "array-index-float" 'int[] values = [1, 2]; float index = 0
 expect_compile_error "builtin-no-args" 'sqrt();'
 expect_compile_error "type-mismatch-initializer" 'int count = "wrong";'
 expect_compile_error "recursive-struct-definition" 'struct BadRecursive { int value; BadRecursive next; }' "рекурсивное определение структуры"
-expect_compile_error "struct-copy-ownership" 'struct Container { int id; ptr data; } Container a; a.id = 1; a.data = null; Container b; b = a;' "неявное копирование структуры"
 expect_compile_error "struct-ptr-field-access" 'struct Node { int value; ptr next; } Node n1; Node n2; n1.value = 10; n1.next = &n2; n2.value = 20; n2.next = null; print(n1.next.value);' "не имеет полей"
 
 IMPORT_DIR="$TMP_DIR/imports"

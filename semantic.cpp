@@ -185,14 +185,14 @@ private:
                              node.line, node.column, "semantic", message);
     }
 
-    // Первое поле, владеющее памятью (string, ptr, динамический массив), в том числе
-    // во вложенной структуре: "s" или "inner.s"; пусто — копировать можно.
+    // Первое поле string (или динамический массив), в том числе во вложенной
+    // структуре: "s" или "inner.s". ptr-поле копирует только адрес (как ptr-переменная).
     std::string owningField(const std::string& structName, int depth = 0) const {
         auto structure = structs_.find(structName);
         if (structure == structs_.end() || depth > 256) return "";
         for (const Node& field : structure->second->children) {
             const sc::Type fieldTy = sc::Type::from(normalize(field.varType));
-            if (fieldTy.isDynArray() || fieldTy.isPtr() || fieldTy.isStr()) return field.varName;
+            if (fieldTy.isDynArray() || fieldTy.isStr()) return field.varName;
             if (fieldTy.isStruct()) {
                 const std::string inner = owningField(fieldTy.structName, depth + 1);
                 if (!inner.empty()) return field.varName + "." + inner;
@@ -201,12 +201,6 @@ private:
         return "";
     }
 
-    void forbidOwningCopy(const Node& node, const std::string& structName) {
-        const std::string field = owningField(structName);
-        if (!field.empty())
-            error(node, "неявное копирование структуры '" + structName + "' запрещено: поле '" +
-                  field + "' имеет владеющий тип (требуется явное клонирование/перемещение)");
-    }
 
     bool knownType(const std::string& raw) const {
         const sc::Type t = sc::Type::from(raw);
@@ -1314,8 +1308,7 @@ private:
                 error(node, "неизвестный тип результата '" + node.varType + "'");
             else if (const std::string field = owningField(result.structName); !field.empty())
                 error(node, "структуру '" + result.structName + "' пока нельзя вернуть из функции: поле '" +
-                      field + "' владеет памятью (string, ptr или динамический массив), "
-                      "правила его копирования — задача 5.2; возвращать можно структуры со скалярными полями");
+                      field + "' — строка (возврат структуры со строкой — следующий шаг задачи 1.2)");
         }
         for (const std::string& param : node.params) {
             size_t separator = param.find(':');
@@ -1437,8 +1430,6 @@ private:
                 if (actual != "<error>" && normalize(actual) != normalize(node.varType))
                     error(node, "переменная '" + node.varName + "' имеет тип '" + node.varType +
                           "', но инициализируется значением типа '" + typeName(actual) + "'");
-                else if (actual != "<error>" && node.left->type != NODE_FUNC_CALL)
-                    forbidOwningCopy(node, node.varType);
             }
             std::map<std::string, const Node*> named;
             std::vector<const Node*> positional;
@@ -1526,9 +1517,6 @@ private:
             }
             if (symbol->ty.isPtr())
                 if (Symbol* target = lookupMutable(node.varName)) target->pointsToVariable = pointsToVariable(*node.left);
-            // Копия структуры с владеющим полем (и во вложенной структуре) запрещена до 5.2.
-            if (symbol->ty.isStruct() && structs_.contains(symbol->ty.structName))
-                forbidOwningCopy(node, symbol->ty.structName);
             std::string expected = symbol->ty.toString();
             std::string actual = expression(*node.left);
             bool literalArithmeticFits = false;
@@ -1617,9 +1605,9 @@ private:
                 break;
             }
             const std::string fieldType = normalize(field->varType);
-            if (node.left->type == NODE_NUMBER && node.left->varType.empty() &&
+            if (node.left->type == NODE_NUMBER && node.left->varType.empty() && isInteger(fieldType) &&
                 !node.left->value.empty() && node.left->value.find_first_of(".eE") == std::string::npos)
-                node.left->varType = fieldType;
+                node.left->varType = fieldType;  // s.name = 5 раньше «проходил» как string
             const std::string actual = expression(*node.left);
             Node self;
             self.type = NODE_STRUCT_FIELD;
