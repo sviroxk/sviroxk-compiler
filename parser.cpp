@@ -331,6 +331,9 @@ Node parseStructInstance(const Token& declarationToken, const std::string& struc
                 consume();
         }
         expect(RBRACE);
+    } else if (peek().type == EQUALS) {
+        consume();  // P q = make(…); / P w = q; — значение-структура целиком
+        node.left = makeNode(parseExpr());
     }
     expect(SEMICOLON);
     return node;
@@ -966,7 +969,8 @@ Node parseOne() {
         } else if (isTypeToken(peek().type) && peek(1).type != LPAREN &&
                    peek(2).type == LPAREN) {
             Token returnType = consume();
-            if (!isTypeName(returnType.value))
+            // fn Point make(…): имя структуры; её существование проверит семантика.
+            if (!isTypeName(returnType.value) && returnType.type != IDENTIFIER)
                 failAt(returnType, "неизвестный тип результата '" + returnType.value + "'");
             node.varType = canonicalType(returnType.value);
         }

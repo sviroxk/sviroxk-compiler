@@ -1960,6 +1960,13 @@ void CodeGen::genNode(const Node& node) {
         }
         llvm::StructType* aggregateType = llvmStructTypes[node.varType];
         llvm::Value* object = createStorage(aggregateType, node.varName);
+        if (node.left) {  // P q = make(…); / P w = q; — копия значения целиком
+            llvm::Value* value = genExpr(*node.left);
+            vars[node.varName] = object;
+            structTypesByVariable[node.varName] = node.varType;
+            builder.CreateStore(value, object);
+            return;
+        }
         vars[node.varName] = object;
         structTypesByVariable[node.varName] = node.varType;
         initStructLiteral(object, aggregateType, node.varType, node);
@@ -1999,12 +2006,7 @@ void CodeGen::genNode(const Node& node) {
         deferred_.clear();
         const bool hasRet = blockHasTerminator(builder.GetInsertBlock());
         if (!hasRet && !retTy->isVoidTy()) {
-            if (retTy->isDoubleTy())
-                builder.CreateRet(llvm::ConstantFP::get(builder.getDoubleTy(), 0.0));
-            else if (retTy->isPointerTy())
-                builder.CreateRet(llvm::ConstantPointerNull::get(builder.getPtrTy()));
-            else
-                builder.CreateRet(llvm::ConstantInt::get(retTy, 0));
+            builder.CreateRet(llvm::Constant::getNullValue(retTy));  // число, ptr или структура
         } else if (!hasRet && retTy->isVoidTy()) {
             builder.CreateRetVoid();
         }

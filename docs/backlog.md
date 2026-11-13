@@ -16,6 +16,7 @@
 - [x] Исправить compiler warnings под `-Wall -Wextra -Werror`; строгая сборка проходит локально и в CI.
 - [x] Проверять LLVM module verifier до печати IR; некорректный IR возвращает internal diagnostic и exit code 3.
 - [~] Прямые numeric literals во всех expression contexts проверяются до codegen. Остаются checked casts для вычисляемых значений и точное signed/unsigned conversion semantics.
+- [ ] Баг (найден в 0б, PR #110): `ptr q = v` для динамического массива `v` даёт адрес описателя, а не данных; `q[0]` — ASan overflow. См. `docs/handoff.md`, пункт 0.
 - [~] Bounds checks статических массивов и dynamic arrays с дескриптором проверены, включая read/write под ASan. Raw ptr и aliases без length metadata пока не имеют безопасной проверки границ.
 
 ## P1 — зрелость compiler
