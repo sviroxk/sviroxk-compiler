@@ -1301,7 +1301,10 @@ expect_compile_error "removed-word-ser" 'print(ser("a", "b"));' "слово 'ser
 expect_compile_error "removed-word-imp" 'imp "x.svx";' "слово 'imp' удалено: пишите 'import'"
 expect_program_output "struct-variable-forms" $'struct P { int x = 1; int y = 2; }\nfn int sum(P p) { return p.x + p.y; }\nP a;\nP b = { x = 5; y = 6; };\nprint(sum(a));\nprint(sum(b));' $'3\n11'
 expect_program_output "string-equality" $'string a = "abc";\nstring b = "abc";\nstring c = "abd";\nprint(a == b);\nprint(a != c);\nif (a == "abc") { print(7); }' $'1\n1\n7'
-expect_compile_error "string-ordering" $'string a = "a";\nprint(a < "b");' "строки сравниваются только через == и !="
+expect_program_output "string-ordering" $'string a = "apple";\nstring b = "banana";\nprint(a < b);\nprint(a > b);\nprint(a <= "apple");\nprint(b >= a);\nprint("" < a);\nprint("ab" < "abc");\nprint("B" < "a");\nif (b > a) { print(9); }' $'1\n0\n1\n1\n1\n1\n1\n9'
+# D-020: байты сравниваются как беззнаковые (как std::string и Rust): "é" (195 169) больше "z" (122).
+expect_program_output "string-ordering-bytes" $'fn bool before(string x, string y) { return x < y; }\nprint("é" > "z");\nprint(before("a", "b"));\nprint(before("b", "a"));\nprint("a" >= "a");' $'1\n1\n0\n1'
+expect_compile_error "string-ordering-number" $'string a = "a";\nprint(a < 1);' "оператор сравнения принимает только числа"
 expect_program_output "new-words-builtins" $'print(floor(2.7));\nprint(ceil(2.1));\nprint(round(2.5));\nprint(len("abcd"));\nstring r = replace("a-b", "-", "+");\nprint(r);\nint n = rand();\nprint(n >= 0);' $'2.000000\n3.000000\n3.000000\n4\na+b\n1'
 # D-014: replace возвращает только string; старая запись ptr + del — ошибка с подсказкой.
 expect_program_output "replace-returns-string" $'string s = replace("a-b", "-", "+");\nlet t = replace(s, "+", "*");\nfn int size(string x) { return len(x); }\nprint(s); print(t); print(size(replace("ab", "b", "bcd")));\nprint(s == "a+b");\ns = replace(s, "a", "z"); print(s);' $'a+b\na*b\n4\n1\nz+b'
