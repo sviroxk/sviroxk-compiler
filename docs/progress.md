@@ -351,3 +351,9 @@
 - `move(a)` — встроенная функция (решение владельца 13.11: только со скобками): отдаёт строку без копии, в слоте `a` — NULL. После переноса `a` — ошибка «используется после move» (как после `drop`, с объединением веток); `a = …` (и `a = move(a)`) снова делает имя пригодным. Аргумент — имя string-переменной/параметра; `move` внешней переменной в цикле/функции — ошибка; `move a` — синтаксическая ошибка «ожидалась ';'».
 - Тесты: `tests/memory-safety.sh` `string-move-release` (LeakSanitizer), `test.sh` `string-move`, `string-use-after-move`, `string-move-after-branch`, `string-move-without-parens`, `string-move-in-loop`, `string-move-not-name`. До правки `move` — «неизвестная функция 'move'».
 - Задача 0б закрыта (D-014, D-015).
+
+## 2026-11-13 — структуры, шаг 1 (1.2): возврат структуры
+- `fn Point make(…)` возвращает структуру, если в ней и во вложенных структурах только скалярные поля; `Point q = make(…);`, `q = make(…);`, `sum(make(…))`, `shift(shift(a, 1), 1)`. `Point w = q;` — копия (раньше разбор ждал только `= {`). Конец функции без `return` даёт нулевое значение любого типа (`Constant::getNullValue`).
+- Структура с полем `string`/`ptr`/динамический массив, в том числе во вложенной структуре: возврат — ошибка «пока нельзя вернуть из функции», `P w = q;` и `w = q;` — «неявное копирование … запрещено» (раньше вложенное поле не проверялось). Правила владеющих полей — 5.2.
+- Тесты: `test.sh` `struct-return`, `struct-return-owning-field`, `struct-return-wrong-type`, `struct-init-wrong-type`, `struct-result-into-int`, `struct-copy-nested-owning`, `struct-init-copy-owning`; пример и ошибка в spec §7. До правки `fn Point make` — «неизвестный тип результата 'Point'», `Point w = q;` — «ожидалась ';'».
+- В письмо записаны баг `ptr q = v` (из PR #110) и решение 13.11 о `data(временная строка)`.
