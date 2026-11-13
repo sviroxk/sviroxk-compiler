@@ -389,6 +389,32 @@ int[] f = pass(move(m)); print(f.len()); print(f[4]);
 fn int[] glob() { return a; }
 int[] g = glob(); g[0] = 50; print(a[0]); print(g[0]);
 SC
+# 1.3: растущий массив структур со строками и массивами в полях — push, копии, функции, resize/clear, drop.
+check_case struct-dynamic-array-release clean $'?\n18\n4\nAnn\n41\nKim\n20\nLee\nBob\n41\nKim\nB\n2\nKim\n4\n1\n?\n0\nZed\n9' 1 <<'SC'
+struct Person { string name = "?"; int age = 18; int[] scores; }
+fn Person make(string n, int a) { Person p; p.name = n; p.age = a; p.scores.push(a); return p; }
+Person[] people = new Person[2];
+print(people[1].name); print(people[0].age);
+Person q = { name = "Ann"; age = 30; };
+people.push(q);
+people.push(make("Bob", 41));
+q.name = "Zed";
+print(people.len()); print(people[2].name); print(people[3].age);
+people[0].name = "Kim"; people[0].age += 2; print(people[0].name); print(people[0].age);
+people[1] = make("Lee", 5); print(people[1].name);
+Person r = people[3]; r.name = "Rob"; print(people[3].name);
+fn int oldest(Person[] list) { int best = 0; for i in 0..list.len() { if (list[i].age > best) { best = list[i].age; } } list[0].name = "X"; return best; }
+print(oldest(people)); print(people[0].name);
+fn Person[] team() { Person[] t = new Person[0]; t.push(make("A", 1)); t.push(make("B", 2)); return t; }
+Person[] t2 = team(); print(t2[1].name); print(oldest(team()));
+Person[] copy = people; copy[0].name = "C"; print(people[0].name);
+Person[] moved = move(copy); print(moved.len());
+people.resize(1); print(people.len()); people.resize(2); print(people[1].name);
+people.clear(); print(people.len()); people.push(q); print(people[0].name);
+drop t2;
+Person[] st = [make("S", 9)];
+print(oldest(st));
+SC
 check_case dynamic-grow-release clean $'5\n10\n50\n4' 1 <<'SC'
 ptr values = new int[0];
 values.push(10); values.push(20); values.push(30);

@@ -133,7 +133,9 @@ void CodeGen::restoreScope(const ScopeSnapshot& scope) {
 void CodeGen::emitDeferred(size_t base) {
     const ScopeSnapshot current = saveScope();
     for (size_t i = deferred_.size(); i > base; --i) {
-        if (llvm::Value* slot = deferred_[i - 1].freeSlot; slot && !deferred_[i - 1].structName.empty()) {
+        if (llvm::Value* slot = deferred_[i - 1].freeSlot; slot && deferred_[i - 1].elements) {
+            dropElements(slot, deferred_[i - 1].structName);  // массив структур: строки элементов, затем буфер
+        } else if (slot && !deferred_[i - 1].structName.empty()) {
             dropStruct(slot, deferred_[i - 1].structName);
             continue;
         }
@@ -252,7 +254,7 @@ void CodeGen::copyStructStrings(llvm::Value* address, const std::string& structN
             builder.CreateStore(copyString(builder.CreateLoad(builder.getPtrTy(), field)), field);
         else if (fieldType.isDynArray()) {  // своя копия буфера: ёмкость (минимум 1) и len элементов
             llvm::Type* element = svType(fieldType.element->toString());
-            llvm::Value* size = builder.getInt64(element->getPrimitiveSizeInBits() / 8);
+            llvm::Value* size = elementSize(element);
             llvm::Value* capacity = builder.CreateLoad(builder.getInt64Ty(), builder.CreateStructGEP(dynArrayType(), field, 2));
             capacity = builder.CreateSelect(builder.CreateICmpEQ(capacity, builder.getInt64(0)), builder.getInt64(1), capacity);
             llvm::Value* data = builder.CreateCall(runtimeFunction("malloc"), {builder.CreateMul(capacity, size)});
@@ -279,12 +281,15 @@ bool CodeGen::isFreshArray(const Node& expr) const {
 
 // Описатель {data, len, cap} со своей копией буфера (ёмкость минимум 1, как у copyStructStrings).
 llvm::Value* CodeGen::copyDynArray(llvm::Value* data, llvm::Value* length, llvm::Value* capacity,
-                                   llvm::Type* element) {
-    llvm::Value* size = builder.getInt64(element->getPrimitiveSizeInBits() / 8);
+                                   llvm::Type* element, const std::string& structName) {
+    llvm::Value* size = elementSize(element);
     capacity = builder.CreateSelect(builder.CreateICmpEQ(capacity, builder.getInt64(0)), builder.getInt64(1), capacity);
     llvm::Value* copy = builder.CreateCall(runtimeFunction("malloc"), {builder.CreateMul(capacity, size)});
     emitRuntimeFailureIf(builder.CreateIsNull(copy), "out of memory", Node{});
     builder.CreateCall(runtimeFunction("memcpy"), {copy, data, builder.CreateMul(length, size)});
+    if (!structName.empty())  // элементы со строками/массивами: свои копии (как копия структуры, D-016)
+        forEachElement(copy, element, builder.getInt64(0), length,
+                       [&](llvm::Value* item) { copyStructStrings(item, structName); });
     llvm::Value* desc = llvm::UndefValue::get(dynArrayType());
     desc = builder.CreateInsertValue(desc, copy, {0});
     desc = builder.CreateInsertValue(desc, length, {1});
@@ -305,10 +310,12 @@ llvm::Value* CodeGen::arrayValue(const Node& expr) {
             return builder.CreateLoad(type, builder.CreateStructGEP(dynArrayType(), desc, index));
         };
         return copyDynArray(field(0, builder.getPtrTy()), field(1, builder.getInt64Ty()),
-                            field(2, builder.getInt64Ty()), dynArrayElementTypes[expr.value]);
+                            field(2, builder.getInt64Ty()), dynArrayElementTypes[expr.value],
+                            arrayStructNames.contains(expr.value) ? arrayStruct(arrayStructNames[expr.value]) : "");
     }
     llvm::Value* length = builder.getInt64(arrayLengths[expr.value]);
-    return copyDynArray(arrays[expr.value], length, length, arrayElementTypes[expr.value]);
+    return copyDynArray(arrays[expr.value], length, length, arrayElementTypes[expr.value],
+                        arrayStructNames.contains(expr.value) ? arrayStruct(arrayStructNames[expr.value]) : "");
 }
 
 // Имя растущего массива: описатель desc, освобождается в конце блока (1.3).
@@ -317,7 +324,47 @@ void CodeGen::bindDynArray(const std::string& name, llvm::Value* desc, const std
     dynArrayElementTypes[name] = svType(elementType);
     unsignedElements[name] = sc::Type::from(elementType).isUnsigned();
     vars[name] = desc;
-    deferred_.push_back({nullptr, {}, desc});
+    deferred_.push_back({nullptr, {}, desc, nullptr, arrayStruct(elementType)});
+    deferred_.back().elements = !deferred_.back().structName.empty();
+    if (structDefs.contains(elementType)) arrayStructNames[name] = elementType;
+}
+
+// Имя структуры элемента, если её надо освобождать/копировать по полям; иначе пусто.
+std::string CodeGen::arrayStruct(const std::string& elementType) const {
+    return structDefs.contains(elementType) && structOwnsMemory(elementType) ? elementType : "";
+}
+
+llvm::Value* CodeGen::elementSize(llvm::Type* element) {  // bool — 1 байт, структура — с выравниванием
+    return builder.getInt64(module.getDataLayout().getTypeAllocSize(element).getFixedValue());
+}
+
+// Цикл по элементам [from, to) буфера data: body получает адрес элемента.
+void CodeGen::forEachElement(llvm::Value* data, llvm::Type* element, llvm::Value* from, llvm::Value* to,
+                             const std::function<void(llvm::Value*)>& body) {
+    llvm::Function* function = builder.GetInsertBlock()->getParent();
+    llvm::BasicBlock* before = builder.GetInsertBlock();
+    llvm::BasicBlock* head = llvm::BasicBlock::Create(context, "each_head", function);
+    llvm::BasicBlock* step = llvm::BasicBlock::Create(context, "each_body", function);
+    llvm::BasicBlock* done = llvm::BasicBlock::Create(context, "each_done", function);
+    builder.CreateBr(head);
+    builder.SetInsertPoint(head);
+    llvm::PHINode* index = builder.CreatePHI(builder.getInt64Ty(), 2);
+    index->addIncoming(from, before);
+    builder.CreateCondBr(builder.CreateICmpSLT(index, to), step, done);
+    builder.SetInsertPoint(step);
+    body(builder.CreateGEP(element, data, {index}));
+    index->addIncoming(builder.CreateAdd(index, builder.getInt64(1)), builder.GetInsertBlock());
+    builder.CreateBr(head);
+    builder.SetInsertPoint(done);
+}
+
+// Строки/массивы полей элементов [from, len) массива структур по описателю desc.
+void CodeGen::dropElements(llvm::Value* desc, const std::string& structName, llvm::Value* from) {
+    if (structName.empty()) return;
+    llvm::Value* data = builder.CreateLoad(builder.getPtrTy(), builder.CreateStructGEP(dynArrayType(), desc, 0));
+    llvm::Value* length = builder.CreateLoad(builder.getInt64Ty(), builder.CreateStructGEP(dynArrayType(), desc, 1));
+    forEachElement(data, llvmStructTypes[structName], from ? from : builder.getInt64(0), length,
+                   [&](llvm::Value* item) { dropStruct(item, structName); });
 }
 
 // Переменная-структура со строками освобождает их в конце своего блока (как string, D-014).
@@ -404,6 +451,13 @@ void CodeGen::registerTemporary(const Node& expr, llvm::Value* value) {
     at.CreateStore(llvm::Constant::getNullValue(value->getType()), slot);  // путь без значения: free(NULL)
     builder.CreateStore(value, slot);
     deferred_.push_back({nullptr, {}, slot, &expr, freshStruct(expr)});
+    if (isFreshArray(expr)) {  // f() -> P[] / move(a): элементы-структуры освобождаются с массивом
+        const std::string type = expr.varName == "move" ? "" : funcReturnTypes[expr.varName];
+        deferred_.back().structName = expr.varName == "move"
+            ? (arrayStructNames.contains(expr.args[0].value) ? arrayStructNames[expr.args[0].value] : "")
+            : arrayStruct(sc::Type::from(type).element->toString());
+        deferred_.back().elements = !deferred_.back().structName.empty();
+    }
 }
 
 // Значение забрала переменная, поле или return: временной строкой оно больше не считается.
@@ -420,7 +474,9 @@ void CodeGen::releaseTemporaries(size_t mark) {
     const bool reachable = !blockHasTerminator(builder.GetInsertBlock());
     for (size_t i = deferred_.size(); i > mark; --i) {
         if (!deferred_[i - 1].temporary) continue;
-        if (reachable && !deferred_[i - 1].structName.empty()) {
+        if (reachable && deferred_[i - 1].elements)
+            dropElements(deferred_[i - 1].freeSlot, deferred_[i - 1].structName);
+        if (reachable && !deferred_[i - 1].structName.empty() && !deferred_[i - 1].elements) {
             dropStruct(deferred_[i - 1].freeSlot, deferred_[i - 1].structName);
         } else if (reachable) {
             llvm::Value* slot = deferred_[i - 1].freeSlot;
@@ -759,7 +815,7 @@ void CodeGen::growDynArray(const std::string& varName, llvm::Value* newCapacity,
         builder.CreateStructGEP(descType, desc, 0));
     llvm::Function* mallocF = runtimeFunction("malloc");
     llvm::Value* product = builder.CreateBinaryIntrinsic(llvm::Intrinsic::umul_with_overflow,
-        newCapacity, builder.getInt64(elementType->getPrimitiveSizeInBits() / 8));
+        newCapacity, elementSize(elementType));
     emitRuntimeFailureIf(builder.CreateExtractValue(product, 1), "out of memory", location);
     llvm::Value* bytes = builder.CreateExtractValue(product, 0);
     llvm::Value* newData = builder.CreateCall(mallocF, {bytes});
@@ -768,7 +824,7 @@ void CodeGen::growDynArray(const std::string& varName, llvm::Value* newCapacity,
         builder.CreateStructGEP(descType, desc, 1));
     // Copy existing elements into the new buffer.
     llvm::Value* copyBytes = builder.CreateMul(oldLength,
-        builder.getInt64(elementType->getPrimitiveSizeInBits() / 8));
+        elementSize(elementType));
     llvm::Function* memcpyF = runtimeFunction("memcpy");
     builder.CreateCall(memcpyF, {newData, dataPtr, copyBytes});
     // Free the old buffer.
@@ -1011,7 +1067,15 @@ llvm::Value* CodeGen::genOtherExpr(const Node& node) {
     std::string fieldPath = node.op;
     llvm::Value* currentPtr = nullptr;
     std::string structName;
-    if (node.right) {  // a[i].x: адрес элемента статического массива структур
+    if (node.right && dynArrays.contains(currentVar)) {  // a[i].x растущего массива структур (1.3)
+        llvm::Value* desc = dynArrays[currentVar];
+        llvm::Value* data = builder.CreateLoad(builder.getPtrTy(), builder.CreateStructGEP(dynArrayType(), desc, 0));
+        llvm::Value* length = builder.CreateLoad(builder.getInt64Ty(), builder.CreateStructGEP(dynArrayType(), desc, 1));
+        llvm::Value* idx = genExpr(*node.right);
+        emitArrayBoundsCheck(idx, length, node);
+        currentPtr = builder.CreateGEP(dynArrayElementTypes[currentVar], data, {idx});
+        structName = arrayStructNames[currentVar];
+    } else if (node.right) {  // a[i].x: адрес элемента статического массива структур
         auto array = arrays.find(currentVar);
         auto element = arrayStructNames.find(currentVar);
         if (array == arrays.end() || element == arrayStructNames.end()) {
@@ -1849,7 +1913,7 @@ void CodeGen::genNode(const Node& node) {
             llvm::Value* count = builder.CreateSelect(
                 builder.CreateICmpEQ(size, builder.getInt64(0)), builder.getInt64(1), size);
             llvm::Value* data = builder.CreateCall(runtimeFunction("calloc"), {count,
-                builder.getInt64(elementType->getPrimitiveSizeInBits() / 8)});
+                elementSize(elementType)});
             emitRuntimeFailureIf(builder.CreateIsNull(data), "out of memory", alloc);
             llvm::StructType* descType = dynArrayType();
             llvm::Value* desc = createStorage(descType, node.varName);
@@ -1866,7 +1930,16 @@ void CodeGen::genNode(const Node& node) {
             constVars[node.varName] = node.isConst;
             // 1.3: буфер освобождается сам в конце блока (как поле-массив, D-017);
             // drop/del раньше обнуляют его, и free(NULL) в конце ничего не делает.
-            deferred_.push_back({nullptr, {}, desc});
+            deferred_.push_back({nullptr, {}, desc, nullptr, arrayStruct(alloc.varType)});
+            deferred_.back().elements = !deferred_.back().structName.empty();
+            if (structDefs.contains(alloc.varType)) {  // new P[n]: элементы — значения полей по умолчанию
+                arrayStructNames[node.varName] = alloc.varType;
+                Node empty;
+                empty.type = NODE_STRUCT_LITERAL;
+                forEachElement(data, elementType, builder.getInt64(0), size, [&](llvm::Value* item) {
+                    initStructLiteral(item, llvmStructTypes[alloc.varType], alloc.varType, empty);
+                });
+            }
             return;
         }
         // int[] b = a / move(a) / f(); ptr b = f() / move(a) — растущий массив (D-018).
@@ -1930,6 +2003,8 @@ void CodeGen::genNode(const Node& node) {
         if (alloca && !constVars[node.varName] && dynArrays.contains(node.varName) && (isFreshArray(*node.left) ||
             (node.left->type == NODE_IDENTIFIER && (dynArrays.contains(node.left->value) || arrays.contains(node.left->value))))) {  // v = a (копия), v = move(a), v = f(): старый буфер — free
             llvm::Value* value = arrayValue(*node.left);
+            if (arrayStructNames.contains(node.varName))
+                dropElements(dynArrays[node.varName], arrayStruct(arrayStructNames[node.varName]));
             llvm::Value* dataSlot = builder.CreateStructGEP(dynArrayType(), dynArrays[node.varName], 0);
             builder.CreateCall(runtimeFunction("free"), {builder.CreateLoad(builder.getPtrTy(), dataSlot)});
             builder.CreateStore(value, dynArrays[node.varName]);
@@ -1943,7 +2018,7 @@ void CodeGen::genNode(const Node& node) {
             llvm::Value* count = builder.CreateSelect(
                 builder.CreateICmpEQ(size, builder.getInt64(0)), builder.getInt64(1), size);
             llvm::Value* data = builder.CreateCall(runtimeFunction("calloc"), {count,
-                builder.getInt64(elementType->getPrimitiveSizeInBits() / 8)});
+                elementSize(elementType)});
             emitRuntimeFailureIf(builder.CreateIsNull(data), "out of memory", *node.left);
             llvm::Value* dataSlot = builder.CreateStructGEP(dynArrayType(), desc, 0);
             builder.CreateCall(runtimeFunction("free"), {builder.CreateLoad(builder.getPtrTy(), dataSlot)});
@@ -1983,7 +2058,7 @@ void CodeGen::genNode(const Node& node) {
         builder.CreateCall(runtimeFunction("free"), {builder.CreateLoad(builder.getPtrTy(), dataSlot)});
         const uint64_t count = node.left->args.size();
         llvm::Value* data = builder.CreateCall(runtimeFunction("calloc"), {builder.getInt64(count ? count : 1),
-            builder.getInt64(element->getPrimitiveSizeInBits() / 8)});
+            elementSize(element)});
         emitRuntimeFailureIf(builder.CreateIsNull(data), "out of memory", node);
         for (uint64_t i = 0; i < count; ++i) {
             const Node& item = node.left->args[i];
@@ -2050,6 +2125,13 @@ void CodeGen::genNode(const Node& node) {
                 if (node.op == "compound") precomputed_[node.right->left->left.get()] = idx;
                 llvm::Value* value = stableString(*node.right, genExpr(*node.right));
                 precomputed_.clear();
+                if (auto structName = arrayStructNames.find(node.varName); structName != arrayStructNames.end()) {
+                    if (structOwnsMemory(structName->second))  // a[i] = q: копия, старый элемент освобождается
+                        replaceStruct(gep, structName->second, value, *node.right);
+                    else
+                        builder.CreateStore(value, gep);
+                    return;
+                }
                 checkNarrowStore(value, *node.right, elementType, unsignedElements[node.varName], node);
                 builder.CreateStore(castTo(value, elementType, isUnsignedExpr(*node.right)), gep);
             }
@@ -2253,8 +2335,12 @@ void CodeGen::genNode(const Node& node) {
         llvm::Value* currentData = builder.CreateLoad(builder.getPtrTy(),
             builder.CreateStructGEP(descType, desc, 0));
         llvm::Value* value = stableString(*node.left, genExpr(*node.left));
-        checkNarrowStore(value, *node.left, elementType, unsignedElements[node.varName], *node.left);
-        value = castTo(value, elementType, isUnsignedExpr(*node.left));
+        if (auto structName = arrayStructNames.find(node.varName); structName != arrayStructNames.end()) {
+            value = takeStruct(*node.left, value, structName->second);  // push(q) — копия, push(f()) — забрать
+        } else {
+            checkNarrowStore(value, *node.left, elementType, unsignedElements[node.varName], *node.left);
+            value = castTo(value, elementType, isUnsignedExpr(*node.left));
+        }
         llvm::Value* gep = builder.CreateGEP(elementType, currentData, {currentLength});
         builder.CreateStore(value, gep);
         llvm::Value* newLength = builder.CreateAdd(currentLength, builder.getInt64(1));
@@ -2268,6 +2354,11 @@ void CodeGen::genNode(const Node& node) {
         llvm::Value* desc = found->second;
 
         llvm::Value* newSize = emitArraySize(*node.left, node);
+        const std::string owning = arrayStructNames.contains(node.varName)
+            ? arrayStruct(arrayStructNames[node.varName]) : "";
+        if (!owning.empty())  // clear()/resize меньше: строки уходящих элементов освобождаются (1.3)
+            dropElements(desc, owning, builder.CreateSelect(builder.CreateICmpSLT(newSize, builder.getInt64(0)),
+                                                            builder.getInt64(0), newSize));
         llvm::Value* oldLength = builder.CreateLoad(builder.getInt64Ty(),
             builder.CreateStructGEP(descType, desc, 1));
 
@@ -2296,10 +2387,17 @@ void CodeGen::genNode(const Node& node) {
         llvm::Type* elementType = dynArrayElementTypes[node.varName];
         if (!elementType) elementType = builder.getInt32Ty();
         llvm::Value* data = builder.CreateLoad(builder.getPtrTy(), builder.CreateStructGEP(descType, desc, 0));
-        llvm::Value* elementBytes = builder.getInt64(elementType->getPrimitiveSizeInBits() / 8);
+        llvm::Value* elementBytes = elementSize(elementType);
         builder.CreateCall(runtimeFunction("memset"),
             {builder.CreateGEP(elementType, data, {oldLength}), builder.getInt32(0),
              builder.CreateMul(builder.CreateSub(newSize, oldLength), elementBytes)});
+        if (auto structName = arrayStructNames.find(node.varName); structName != arrayStructNames.end()) {
+            Node empty;  // новые элементы-структуры — значения полей по умолчанию, как new P[n]
+            empty.type = NODE_STRUCT_LITERAL;
+            forEachElement(data, elementType, oldLength, newSize, [&](llvm::Value* item) {
+                initStructLiteral(item, llvmStructTypes[structName->second], structName->second, empty);
+            });
+        }
         builder.CreateBr(doneBlock);
         builder.SetInsertPoint(doneBlock);
         builder.CreateStore(newSize, builder.CreateStructGEP(descType, desc, 1));
@@ -2444,6 +2542,7 @@ void CodeGen::genNode(const Node& node) {
         // del динамического массива — то же, что drop (буфер обнуляется, 1.3).
         if (dynArrays.contains(node.varName)) {
             llvm::Value* desc = dynArrays[node.varName];
+            if (arrayStructNames.contains(node.varName)) dropElements(desc, arrayStruct(arrayStructNames[node.varName]));
             llvm::Value* dataSlot = builder.CreateStructGEP(dynArrayType(), desc, 0);
             builder.CreateCall(runtimeFunction("free"),
                 {builder.CreateLoad(builder.getPtrTy(), dataSlot)});

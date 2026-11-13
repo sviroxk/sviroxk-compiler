@@ -1,6 +1,7 @@
 #ifndef CODEGEN_H
 #define CODEGEN_H
 
+#include <functional>
 #include "parser.h"
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
@@ -35,6 +36,7 @@ class CodeGen {
         const Node* statement; ScopeSnapshot bindings; llvm::Value* freeSlot = nullptr;
         const Node* temporary = nullptr;
         std::string structName = {};  // не пусто: в freeSlot структура, освободить её строки (D-016)
+        bool elements = false;        // freeSlot — растущий массив структур structName (1.3)
     };
     std::vector<Deferred> deferred_;
     size_t loopDeferredBase_ = 0;
@@ -54,9 +56,15 @@ class CodeGen {
     void bindFieldArray(const Node& node);
     // 1.3 (D-018): растущий массив в параметре, переменной, return — копия, move или результат.
     bool isFreshArray(const Node& expr) const;
-    llvm::Value* copyDynArray(llvm::Value* data, llvm::Value* length, llvm::Value* capacity, llvm::Type* element);
+    llvm::Value* copyDynArray(llvm::Value* data, llvm::Value* length, llvm::Value* capacity, llvm::Type* element,
+                              const std::string& structName = "");
     llvm::Value* arrayValue(const Node& expr);
     void bindDynArray(const std::string& name, llvm::Value* desc, const std::string& elementType);
+    llvm::Value* elementSize(llvm::Type* element);
+    void forEachElement(llvm::Value* data, llvm::Type* element, llvm::Value* from, llvm::Value* to,
+                        const std::function<void(llvm::Value*)>& body);
+    void dropElements(llvm::Value* desc, const std::string& structName, llvm::Value* from = nullptr);
+    std::string arrayStruct(const std::string& elementType) const;
     void copyStructStrings(llvm::Value* address, const std::string& structName);
     void ownStructSlot(llvm::Value* slot, const std::string& structName);
     bool storeOwnedField(const Node& assign, llvm::Value* address, llvm::Type* fieldType);
