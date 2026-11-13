@@ -1604,6 +1604,28 @@ Node parseOne() {
         if (!isNameToken(name.type)) failAt(name, "ожидалось имя счётчика for");
         node.varName = consume().value;
         expect(IN_T, "'in'");
+        // for c in letters(s) { … }: буквы строки по очереди (D-022).
+        if (peek().type == IDENTIFIER && peek().value == "letters" && peek(1).type == LPAREN) {
+            node.type = NODE_FOR_EACH;
+            node.op = "letters";
+            consume();
+            consume();
+            Token text = peek();
+            if (!isNameToken(text.type) || peek(1).type != RPAREN)
+                failAt(text, "letters(s): в скобках — имя строки");
+            consume();
+            consume();
+            node.left = makeNode();
+            node.left->type = NODE_IDENTIFIER;
+            node.left->value = text.value;
+            node.left->line = text.line;
+            node.left->column = text.column;
+            node.left->file = text.file;
+            expect(LBRACE);
+            node.children = parseBlock();
+            expect(RBRACE);
+            return node;
+        }
         if (peek().type == IDENTIFIER && peek(1).type == LBRACE) {
             node.type = NODE_FOR_EACH;
             Token arrayToken = consume();

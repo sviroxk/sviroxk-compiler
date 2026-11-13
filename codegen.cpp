@@ -716,6 +716,70 @@ llvm::Function* CodeGen::utf8EncodeFunction() {
     return function;
 }
 
+// sc.utf8_decode(at, width): буква UTF-8 с адреса at и её длина в байтах. Не UTF-8
+// (обрыв, лишний байт, длинная запись, суррогат) — U+FFFD на один байт, как
+// String::from_utf8_lossy в Rust (D-022). Дальше завершающего 0 не читает.
+llvm::Function* CodeGen::utf8DecodeFunction() {
+    if (llvm::Function* existing = module.getFunction("sc.utf8_decode")) return existing;
+    llvm::Type* i32 = builder.getInt32Ty();
+    llvm::Type* i8 = builder.getInt8Ty();
+    llvm::Function* function = llvm::Function::Create(
+        llvm::FunctionType::get(i32, {builder.getPtrTy(), builder.getPtrTy()}, false),
+        llvm::Function::InternalLinkage, "sc.utf8_decode", module);
+    llvm::IRBuilderBase::InsertPointGuard guard(builder);
+    auto block = [&](const char* name) { return llvm::BasicBlock::Create(context, name, function); };
+    llvm::Value* at = function->getArg(0);
+    llvm::Value* width = function->getArg(1);
+    builder.SetInsertPoint(block("entry"));
+    llvm::AllocaInst* code = builder.CreateAlloca(i32);
+    llvm::Value* lead = builder.CreateZExt(builder.CreateLoad(i8, at), i32);
+    auto test = [&](unsigned shift, unsigned value) {
+        return builder.CreateICmpEQ(builder.CreateLShr(lead, builder.getInt32(shift)), builder.getInt32(value));
+    };
+    // Сколько байт продолжения: 0 — ASCII, 1–3, 4 — не UTF-8.
+    llvm::Value* extra = builder.CreateSelect(builder.CreateICmpULT(lead, builder.getInt32(0x80)), builder.getInt32(0),
+        builder.CreateSelect(test(5, 0x6), builder.getInt32(1), builder.CreateSelect(test(4, 0xE), builder.getInt32(2),
+        builder.CreateSelect(test(3, 0x1E), builder.getInt32(3), builder.getInt32(4)))));
+    llvm::Value* mask = builder.CreateLShr(builder.getInt32(0x7F), extra);
+    builder.CreateStore(builder.CreateAnd(lead, mask), code);
+    llvm::BasicBlock* bad = block("bad");
+    llvm::BasicBlock* check = block("check");
+    llvm::BasicBlock* next = block("cont1");
+    builder.CreateCondBr(builder.CreateICmpEQ(extra, builder.getInt32(4)), bad, next);
+    for (unsigned k = 1; k <= 3; ++k) {
+        builder.SetInsertPoint(next);
+        llvm::BasicBlock* read = block("read");
+        builder.CreateCondBr(builder.CreateICmpULT(extra, builder.getInt32(k)), check, read);
+        builder.SetInsertPoint(read);
+        llvm::Value* byte = builder.CreateZExt(builder.CreateLoad(i8, builder.CreateInBoundsGEP(i8, at, builder.getInt64(k))), i32);
+        llvm::BasicBlock* take = block("take");
+        builder.CreateCondBr(builder.CreateICmpEQ(builder.CreateAnd(byte, builder.getInt32(0xC0)), builder.getInt32(0x80)),
+                             take, bad);
+        builder.SetInsertPoint(take);
+        builder.CreateStore(builder.CreateOr(builder.CreateShl(builder.CreateLoad(i32, code), builder.getInt32(6)),
+                                             builder.CreateAnd(byte, builder.getInt32(0x3F))), code);
+        next = k < 3 ? block("cont") : check;
+        builder.CreateBr(next);
+    }
+    builder.SetInsertPoint(check);
+    llvm::Value* c = builder.CreateLoad(i32, code);
+    llvm::Value* least = builder.CreateSelect(builder.CreateICmpEQ(extra, builder.getInt32(1)), builder.getInt32(0x80),
+        builder.CreateSelect(builder.CreateICmpEQ(extra, builder.getInt32(2)), builder.getInt32(0x800),
+        builder.CreateSelect(builder.CreateICmpEQ(extra, builder.getInt32(3)), builder.getInt32(0x10000), builder.getInt32(0))));
+    llvm::Value* invalid = builder.CreateOr(builder.CreateOr(builder.CreateICmpULT(c, least),
+        builder.CreateICmpUGT(c, builder.getInt32(0x10FFFF))),
+        builder.CreateICmpULT(builder.CreateSub(c, builder.getInt32(0xD800)), builder.getInt32(0x800)));
+    llvm::BasicBlock* good = block("good");
+    builder.CreateCondBr(invalid, bad, good);
+    builder.SetInsertPoint(good);
+    builder.CreateStore(builder.CreateZExt(builder.CreateAdd(extra, builder.getInt32(1)), builder.getInt64Ty()), width);
+    builder.CreateRet(c);
+    builder.SetInsertPoint(bad);
+    builder.CreateStore(builder.getInt64(1), width);
+    builder.CreateRet(builder.getInt32(0xFFFD));
+    return function;
+}
+
 llvm::Function* CodeGen::readLineFunction() {
     if (llvm::Function* existing = module.getFunction("sc.read_line")) return existing;
     llvm::Type* ptrTy = builder.getPtrTy();
@@ -2765,6 +2829,51 @@ void CodeGen::genNode(const Node& node) {
         builder.CreateStore(next, i);
         builder.CreateBr(loopBlock);
         builder.SetInsertPoint(afterBlock);
+        breakBlock = savedBreak;
+        continueBlock = savedContinue;
+        loopDeferredBase_ = savedLoopBase;
+    }
+    else if (node.type == NODE_FOR_EACH && node.op == "letters") {
+        // for c in letters(s): номер байта i, на каждом шаге — буква UTF-8 с s[i] и её длина (D-022).
+        llvm::Value* text = genExpr(*node.left);
+        text = builder.CreateSelect(builder.CreateICmpEQ(text, llvm::ConstantPointerNull::get(builder.getPtrTy())),
+                                    getStringPtr(""), text);
+        llvm::Function* function = builder.GetInsertBlock()->getParent();
+        llvm::AllocaInst* index = builder.CreateAlloca(builder.getInt64Ty(), nullptr, "letters_index");
+        llvm::AllocaInst* width = builder.CreateAlloca(builder.getInt64Ty(), nullptr, "letters_width");
+        llvm::AllocaInst* letter = builder.CreateAlloca(builder.getInt32Ty(), nullptr, node.varName);
+        builder.CreateStore(builder.getInt64(0), index);
+        llvm::BasicBlock* conditionBlock = llvm::BasicBlock::Create(context, "letters_cond", function);
+        llvm::BasicBlock* bodyBlock = llvm::BasicBlock::Create(context, "letters_body", function);
+        llvm::BasicBlock* stepBlock = llvm::BasicBlock::Create(context, "letters_step", function);
+        llvm::BasicBlock* afterBlock = llvm::BasicBlock::Create(context, "letters_after", function);
+        const ScopeSnapshot parentScope = saveScope();
+        const auto savedBreak = breakBlock;
+        const auto savedContinue = continueBlock;
+        const size_t savedLoopBase = loopDeferredBase_;
+        loopDeferredBase_ = deferred_.size();
+        vars[node.varName] = letter;
+        unsignedVars[node.varName] = true;
+        charVars[node.varName] = true;
+        integerWidths[node.varName] = 32;
+        breakBlock = afterBlock;
+        continueBlock = stepBlock;
+        builder.CreateBr(conditionBlock);
+        builder.SetInsertPoint(conditionBlock);
+        llvm::Value* at = builder.CreateInBoundsGEP(builder.getInt8Ty(), text,
+                                                    builder.CreateLoad(builder.getInt64Ty(), index));
+        builder.CreateCondBr(builder.CreateICmpNE(builder.CreateLoad(builder.getInt8Ty(), at), builder.getInt8(0)),
+                             bodyBlock, afterBlock);
+        builder.SetInsertPoint(bodyBlock);
+        builder.CreateStore(builder.CreateCall(utf8DecodeFunction(), {at, width}), letter);
+        genScope(node.children);
+        if (!blockHasTerminator(builder.GetInsertBlock())) builder.CreateBr(stepBlock);
+        builder.SetInsertPoint(stepBlock);
+        builder.CreateStore(builder.CreateAdd(builder.CreateLoad(builder.getInt64Ty(), index),
+                                              builder.CreateLoad(builder.getInt64Ty(), width)), index);
+        builder.CreateBr(conditionBlock);
+        builder.SetInsertPoint(afterBlock);
+        restoreScope(parentScope);
         breakBlock = savedBreak;
         continueBlock = savedContinue;
         loopDeferredBase_ = savedLoopBase;
