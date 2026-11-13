@@ -59,7 +59,10 @@ class CodeGen {
     llvm::Value* copyDynArray(llvm::Value* data, llvm::Value* length, llvm::Value* capacity, llvm::Type* element,
                               const std::string& structName = "");
     llvm::Value* arrayValue(const Node& expr);
-    void bindDynArray(const std::string& name, llvm::Value* desc, const std::string& elementType);
+    llvm::Value* viewValue(const Node& expr);
+    void bindDynArray(const std::string& name, llvm::Value* desc, const std::string& elementType,
+                      bool owned = true);
+    std::set<const llvm::Value*> viewSlots_;  // параметры-окна: не освобождаются, return — копией
     llvm::Value* elementSize(llvm::Type* element);
     void forEachElement(llvm::Value* data, llvm::Type* element, llvm::Value* from, llvm::Value* to,
                         const std::function<void(llvm::Value*)>& body);

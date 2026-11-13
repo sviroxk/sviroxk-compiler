@@ -569,6 +569,7 @@ for p in people {
     print(p.home.city);
 }
 SC
+check_case slice-window clean $'9\n9\n15\n2\n4\n3\n16\n3\n5\n70\n20\n0\n41\n30' 1 < "$EXAMPLES/slice_window.svx"
 check_case move-in-loop-reassign clean $'4\n30\n6\n100\nabbbb\nочередь' 1 <<'SC'
 struct Queue { int[] items; string name; }
 fn Queue enqueue(Queue q, int x) { q.items.push(x); return q; }

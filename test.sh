@@ -1353,6 +1353,24 @@ expect_program_output "task11-people-grow" "$(cat examples/task11_people_grow.sv
 expect_program_output "task13-stack-queue" "$(cat examples/task13_stack_queue.svx)" $'30\n30\n2\n1\n2\n3'
 expect_program_output "task14-matrix" "$(cat examples/task14_matrix.svx)" $'58\n64\n139\n154\n6'
 expect_program_output "task20-grow" "$(cat examples/task20_grow.svx)" $'1000\n1\n499500\n10\n45\n0\n12\n13\n0\n144'
+# 1.3: окно на часть массива — срезы v[a..b] и slice(v, a, n), параметр int[..] / slice int[] (D-018).
+expect_program_output "slice-window" "$(cat examples/slice_window.svx)" $'9\n9\n15\n2\n4\n3\n16\n3\n5\n70\n20\n0\n41\n30'
+printf '%s\n' 'fn i64 n(int[..] part) { return part.len(); }' 'int[] v = [1, 2, 3];' 'print(n(v[1..5]));' > "$RUNTIME_DIR/slice_end.svx"
+expect_runtime_error "slice-end-out-of-bounds" "$RUNTIME_DIR/slice_end.svx" "slice out of bounds at line 3, column 9"
+printf '%s\n' 'fn i64 n(int[..] part) { return part.len(); }' 'int[] v = [1, 2, 3];' 'int k = 2;' 'print(n(slice(v, k, 3)));' > "$RUNTIME_DIR/slice_count.svx"
+expect_runtime_error "slice-count-out-of-bounds" "$RUNTIME_DIR/slice_count.svx" "slice out of bounds at line 4, column 9"
+printf '%s\n' 'fn i64 n(int[..] part) { return part.len(); }' 'int[] v = [1, 2, 3];' 'int a = 2;' 'int b = 1;' 'print(n(v[a..b]));' > "$RUNTIME_DIR/slice_reversed.svx"
+expect_runtime_error "slice-reversed" "$RUNTIME_DIR/slice_reversed.svx" "slice out of bounds at line 5, column 9"
+printf '%s\n' 'fn int at2(int[..] part) { return part[2]; }' 'int[] v = [1, 2, 3, 4];' 'print(at2(v[0..2]));' > "$RUNTIME_DIR/slice_index.svx"
+expect_runtime_error "slice-index-out-of-window" "$RUNTIME_DIR/slice_index.svx" "array index out of bounds at line 1, column 35"
+expect_compile_error "slice-push" $'fn void f(int[..] part) { part.push(1); }' "'part' — окно на часть чужого массива: длину окна менять нельзя"
+expect_compile_error "slice-drop" $'fn void f(slice int[] part) { drop part; }' "окно 'part' освобождать нечего: память у хозяина массива"
+expect_compile_error "slice-move" $'fn int[] f(int[..] part) { return move(part); }' "окно 'part' отдать насовсем нельзя"
+expect_compile_error "slice-assign" $'fn void f(int[..] part) { int[] w = [1]; part = w; }' "окну 'part' нельзя присвоить другой массив"
+expect_compile_error "slice-store" $'int[] v = [1, 2, 3];\nint[] w = v[0..2];' "срез передаётся только в параметр-окно функции"
+expect_compile_error "slice-element-type" $'fn int f(int[..] part) { return 0; }\nptr b = new u8[2];\nprint(f(b));' "аргумент 1 функции 'f': ожидалось окно 'int[..]', получен массив 'byte[]'"
+expect_compile_error "slice-not-array" $'fn int f(int[..] part) { return 0; }\nint x = 3;\nprint(f(x));' "ожидалось окно 'int[..]' (v[a..b], slice(v, a, n) или массив целиком), получен 'int/i32'"
+expect_compile_error "slice-bound-type" $'fn int f(int[..] part) { return 0; }\nint[] v = [1, 2];\nprint(f(v[0..1.5]));' "граница среза должна быть целым числом"
 # 1.3: move в цикле, если тот же оператор присваивает имени новое значение (D-015, уточнение владельца).
 expect_program_output "move-in-loop-reassign" $'struct Queue { int[] items; string name; }\nfn Queue enqueue(Queue q, int x) { q.items.push(x); return q; }\nfn int[] add(int[] v, int x) { v.push(x); return v; }\nfn string grow(string s) { return replace(s, "a", "ab"); }\nQueue q;\nq.name = "очередь";\nint[] v = new int[0];\nstring s = "a";\nfor i in 0..4 {\n    q = enqueue(move(q), i * 10);\n    v = add(move(v), i);\n    s = grow(move(s));\n}\nint k = 0;\nwhile (k < 2) { v = add(move(v), 100); k += 1; }\nprint(q.items.len()); print(q.items[3]); print(v.len()); print(v[5]); print(s); print(q.name);' $'4\n30\n6\n100\nabbbb\nочередь'
 expect_compile_error "move-in-loop-reassign-other" $'fn int[] add(int[] v, int x) { v.push(x); return v; }\nint[] v = new int[0];\nint[] w = new int[0];\nfor i in 0..3 { w = add(move(v), i); }' "move 'v' внутри цикла или функции, а объявлена она снаружи"
