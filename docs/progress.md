@@ -473,3 +473,6 @@
 ## 2026-11-13 — 1.1: части строки for part in split(s, sep)
 - `for p in split(s, sep)` — части строки по разделителю (D-025); число из строки отложено до Option/Result (D-026).
 - spec §11 «Части строки», §17; тесты `split-*`; memory-safety `split-loop`.
+
+## 2026-11-13 — решения по Option: int? и if n is int x
+- Ответы владельца записаны: тип `int?` (D-027), разбор `if n is int x { … } else { … }`, `match` позже (D-028); plan.md шаги 2а, 2б.
