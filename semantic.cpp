@@ -150,7 +150,7 @@ private:
     static bool isBuiltinFunction(const std::string& name) {
         static const std::set<std::string> names = {
             "sqrt", "abs", "pow", "max", "min", "floor", "ceil", "round",
-            "rand", "len", "replace", "str"
+            "rand", "len", "replace", "str", "data", "as_ptr"
         };
         return names.contains(name);
     }
@@ -202,8 +202,13 @@ private:
 
     // Тип, на который указывает ptr: из `ptr p = &x`, иначе i32 (так читает *p).
     // ptr = &x или ptr = q, где q сам указывает на переменную: del такого ptr освобождал бы стек.
+    // data(s) / as_ptr(s) — явный адрес символов строки (D-014; как в C++ и Rust).
+    static bool isStringAddress(const Node& value) {
+        return value.type == NODE_FUNC_CALL && (value.varName == "data" || value.varName == "as_ptr");
+    }
+
     bool pointsToVariable(const Node& value) const {
-        if (value.type == NODE_ADDR) return true;
+        if (value.type == NODE_ADDR || isStringAddress(value)) return true;
         if (value.type != NODE_IDENTIFIER) return false;
         const Symbol* source = lookup(value.value);
         return source && source->pointsToVariable;
@@ -572,6 +577,11 @@ private:
                 error(node, "адрес массива '" + node.varName + "' взять нельзя: указатель на массив пока не поддержан");
                 return "<error>";
             }
+            if (symbol->ty.isStr()) {  // D-014: адрес строки — функцией, не значком
+                error(node, "'&" + node.varName + "' для строки не пишется: адрес строки — data(" +
+                      node.varName + ") или as_ptr(" + node.varName + ")");
+                return "<error>";
+            }
             return "ptr";
         }
         case NODE_DEREF: {
@@ -902,6 +912,9 @@ private:
             return "; возможна потеря значения, нужно явное приведение: (" + typeName(normalize(expected)) + ") значение";
         if (a.isPtr() && !e.isPtr())
             return "; null и указатели допустимы только для типа ptr";
+        if (e.isPtr() && a.isStr())  // D-014: string неявно в ptr не превращается
+            return "; string неявно в ptr не превращается: храните строку в string "
+                   "(string r = replace(…);), del для строки не пишется; адрес строки — data(s) или as_ptr(s)";
         return "";
     }
 
@@ -1030,7 +1043,8 @@ private:
             {"sqrt", {1,1}}, {"abs", {1,1}}, {"pow", {2,2}},
             {"max", {2,2}}, {"min", {2,2}}, {"floor", {1,1}},
             {"ceil", {1,1}}, {"round", {1,1}}, {"rand", {0,0}},
-            {"len", {1,1}}, {"replace", {3,3}}, {"str", {1,1}}
+            {"len", {1,1}}, {"replace", {3,3}}, {"str", {1,1}},
+            {"data", {1,1}}, {"as_ptr", {1,1}}
         };
         auto builtin = builtins.find(node.varName);
         if (builtin != builtins.end()) {
@@ -1044,7 +1058,8 @@ private:
                 const Node& arg = node.args[index];
                 std::string type = expression(arg);
                 argumentTypes.push_back(type);
-                const bool expectsString = node.varName == "len" || node.varName == "replace";
+                const bool expectsString = node.varName == "len" || node.varName == "replace" ||
+                    isStringAddress(node);
                 if (expectsString && type != "str" && type != "<error>")
                     error(arg, "аргумент " + std::to_string(index + 1) + " функции '" +
                           node.varName + "' должен иметь тип str");
@@ -1066,7 +1081,8 @@ private:
                     error(node.args[0], "str: значение типа '" + typeName(argument) + "' в строку не преобразуется");
                 return "str";
             }
-            if (node.varName == "replace") return "ptr";
+            if (node.varName == "replace") return "str";  // D-014: только строка
+            if (isStringAddress(node)) return "ptr";  // D-014: адрес строки — только явно
             if (node.varName == "sqrt" || node.varName == "pow" ||
                 node.varName == "floor" || node.varName == "ceil" || node.varName == "round") {
                 // D-009: целые аргументы. pow двух целых — целое, как `**` (с проверкой
@@ -1302,6 +1318,8 @@ private:
                     dynArrayInit, dynElementType);
             if (dynArrayInit && scopes_.back().contains(node.varName))
                 scopes_.back()[node.varName].dynArrayCapacity = dynCapacity;
+            if (isStringAddress(*node.left) && scopes_.back().contains(node.varName))
+                scopes_.back()[node.varName].pointee = "char";
             if (node.left->type == NODE_ADDR && scopes_.back().contains(node.varName)) {
                 if (const Symbol* target = lookup(node.left->varName))
                     scopes_.back()[node.varName].pointee = target->type;
@@ -1425,10 +1443,12 @@ private:
             }
             // p = &y / p = q: тип, на который указывает p, задан при объявлении и не меняется.
             if (symbol->ty.isPtr() && !symbol->isDynArray &&
-                (node.left->type == NODE_ADDR || node.left->type == NODE_IDENTIFIER)) {
+                (node.left->type == NODE_ADDR || node.left->type == NODE_IDENTIFIER ||
+                 isStringAddress(*node.left))) {
                 const bool address = node.left->type == NODE_ADDR;
-                const Symbol* source = lookup(address ? node.left->varName : node.left->value);
-                std::string target;
+                const Symbol* source = isStringAddress(*node.left) ? nullptr
+                    : lookup(address ? node.left->varName : node.left->value);
+                std::string target = isStringAddress(*node.left) ? "char" : "";
                 if (source && address) target = normalize(source->type);
                 else if (source && source->ty.isPtr() && !source->isDynArray) target = pointeeOf(*source);
                 if (!target.empty() && target != pointeeOf(*symbol))
@@ -1804,11 +1824,14 @@ private:
             else if (symbol->ty.isArray() && !symbol->isDynArray)
                 error(node, "освобождать нечего: массив '" + node.varName +
                       "' не создан через new (его память освобождается сама)");
+            else if (symbol->ty.isStr())  // D-014: память строки — не ручной режим
+                error(node, "del для строки не пишется: '" + node.varName +
+                      "' — string, её память освобождает язык");
             else if (!symbol->isDynArray && !symbol->ty.isPtr())
                 error(node, "освободить можно только динамический массив или ptr");
             else if (symbol->pointsToVariable)
                 error(node, "освобождать нечего: '" + node.varName +
-                      "' указывает на переменную (&…), а не на память из new");
+                      "' указывает на переменную (&…) или строку (data/as_ptr), а не на память из new");
             else if (index >= dropBarrier_) {  // del внешнего имени внутри цикла/функции — без отметки
                 symbol->droppedLine = node.line;
                 symbol->releasedBy = "del";

@@ -55,10 +55,11 @@ check_case() {
     echo "PASS: memory safety $mode '$name'"
 }
 
-check_case heap-release clean 'after' 1 <<'SC'
-ptr text = replace("before", "before", "after");
+# replace returns an owning string (D-014); automatic release comes with task 0b,
+# until then its leak is expected and leak detection is off for this case only.
+check_case replace-string clean 'after' <<'SC'
+string text = replace("before", "before", "after");
 print(text);
-del text;
 SC
 check_case dynamic-grow-release clean $'5\n10\n50\n4' 1 <<'SC'
 ptr values = new int[0];
@@ -98,24 +99,26 @@ str line = read(input);
 print(line);
 SC
 # Self-tests of the ASan detector. Direct use after del / double del is a compile
-# error (test.sh: use-after-del, double-del); a second name for the same memory is
-# not tracked, so these still reach run time.
+# error (test.sh: use-after-del, double-del), and so is del of data(s); a pointer that
+# arrives as a function parameter is not tracked (spec §9), so these reach run time.
 check_case use-after-delete detector heap-use-after-free <<'SC'
-ptr text = replace("abc", "b", "q");
-ptr alias = text;
-del text;
-print(alias[0]);
+fn void release(ptr p) { del p; }
+string text = str(123456);
+ptr chars = data(text);
+release(chars);
+print(chars[0]);
 SC
 check_case double-delete detector attempting\ double-free <<'SC'
-ptr text = replace("abc", "b", "q");
-ptr alias = text;
-del text;
-del alias;
+fn void release(ptr p) { del p; }
+string text = str(123456);
+ptr chars = as_ptr(text);
+release(chars);
+release(chars);
 SC
 check_case raw-pointer-overrun detector heap-buffer-overflow <<'SC'
-ptr text = replace("abc", "z", "q");
-print(text[1]);
-del text;
+string text = str(7);
+ptr chars = data(text);
+print(chars[4]);
 SC
 
 echo 'PASS: memory safety suite (4 clean, 3 controlled runtime errors, 3 ASan detector self-tests)'

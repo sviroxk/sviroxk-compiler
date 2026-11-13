@@ -1013,7 +1013,7 @@ expect_program_output "user-fn-builtin-name" $'fn int len(str s) { return 100; }
 expect_compile_error "user-fn-builtin-name-message" $'fn int max(int a) { return a; }\nprint(max(1, 2));' "'max'"
 expect_compile_error "delete-static-array" $'int[] a = [1, 2];\ndel a;' ":2:1: error[semantic]: освобождать нечего: массив 'a' не создан через new"
 expect_compile_error "defer-delete-static-array" 'int[] a = [1, 2]; defer del a;' "освобождать нечего: массив 'a' не создан через new"
-expect_compile_error "delete-address-of" $'int x = 5;\nptr p = &x;\ndel p;' ":3:1: error[semantic]: освобождать нечего: 'p' указывает на переменную (&…), а не на память из new"
+expect_compile_error "delete-address-of" $'int x = 5;\nptr p = &x;\ndel p;' ":3:1: error[semantic]: освобождать нечего: 'p' указывает на переменную (&…) или строку (data/as_ptr), а не на память из new"
 expect_compile_error "delete-address-copy" $'int x = 5;\nptr p = &x;\nptr q = p;\ndel q;' "освобождать нечего: 'q' указывает на переменную"
 expect_compile_error "delete-address-assigned" $'int x = 5;\nptr p = new int[1];\ndel p;\np = &x;\ndel p;' "освобождать нечего: 'p' указывает на переменную"
 expect_program_output "delete-after-readdress-new" $'int x = 5;\nptr p = &x;\nprint(*p);\np = new int[1];\np[0] = 9;\nprint(p[0]);\ndel p;' $'5\n9'
@@ -1287,7 +1287,18 @@ expect_compile_error "removed-word-imp" 'imp "x.svx";' "слово 'imp' уда�
 expect_program_output "struct-variable-forms" $'struct P { int x = 1; int y = 2; }\nfn int sum(P p) { return p.x + p.y; }\nP a;\nP b = { x = 5; y = 6; };\nprint(sum(a));\nprint(sum(b));' $'3\n11'
 expect_program_output "string-equality" $'string a = "abc";\nstring b = "abc";\nstring c = "abd";\nprint(a == b);\nprint(a != c);\nif (a == "abc") { print(7); }' $'1\n1\n7'
 expect_compile_error "string-ordering" $'string a = "a";\nprint(a < "b");' "строки сравниваются только через == и !="
-expect_program_output "new-words-builtins" $'print(floor(2.7));\nprint(ceil(2.1));\nprint(round(2.5));\nprint(len("abcd"));\nptr r = replace("a-b", "-", "+");\nprint(r);\nint n = rand();\nprint(n >= 0);' $'2.000000\n3.000000\n3.000000\n4\na+b\n1'
+expect_program_output "new-words-builtins" $'print(floor(2.7));\nprint(ceil(2.1));\nprint(round(2.5));\nprint(len("abcd"));\nstring r = replace("a-b", "-", "+");\nprint(r);\nint n = rand();\nprint(n >= 0);' $'2.000000\n3.000000\n3.000000\n4\na+b\n1'
+# D-014: replace возвращает только string; старая запись ptr + del — ошибка с подсказкой.
+expect_program_output "replace-returns-string" $'string s = replace("a-b", "-", "+");\nlet t = replace(s, "+", "*");\nfn int size(string x) { return len(x); }\nprint(s); print(t); print(size(replace("ab", "b", "bcd")));\nprint(s == "a+b");\ns = replace(s, "a", "z"); print(s);' $'a+b\na*b\n4\n1\nz+b'
+expect_compile_error "replace-into-ptr" 'ptr r = replace("a-b", "-", "+");' "string неявно в ptr не превращается: храните строку в string (string r = replace(…);), del для строки не пишется; адрес строки — data(s) или as_ptr(s)"
+expect_compile_error "string-into-ptr-assign" $'string s = "a";\nptr p = null;\np = s;' "string неявно в ptr не превращается"
+expect_compile_error "string-into-ptr-argument" $'fn int g(ptr p) { return 1; }\nprint(g(replace("a", "a", "b")));' "string неявно в ptr не превращается"
+expect_program_output "string-data-as-ptr" $'string s = "abc";\nptr p = data(s);\nptr q = as_ptr(s);\nprint(p[1]); print(*q); print(p == q);\nptr r = data(s);\nr = as_ptr(s); print(r[2]);\nchar c = p[0]; print(c);' $'b\na\n1\nc\na'
+expect_compile_error "string-address-sign" $'string s = "abc";\nptr p = &s;' "'&s' для строки не пишется: адрес строки — data(s) или as_ptr(s)"
+expect_compile_error "string-data-of-int" $'int x = 1;\nptr p = data(x);' "аргумент 1 функции 'data' должен иметь тип str"
+expect_compile_error "del-string-data" $'string s = "abc";\nptr p = as_ptr(s);\nptr q = p;\ndel q;' "освобождать нечего: 'q' указывает на переменную (&…) или строку (data/as_ptr)"
+expect_compile_error "string-data-into-int-ptr" $'int x = 1;\nptr p = &x;\nstring s = "a";\np = data(s);' "'p' указывает на тип 'int/i32', присвоить ему адрес значения типа 'char' нельзя"
+expect_compile_error "del-string" $'string r = replace("a-b", "-", "+");\ndel r;' "del для строки не пишется: 'r' — string, её память освобождает язык"
 expect_compile_error "dyn-array-argument" $'fn int g(ptr p) { return 1; }\nptr v = new int[2];\nprint(g(v));' "динамический массив 'v' пока нельзя передать в функцию"
 expect_program_output "print-bool-builtin" $'string s = "a";\nprint((s == "a"));\nprint((s == "b"));' $'1\n0'
 
