@@ -469,3 +469,7 @@
 ## 2026-11-13 — 1.1: сложение строк a + b
 - `a + b` — новая строка, `s += t` (D-024); строка + число или `char` — ошибка с подсказкой.
 - spec §11 «Сложение строк», §17; тесты `string-plus`, `string-plus-number`, `string-plus-char`, `string-plus-in-letters`; memory-safety `string-plus`.
+
+## 2026-11-13 — 1.1: части строки for part in split(s, sep)
+- `for p in split(s, sep)` — части строки по разделителю (D-025); число из строки отложено до Option/Result (D-026).
+- spec §11 «Части строки», §17; тесты `split-*`; memory-safety `split-loop`.

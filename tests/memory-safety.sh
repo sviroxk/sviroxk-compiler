@@ -599,6 +599,17 @@ print(acc);
 print(twice("x" + "y"));
 print(str(1) + "" == "1");
 SC
+check_case split-loop clean $'[a]\n[]\nb!\n2\nyy' 1 <<'SC'
+fn string first(string line) { for w in split(line, " ") { return w; } return ""; }
+string s = "a,,b";
+for p in split(s, ",") { print("[" + p + "]"); if (p == "") { break; } }
+for p in split(s, ",") { if (p == "a") { continue; } p.push('!'); if (p != "!") { print(p); } }
+int n = 0;
+string t = "x y";
+for w in split(t, " ") { string c = w + w; n += 1; }
+print(n);
+print(first("yy zz"));
+SC
 check_case string-bytes clean $'104\n1\n2\n2\n2\n195\n169' 1 < "$EXAMPLES/string_bytes.svx"
 check_case move-in-loop-reassign clean $'4\n30\n6\n100\nabbbb\nочередь' 1 <<'SC'
 struct Queue { int[] items; string name; }
