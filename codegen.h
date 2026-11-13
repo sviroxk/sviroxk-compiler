@@ -34,6 +34,7 @@ class CodeGen {
     struct Deferred {
         const Node* statement; ScopeSnapshot bindings; llvm::Value* freeSlot = nullptr;
         const Node* temporary = nullptr;
+        std::string structName = {};  // не пусто: в freeSlot структура, освободить её строки (D-016)
     };
     std::vector<Deferred> deferred_;
     size_t loopDeferredBase_ = 0;
@@ -47,6 +48,13 @@ class CodeGen {
     llvm::Value* ownString(const Node& expr, llvm::Value* value);
     llvm::Value* stableString(const Node& expr, llvm::Value* value);
     void ownStringSlot(llvm::Value* slot);
+    // D-016: строка в поле принадлежит структуре.
+    bool structOwnsMemory(const std::string& structName, int depth = 0) const;
+    void dropStruct(llvm::Value* address, const std::string& structName);
+    void copyStructStrings(llvm::Value* address, const std::string& structName);
+    void ownStructSlot(llvm::Value* slot, const std::string& structName);
+    bool storeOwnedField(const Node& assign, llvm::Value* address, llvm::Type* fieldType);
+    void replaceStruct(llvm::Value* address, const std::string& structName, llvm::Value* value);
     void registerTemporary(const Node& expr, llvm::Value* value);
     void consumeTemporary(const Node& expr);
     void releaseTemporaries(size_t mark);
