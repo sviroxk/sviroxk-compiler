@@ -222,6 +222,19 @@ Token expect(TokenType type) {
         // «ожидалась ';'», «ожидалось имя», «ожидался другой токен»
         const char* verb = (type == STRING || name == "другой токен") ? "ожидался " :
                            type == IDENTIFIER ? "ожидалось " : "ожидалась ";
+        // Пропущенная `;` в конце строки: указать место сразу после предыдущего
+        // токена, а не начало следующей строки (как clang и rustc).
+        if (type == SEMICOLON && pos > 0) {
+            Token previous = gtokens[static_cast<size_t>(pos - 1)];
+            if (previous.endColumn > 0 && (token.type == END || token.line != previous.endLine)) {
+                const std::string after = "после " + (previous.type == STRING
+                    ? "\"" + previous.value + "\"" : tokenDescription(previous));
+                previous.line = previous.endLine;
+                previous.column = previous.endColumn;
+                failAt(previous, verb + name + " " + after);
+                return consume();
+            }
+        }
         failAt(token, verb + name + ", получено " + tokenDescription(token));
     }
     return consume();

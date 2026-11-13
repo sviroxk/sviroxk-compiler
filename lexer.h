@@ -49,6 +49,10 @@ struct Token {
     int line = 1;
     int column = 1;
     std::string file;
+    // Позиция сразу после последнего символа токена (0 — не задана): туда
+    // указывает ошибка «ожидалась ';'», если следующий токен уже на другой строке.
+    int endLine = 0;
+    int endColumn = 0;
 };
 
 std::vector<Token> tokenize(std::string_view code, const std::string& filename = {});

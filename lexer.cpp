@@ -131,8 +131,16 @@ std::vector<Token> tokenize(std::string_view code, const std::string& filename) 
     auto add = [&](TokenType type, const std::string& value, int tokLine, int tokCol) {
         tokens.push_back({type, value, tokLine, tokCol, filename});
     };
+    // Конец предыдущего токена: при входе в цикл позиция уже стоит сразу за ним.
+    auto closeToken = [&]() {
+        if (!tokens.empty() && tokens.back().endColumn == 0) {
+            tokens.back().endLine = line;
+            tokens.back().endColumn = column;
+        }
+    };
 
     while (i < (int)code.size()) {
+        closeToken();
         if (code[i] == '\n') {
             line++;
             column = 1;
@@ -489,6 +497,7 @@ std::vector<Token> tokenize(std::string_view code, const std::string& filename) 
         column++;
     }
 
+    closeToken();
     add(END, "", line, column);
     return tokens;
 }
