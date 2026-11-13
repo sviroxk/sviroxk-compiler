@@ -41,6 +41,7 @@ struct Symbol {
     const char* releasedBy = "drop"; // чем освобождено: "drop" или "close" (для текста ошибки)
     int deferDropLine = 0;    // строка defer drop; освобождение при выходе из области
     std::map<std::string, int> droppedFields; // поле-массив после drop t.scores: путь -> строка (D-017)
+    bool isView = false;      // параметр-окно int[..] / slice int[]: часть чужого массива (D-018)
 };
 
 // Тип поля по пути "a.b" в структуре (пусто — нет такого поля).
@@ -184,7 +185,14 @@ private:
         return sc::Type::from(type).toString();
     }
 
+    static bool isViewType(const std::string& type) { return type.starts_with("view<"); }
+    static std::string viewElement(const std::string& type) { return normalize(type.substr(5, type.size() - 6)); }
+
     static std::string typeName(const std::string& type) {
+        if (isViewType(type)) {  // окно: int[..] (D-018)
+            const std::string element = typeName(viewElement(type));
+            return element.substr(0, element.find('/')) + "[..]";
+        }
         const std::string n = normalize(type);
         if (n.starts_with("dyn<")) {  // растущий массив: int[] (1.3)
             const std::string element = typeName(n.substr(4, n.size() - 5));
@@ -232,6 +240,7 @@ private:
 
 
     bool knownType(const std::string& raw) const {
+        if (isViewType(raw)) return knownType("dyn<" + viewElement(raw) + ">");
         const sc::Type t = sc::Type::from(raw);
         if (!t.isKnown()) return false;
         if (t.isDynArray())  // int[] (D-016), растущий массив структур P[] (1.3)
@@ -276,9 +285,12 @@ private:
     }
 
     // const защищает и содержимое массива: элементы и push/pop/resize (раньше не защищал).
-    void rejectConstArray(const Node& node, const Symbol* array) const {
+    void rejectConstArray(const Node& node, const Symbol* array, bool resizes = true) const {
         if (array && array->isConst)
             error(node, "нельзя изменять константный массив '" + node.varName + "'");
+        else if (resizes && array && array->isView)
+            error(node, "'" + node.varName + "' — окно на часть чужого массива: длину окна менять нельзя "
+                  "(push, pop, resize, clear); нужен свой массив — скопируйте: int[] c = " + node.varName + ";");
     }
 
     // Выражение-символ по форме: литерал 'a', приведение (char), тернарный из символов.
@@ -365,7 +377,10 @@ private:
             Symbol* moved = lookupMutable(expr.args[0].value, &index);
             if (!moved || !moved->isDynArray) return "";
             expression(expr.args[0]);
-            if (index < dropBarrier_ && moved != reassigned_)
+            if (moved->isView)
+                error(expr, "окно '" + expr.args[0].value + "' отдать насовсем нельзя: массив принадлежит "
+                      "вызывающему; нужен свой — скопируйте: int[] c = " + expr.args[0].value + ";");
+            else if (index < dropBarrier_ && moved != reassigned_)
                 error(expr, "move '" + expr.args[0].value + "' внутри цикла или функции, а объявлена она "
                       "снаружи: перенос выполнился бы несколько раз");
             else if (!moved->droppedLine) {
@@ -388,6 +403,42 @@ private:
         }
         const auto function = functions_.find(expr.varName);
         return function != functions_.end() && function->second.returnTy.isDynArray();
+    }
+
+    // v[a..b] или slice(v, a, n) (если своей функции slice нет), D-018.
+    bool isSlice(const Node& expr) const {
+        return expr.type == NODE_FUNC_CALL && (expr.varName == ".slice" ||
+               (expr.varName == "slice" && !functions_.contains("slice")));
+    }
+
+    // Значение для параметра-окна `T[..]`: срез, имя массива или окна целиком. Пусто — без ошибок.
+    std::string checkViewValue(const Node& expr, const std::string& element) {
+        const bool slice = isSlice(expr);
+        if (slice && expr.args.size() != 3) {
+            for (const Node& arg : expr.args) expression(arg);
+            return "slice(массив, начало, количество) ожидает 3 аргумента, получено " +
+                   std::to_string(expr.args.size());
+        }
+        const Node& base = slice ? expr.args[0] : expr;
+        const Symbol* array = base.type == NODE_IDENTIFIER ? lookup(base.value) : nullptr;
+        const std::string wanted = typeName("view<" + element + ">");
+        if (!array || (!array->isDynArray && !array->ty.isArray())) {
+            const std::string type = expression(base);
+            if (slice) for (size_t i = 1; i < expr.args.size(); ++i) expression(expr.args[i]);
+            if (type == "<error>") return "";
+            return "ожидалось окно '" + wanted + "' (v[a..b], slice(v, a, n) или массив целиком), получен '" +
+                   typeName(type) + "'";
+        }
+        expression(base);
+        if (slice)
+            for (size_t i = 1; i < 3; ++i)
+                if (const std::string bound = expression(expr.args[i]); bound != "<error>" && !ty(bound).isInteger())
+                    error(expr.args[i], "граница среза должна быть целым числом");
+        const std::string actual = array->isDynArray ? normalize(array->dynArrayElementType)
+                                                     : array->ty.element->toString();
+        if (actual != normalize(element))
+            return "ожидалось окно '" + wanted + "', получен массив '" + typeName("dyn<" + actual + ">") + "'";
+        return "";
     }
 
     // Проверка значения для места типа `T[]`: пусто — ошибок нет, иначе текст (без места).
@@ -474,6 +525,10 @@ private:
         if (symbol->deferDropLine) {
             error(node, "повторный " + verb + " '" + node.varName + "' (defer drop в строке " +
                   std::to_string(symbol->deferDropLine) + ")");
+            return nullptr;
+        }
+        if (symbol->isView) {
+            error(node, "окно '" + node.varName + "' освобождать нечего: память у хозяина массива");
             return nullptr;
         }
         if (index < dropBarrier_) {
@@ -1355,6 +1410,12 @@ private:
             if (!argumentTypes.empty()) return argumentTypes[0];
             return "i32";
         }
+        if (isSlice(node)) {  // окно хранить дольше вызова нельзя (время жизни — 5.2)
+            for (const Node& arg : node.args) expression(arg);
+            error(node, "срез передаётся только в параметр-окно функции, например fn int sum(int[..] part); "
+                  "своя копия части — через функцию, которая её возвращает");
+            return "<error>";
+        }
         auto function = functions_.find(node.varName);
         if (function == functions_.end()) {
             error(node, "неизвестная функция '" + node.varName + "'");
@@ -1368,6 +1429,13 @@ private:
         }
         size_t count = std::min(node.args.size(), function->second.parameters.size());
         for (size_t i = 0; i < node.args.size(); ++i) {
+            if (i < count && isViewType(function->second.parameters[i])) {  // окно: срез или весь массив
+                const std::string element = viewElement(function->second.parameters[i]);
+                if (const std::string problem = checkViewValue(node.args[i], element); !problem.empty())
+                    error(node.args[i], "аргумент " + std::to_string(i + 1) + " функции '" + node.varName +
+                          "': " + problem);
+                continue;
+            }
             if (const sc::Type parameter = sc::Type::from(i < count ? function->second.parameters[i] : "");
                 parameter.isDynArray()) {  // fn f(int[] v): копия, move — перенос (D-018)
                 if (const std::string problem = checkArrayValue(node.args[i], parameter.element->toString());
@@ -1504,7 +1572,10 @@ private:
             std::string type = param.substr(0, separator);
             std::string name = separator == std::string::npos ? "" : param.substr(separator + 1);
             if (!knownType(type)) error(node, "неизвестный тип параметра '" + type + "'");
-            if (const sc::Type t = ty(type); t.isDynArray())  // int[] v — своя копия массива (D-018)
+            if (isViewType(type)) {  // int[..] part — окно без копии, массив остаётся у вызывающего (D-018)
+                declare(name, "ptr", node, false, true, true, viewElement(type));
+                lookupMutable(name)->isView = true;
+            } else if (const sc::Type t = ty(type); t.isDynArray())  // int[] v — своя копия массива (D-018)
                 declare(name, "ptr", node, false, true, true, t.element ? t.element->toString() : "i32");
             else
                 declare(name, type, node, false, true);
@@ -1707,6 +1778,12 @@ private:
                 expression(*node.left);
                 break;
             }
+            if (symbol->isView) {
+                error(node, "окну '" + node.varName + "' нельзя присвоить другой массив: окно смотрит на часть "
+                      "массива вызывающего; меняйте элементы: " + node.varName + "[i] = …");
+                expression(*node.left);
+                break;
+            }
             const Symbol* sourceArray = node.left->type == NODE_IDENTIFIER ? lookup(node.left->value) : nullptr;
             if (symbol->isDynArray && !symbol->isConst && (isArrayResult(*node.left) ||
                 (sourceArray && (sourceArray->isDynArray || sourceArray->ty.isArray())))) {  // v = a: копия (D-018)
@@ -1877,7 +1954,7 @@ private:
         }
         case NODE_ARRAY_ASSIGN: {
             const Symbol* array = use(node, node.varName);
-            rejectConstArray(node, array);
+            rejectConstArray(node, array, false);  // элемент окна менять можно
             if (!array) error(node, "неизвестный массив '" + node.varName + "'");
             // Definite assignment: array must be initialized before element assignment
             if (array) checkInitialized(node, node.varName);
@@ -2132,6 +2209,8 @@ private:
             size_t index = 0;
             Symbol* symbol = lookupMutable(node.varName, &index);
             if (!symbol) error(node, "неизвестное имя '" + node.varName + "'");
+            else if (symbol->isView)
+                error(node, "окно '" + node.varName + "' освобождать нечего: память у хозяина массива");
             else if (symbol->droppedLine)
                 error(node, "повторный del '" + node.varName + "' (уже освобождено в строке " +
                       std::to_string(symbol->droppedLine) + ")");

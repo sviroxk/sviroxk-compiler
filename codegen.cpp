@@ -318,15 +318,52 @@ llvm::Value* CodeGen::arrayValue(const Node& expr) {
                         arrayStructNames.contains(expr.value) ? arrayStruct(arrayStructNames[expr.value]) : "");
 }
 
-// Имя растущего массива: описатель desc, освобождается в конце блока (1.3).
-void CodeGen::bindDynArray(const std::string& name, llvm::Value* desc, const std::string& elementType) {
+// Окно для параметра `T[..]` (D-018): {data + начало, длина, длина} без копии; v[a..b] —
+// конец не входит, slice(v, a, n) — начало и количество; выход за края — ошибка выполнения.
+llvm::Value* CodeGen::viewValue(const Node& expr) {
+    const bool slice = expr.type == NODE_FUNC_CALL && (expr.varName == ".slice" || expr.varName == "slice");
+    const std::string& name = slice ? expr.args[0].value : expr.value;
+    llvm::Value* data = nullptr;
+    llvm::Value* length = nullptr;
+    llvm::Type* element = nullptr;
+    if (auto found = dynArrays.find(name); found != dynArrays.end()) {
+        data = builder.CreateLoad(builder.getPtrTy(), builder.CreateStructGEP(dynArrayType(), found->second, 0));
+        length = builder.CreateLoad(builder.getInt64Ty(), builder.CreateStructGEP(dynArrayType(), found->second, 1));
+        element = dynArrayElementTypes[name];
+    } else {
+        data = arrays[name];
+        length = builder.getInt64(arrayLengths[name]);
+        element = arrayElementTypes[name];
+    }
+    llvm::Value* start = builder.getInt64(0);
+    llvm::Value* end = length;
+    if (slice) {
+        start = castTo(genExpr(expr.args[1]), builder.getInt64Ty(), isUnsignedExpr(expr.args[1]));
+        end = castTo(genExpr(expr.args[2]), builder.getInt64Ty(), isUnsignedExpr(expr.args[2]));
+        if (expr.varName == "slice") end = builder.CreateAdd(start, end);
+        llvm::Value* outside = builder.CreateOr(builder.CreateICmpSLT(start, builder.getInt64(0)),
+            builder.CreateOr(builder.CreateICmpSGT(start, end), builder.CreateICmpSGT(end, length)));
+        emitRuntimeFailureIf(outside, "slice out of bounds", expr);
+        data = builder.CreateGEP(element, data, {start});
+    }
+    llvm::Value* count = builder.CreateSub(end, start);
+    llvm::Value* desc = llvm::UndefValue::get(dynArrayType());
+    desc = builder.CreateInsertValue(desc, data, {0});
+    desc = builder.CreateInsertValue(desc, count, {1});
+    return builder.CreateInsertValue(desc, count, {2});
+}
+
+// Имя растущего массива: описатель desc, освобождается в конце блока (1.3); окно — нет.
+void CodeGen::bindDynArray(const std::string& name, llvm::Value* desc, const std::string& elementType,
+                           bool owned) {
     dynArrays[name] = desc;
     dynArrayElementTypes[name] = svType(elementType);
     unsignedElements[name] = sc::Type::from(elementType).isUnsigned();
     vars[name] = desc;
+    if (structDefs.contains(elementType)) arrayStructNames[name] = elementType;
+    if (!owned) return;
     deferred_.push_back({nullptr, {}, desc, nullptr, arrayStruct(elementType)});
     deferred_.back().elements = !deferred_.back().structName.empty();
-    if (structDefs.contains(elementType)) arrayStructNames[name] = elementType;
 }
 
 // Имя структуры элемента, если её надо освобождать/копировать по полям; иначе пусто.
@@ -528,7 +565,7 @@ llvm::Type* sc::Type::llvmType(llvm::LLVMContext& ctx) const {
 }
 
 llvm::Type* CodeGen::svType(const std::string& name) {
-    if (name.starts_with("dyn<")) return dynArrayType();  // int[] в параметре/результате (D-018)
+    if (name.starts_with("dyn<") || name.starts_with("view<")) return dynArrayType();  // int[], int[..] (D-018)
     return sc::Type::from(name).llvmType(context);
 }
 
@@ -1824,6 +1861,10 @@ llvm::Value* CodeGen::genCallExpr(const Node& node) {
             llvm::Function* fn = funcs[name];
             const auto& ptypes = funcParamTypes[name];
             for (size_t i = 0; i < node.args.size(); i++) {
+                if (i < ptypes.size() && ptypes[i].starts_with("view<")) {  // int[..] part — окно без копии
+                    argVals.push_back(viewValue(node.args[i]));
+                    continue;
+                }
                 if (i < ptypes.size() && ptypes[i].starts_with("dyn<")) {  // int[] v — копия или move (D-018)
                     argVals.push_back(arrayValue(node.args[i]));
                     continue;
@@ -2196,7 +2237,7 @@ void CodeGen::genNode(const Node& node) {
             llvm::Value* slot = node.left->type == NODE_IDENTIFIER && dynArrays.contains(node.left->value)
                 ? dynArrays[node.left->value] : nullptr;
             llvm::Value* v = nullptr;
-            if (slot && llvm::isa<llvm::AllocaInst>(slot)) {
+            if (slot && llvm::isa<llvm::AllocaInst>(slot) && !viewSlots_.contains(slot)) {
                 v = builder.CreateLoad(dynArrayType(), slot);
                 builder.CreateStore(llvm::Constant::getNullValue(dynArrayType()), slot);
             } else {
@@ -2476,6 +2517,13 @@ void CodeGen::genNode(const Node& node) {
             llvm::Type* ty = svType(ptype);
             llvm::AllocaInst* alloca =
                 builder.CreateAlloca(ty, nullptr, pname);
+            if (ptype.starts_with("view<")) {  // int[..] part: окно на чужой массив, не освобождается (D-018)
+                builder.CreateStore(&arg, alloca);
+                bindDynArray(pname, alloca, sc::Type::from(ptype.substr(5, ptype.size() - 6)).toString(), false);
+                viewSlots_.insert(alloca);
+                constVars[pname] = false;
+                continue;
+            }
             if (ptype.starts_with("dyn<")) {  // int[] v: своя копия (её сделал вызывающий), free в конце (D-018)
                 builder.CreateStore(&arg, alloca);
                 bindDynArray(pname, alloca, sc::Type::from(ptype).element->toString());
@@ -2515,6 +2563,10 @@ void CodeGen::genNode(const Node& node) {
             std::vector<llvm::Value*> argVals;
             const auto& ptypes = funcParamTypes[node.varName];
             for (size_t i = 0; i < node.args.size(); i++) {
+                if (i < ptypes.size() && ptypes[i].starts_with("view<")) {  // int[..] part — окно без копии
+                    argVals.push_back(viewValue(node.args[i]));
+                    continue;
+                }
                 if (i < ptypes.size() && ptypes[i].starts_with("dyn<")) {  // int[] v — копия или move (D-018)
                     argVals.push_back(arrayValue(node.args[i]));
                     continue;

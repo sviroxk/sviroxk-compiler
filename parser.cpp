@@ -660,6 +660,22 @@ Node parsePrimary() {
             setPos(*access, t);
             access->varName = t.value;
             access->left = makeNode(parseExpr());
+            if (peek().type == RANGE) {  // v[1..4] — окно на часть массива (срез, D-018)
+                consume();
+                Node slice;
+                slice.type = NODE_FUNC_CALL;
+                setPos(slice, t);
+                slice.varName = ".slice";  // точки в имени SC нет: с функцией пользователя не путается
+                Node base;
+                base.type = NODE_IDENTIFIER;
+                setPos(base, t);
+                base.value = t.value;
+                slice.args.push_back(base);
+                slice.args.push_back(*access->left);
+                slice.args.push_back(parseExpr());
+                expect(RBRACKET);
+                return slice;
+            }
             expect(RBRACKET);
             left = *access;
             if (peek().type == DOT && peek(1).type == IDENTIFIER) {  // a[i].x.y — поле элемента
@@ -1100,8 +1116,18 @@ Node parseOne() {
                 failAt(typeToken, "ожидался тип параметра функции");
             if (typeToken.type != TIP && !structType && !isTypeName(typeToken.value))
                 failAt(typeToken, "неизвестный тип параметра '" + typeToken.value + "'");
+            const bool sliceWord = typeToken.type == IDENTIFIER && typeToken.value == "slice" &&
+                (isTypeToken(peek().type) || peek().type == IDENTIFIER) && peek(1).type == LBRACKET;
+            if (sliceWord) typeToken = consume();  // slice int[] part — окно, как span в C++ (D-018)
             std::string ptype = declaredType(typeToken);
-            if (peek().type == LBRACKET && peek(1).type == RBRACKET) {  // int[] v — растущий массив (D-018)
+            if (sliceWord) {
+                expect(LBRACKET);
+                expect(RBRACKET, "']' (окно пишется 'slice int[] имя')");
+                ptype = "view<" + ptype + ">";
+            } else if (peek().type == LBRACKET && peek(1).type == RANGE && peek(2).type == RBRACKET) {
+                consume(); consume(); consume();  // int[..] part — окно, как &[i32] в Rust (D-018)
+                ptype = "view<" + ptype + ">";
+            } else if (peek().type == LBRACKET && peek(1).type == RBRACKET) {  // int[] v — растущий массив (D-018)
                 consume(); consume();
                 ptype = "dyn<" + ptype + ">";
             }
