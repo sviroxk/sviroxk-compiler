@@ -1805,6 +1805,9 @@ void CodeGen::genNode(const Node& node) {
             unsignedElements[node.varName] = sc::Type::from(alloc.varType).isUnsigned();
             vars[node.varName] = desc;
             constVars[node.varName] = node.isConst;
+            // 1.3: буфер освобождается сам в конце блока (как поле-массив, D-017);
+            // drop/del раньше обнуляют его, и free(NULL) в конце ничего не делает.
+            deferred_.push_back({nullptr, {}, desc});
             return;
         }
         // ptr p = &x: запомнить тип x, чтобы *p читал и писал значение нужного типа.
@@ -1849,6 +1852,23 @@ void CodeGen::genNode(const Node& node) {
     }
     else if (node.type == NODE_ASSIGN) {
         llvm::Value* alloca = vars[node.varName];
+        if (alloca && !constVars[node.varName] && dynArrays.contains(node.varName) &&
+            node.left->type == NODE_DYN_ARRAY) {  // v = new T[n]: новый буфер, старый освободить (1.3)
+            llvm::Value* desc = dynArrays[node.varName];
+            llvm::Type* elementType = dynArrayElementTypes[node.varName];
+            llvm::Value* size = emitArraySize(*node.left->left, *node.left);
+            llvm::Value* count = builder.CreateSelect(
+                builder.CreateICmpEQ(size, builder.getInt64(0)), builder.getInt64(1), size);
+            llvm::Value* data = builder.CreateCall(runtimeFunction("calloc"), {count,
+                builder.getInt64(elementType->getPrimitiveSizeInBits() / 8)});
+            emitRuntimeFailureIf(builder.CreateIsNull(data), "out of memory", *node.left);
+            llvm::Value* dataSlot = builder.CreateStructGEP(dynArrayType(), desc, 0);
+            builder.CreateCall(runtimeFunction("free"), {builder.CreateLoad(builder.getPtrTy(), dataSlot)});
+            builder.CreateStore(data, dataSlot);
+            builder.CreateStore(size, builder.CreateStructGEP(dynArrayType(), desc, 1));
+            builder.CreateStore(size, builder.CreateStructGEP(dynArrayType(), desc, 2));
+            return;
+        }
         if (alloca && !constVars[node.varName]) {
             llvm::Value* val = genExpr(*node.left);
             llvm::Type* ty = storageType(alloca);
@@ -2313,8 +2333,9 @@ void CodeGen::genNode(const Node& node) {
     else if (node.type == NODE_DEFER) {
         deferred_.push_back({node.left.get(), saveScope()});
     }
-    else if (node.type == NODE_DROP) {
+    else if (node.type == NODE_DROP || (node.type == NODE_DELETE && dynArrays.contains(node.varName))) {
         // Семантика гарантирует: динамический массив или file, освобождается один раз.
+        // del динамического массива — то же, что drop (буфер обнуляется, 1.3).
         if (dynArrays.contains(node.varName)) {
             llvm::Value* desc = dynArrays[node.varName];
             llvm::Value* dataSlot = builder.CreateStructGEP(dynArrayType(), desc, 0);
