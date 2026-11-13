@@ -2296,6 +2296,15 @@ private:
         }
         case NODE_ARRAY_PUSH: {
             const Symbol* array = use(node, node.varName);
+            if (array && array->ty.isStr()) {  // s.push(c): буква в конец строки (D-023)
+                std::string value = node.left ? expression(*node.left) : "<error>";
+                if (node.varName.find('.') != std::string::npos)
+                    error(node, "s.push(c): пока только у строки-переменной, не у поля '" + node.varName + "'");
+                else if (array->iteratedLine) iteratedError(node, node.varName, *array);
+                else if (value != "<error>" && value != "char")
+                    error(node, "s.push(c): добавляется одна буква char, а не '" + typeName(value) + "'");
+                break;
+            }
             rejectConstArray(node, array);
             if (!array) {
                 error(node, "неизвестный массив '" + node.varName + "'");

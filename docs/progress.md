@@ -461,3 +461,7 @@
 ## 2026-11-13 — 1.1: обход строки по буквам
 - `for c in letters(s)` — буквы строки по очереди (`char`), не UTF-8 — U+FFFD на неверный байт; менять строку в цикле нельзя (D-022).
 - spec §11 «Буквы по очереди», §17; тесты `letters-loop`, `letters-bad-utf8`, `letters-change-string`, `letters-not-string`, `letters-not-name`.
+
+## 2026-11-13 — 1.1: сборка строки s.push(c)
+- `s.push(c)` — буква в конец строки-переменной (D-023); строку можно собрать по буквам (задача 8 — перевернуть строку).
+- spec §11 «Сборка строки», §17; тесты `string-push`, `string-push-in-letters`, `string-push-string`, `string-push-int`; memory-safety `string-push`.
