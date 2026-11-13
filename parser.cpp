@@ -22,7 +22,7 @@ private:
 void renameUserBuiltins() {
     static const std::set<std::string> builtins = {
         "sqrt", "abs", "pow", "max", "min", "floor", "ceil", "round",
-        "rand", "len", "replace", "str", "data", "as_ptr"
+        "rand", "len", "replace", "str", "data", "as_ptr", "move"
     };
     std::set<std::string> defined;
     for (size_t i = 0; i + 2 < gtokens.size(); ++i) {

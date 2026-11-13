@@ -1300,6 +1300,13 @@ expect_compile_error "del-string-data" $'string s = "abc";\nptr p = as_ptr(s);\n
 expect_compile_error "string-data-into-int-ptr" $'int x = 1;\nptr p = &x;\nstring s = "a";\np = data(s);' "'p' указывает на тип 'int/i32', присвоить ему адрес значения типа 'char' нельзя"
 expect_program_output "string-copy-independent" $'string a = "ab";\nstring b = a;\nptr p = data(b);\np[0] = \'X\';\nprint(a); print(b);\nfn string twice(string s) { s = replace(s, "a", "aa"); return s; }\nstring c = twice(a);\nprint(a); print(c);' $'ab\nXb\nab\naab'
 expect_compile_error "string-data-of-temporary" 'ptr p = data(str(1));' "data(…) берёт адрес строки с именем: временная строка освобождается в конце оператора, сначала положите её в переменную (string s = …;)"
+# D-015: перенос строки — только move(имя); после него старое имя нельзя, присваивание оживляет.
+expect_program_output "string-move" $'string a = "abc";\nstring b = move(a);\nprint(b);\na = "new";\nprint(a);\nfn int size(string s) { return len(s); }\nprint(size(move(b)));' $'abc\nnew\n3'
+expect_compile_error "string-use-after-move" $'string a = "abc";\nstring b = move(a);\nprint(a);' "'a' используется после move (строка 2)"
+expect_compile_error "string-move-after-branch" $'string a = "abc";\nif (true) { string b = move(a); }\nprint(a);' "'a' используется после move (строка 2)"
+expect_compile_error "string-move-without-parens" $'string a = "abc";\nstring b = move a;' "ожидалась ';', получено 'a'"
+expect_compile_error "string-move-in-loop" $'string a = "abc";\nrepeat (2) { string b = move(a); }' "move 'a' внутри цикла или функции, а объявлена она снаружи"
+expect_compile_error "string-move-not-name" 'string b = move("abc");' "move(…) переносит строку из переменной: пишите move(имя)"
 expect_compile_error "del-string" $'string r = replace("a-b", "-", "+");\ndel r;' "del для строки не пишется: 'r' — string, её память освобождает язык"
 expect_compile_error "dyn-array-argument" $'fn int g(ptr p) { return 1; }\nptr v = new int[2];\nprint(g(v));' "динамический массив 'v' пока нельзя передать в функцию"
 expect_program_output "print-bool-builtin" $'string s = "a";\nprint((s == "a"));\nprint((s == "b"));' $'1\n0'

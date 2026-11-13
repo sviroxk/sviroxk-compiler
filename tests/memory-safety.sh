@@ -155,6 +155,25 @@ fn void run() {
 }
 run();
 SC
+check_case string-move-release clean $'12345\nagain\n5\n12345\n12345\nx\ny' 1 <<'SC'
+fn string pass(string s) { return move(s); }
+fn int take(string s) { return len(s); }
+fn void run() {
+    string a = str(12345);
+    string b = move(a);
+    print(b);
+    a = "again";
+    print(a);
+    print(take(move(a)));
+    string c = pass(move(b));
+    print(c);
+    print(move(c));
+    string d = "x";
+    if (true) { string e = move(d); print(e); }
+    d = "y"; d = move(d); print(d);
+}
+run();
+SC
 check_case dynamic-grow-release clean $'5\n10\n50\n4' 1 <<'SC'
 ptr values = new int[0];
 values.push(10); values.push(20); values.push(30);
@@ -214,4 +233,4 @@ ptr chars = data(text);
 print(chars[4]);
 SC
 
-echo 'PASS: memory safety suite (10 clean, 3 controlled runtime errors, 3 ASan detector self-tests)'
+echo 'PASS: memory safety suite (11 clean, 3 controlled runtime errors, 3 ASan detector self-tests)'
