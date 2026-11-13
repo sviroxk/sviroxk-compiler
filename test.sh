@@ -1305,7 +1305,7 @@ expect_compile_error "string-use-after-move" $'string a = "abc";\nstring b = mov
 expect_compile_error "string-move-after-branch" $'string a = "abc";\nif (true) { string b = move(a); }\nprint(a);' "'a' используется после move (строка 2)"
 expect_compile_error "string-move-without-parens" $'string a = "abc";\nstring b = move a;' "ожидалась ';', получено 'a'"
 expect_compile_error "string-move-in-loop" $'string a = "abc";\nrepeat (2) { string b = move(a); }' "move 'a' внутри цикла или функции, а объявлена она снаружи"
-expect_compile_error "string-move-not-name" 'string b = move("abc");' "move(…) переносит строку из переменной: пишите move(имя)"
+expect_compile_error "string-move-not-name" 'string b = move("abc");' "move(…) переносит строку или структуру из переменной: пишите move(имя)"
 expect_compile_error "del-string" $'string r = replace("a-b", "-", "+");\ndel r;' "del для строки не пишется: 'r' — string, её память освобождает язык"
 expect_compile_error "dyn-array-argument" $'fn int g(ptr p) { return 1; }\nptr v = new int[2];\nprint(g(v));' "динамический массив 'v' пока нельзя передать в функцию"
 expect_program_output "print-bool-builtin" $'string s = "a";\nprint((s == "a"));\nprint((s == "b"));' $'1\n0'
@@ -1319,7 +1319,9 @@ expect_compile_error "struct-param-unknown-type" 'fn int read(Missing value) { r
 expect_compile_error "struct-param-wrong-type" $'struct Pair { int x = 0; }\nfn int take(Pair value) { return value.x; }\nprint(take(1));' "аргумент 1 функции 'take': ожидался 'Pair'"
 # 1.2: возврат структуры со скалярными полями; P q = f(); P w = q — копия; результат передаётся дальше.
 expect_program_output "struct-return" $'struct Point { int x = 0; f64 y = 0.0; }\nstruct Box { Point a; u8 tag = 1; }\nfn Point make(int x) { Point p = { x = x; y = 1.5; }; return p; }\nfn Box wrap(Point p, u8 tag) { Box b = { a = p; tag = tag; }; return b; }\nfn int sum(Point p) { return p.x * 10; }\nPoint q = make(4);\nprint(q.x);\nprint(q.y);\nPoint w = q;\nw.x = 7;\nprint(q.x);\nq = make(9);\nprint(q.x);\nprint(sum(make(5)));\nBox b = wrap(make(2), 3);\nprint(b.a.x);\nprint(b.tag);\nfn Point later();\nPoint l = later();\nprint(l.x);\nfn Point later() { Point p = { x = 11; }; return p; }' $'4\n1.500000\n4\n9\n50\n2\n3\n11'
-expect_compile_error "struct-return-owning-field" $'struct In { string s = "x"; }\nstruct S { In i; int n = 0; }\nfn S f() { S v; return v; }' "структуру 'S' пока нельзя вернуть из функции: поле 'i.s' — строка"
+expect_program_output "struct-return-string-field" $'struct In { string s = "x"; }\nstruct S { In i; string name; }\nfn S make(int n) { S v = { name = str(n); i = { s = "in"; }; }; return v; }\nfn S keep(S v) { return v; }\nS a = make(42);\nS b = move(a);\nprint(b.name);\na = keep(make(7));\nprint(a.name);\nprint(a.i.s);\nS c = keep(b);\nprint(len(c.name));' $'42\n7\nin\n2'
+expect_compile_error "struct-use-after-move" $'struct P { string n = ""; }\nP a;\nP b = move(a);\nprint(a.n);' "'a' используется после move"
+expect_compile_error "struct-move-in-loop" $'struct P { string n = ""; }\nfn void f() { P a; for i in 0..2 { P b = move(a); } }' "move 'a' внутри цикла или функции"
 expect_compile_error "struct-return-wrong-type" $'struct P { int a = 1; }\nfn P f() { return 1; }' "функция должна вернуть 'P', получено 'int/i32'"
 expect_compile_error "struct-init-wrong-type" $'struct P { int a = 1; }\nstruct Q { int a = 1; }\nfn Q f() { Q q; return q; }\nP p = f();' "переменная 'p' имеет тип 'P', но инициализируется значением типа 'Q'"
 expect_compile_error "struct-result-into-int" $'struct P { int a = 1; }\nfn P f() { P p; return p; }\nint z = f();' "переменная 'z' имеет тип 'int/i32', но инициализируется значением типа 'P'"

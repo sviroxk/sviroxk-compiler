@@ -159,7 +159,9 @@ bool CodeGen::isFreshString(const Node& expr) const {
     if (expr.type == NODE_FILE_READ) return true;
     if (expr.type == NODE_INPUT) return sc::Type::from(expr.varType).isStr();
     if (expr.type != NODE_FUNC_CALL) return false;
-    if (expr.varName == "str" || expr.varName == "replace" || expr.varName == "move") return true;
+    if (expr.varName == "move")  // move(структура) — не строка (freshStruct)
+        return expr.args.size() == 1 && !structTypesByVariable.contains(expr.args[0].value);
+    if (expr.varName == "str" || expr.varName == "replace") return true;
     const auto result = funcReturnTypes.find(expr.varName);
     return funcs.contains(expr.varName) && result != funcReturnTypes.end() &&
            sc::Type::from(result->second).isStr();
@@ -275,20 +277,48 @@ bool CodeGen::storeOwnedField(const Node& assign, llvm::Value* address, llvm::Ty
         return true;
     }
     if (type.isStruct() && fieldType->isStructTy() && structOwnsMemory(type.structName)) {
-        replaceStruct(address, type.structName, genExpr(*assign.left));
+        replaceStruct(address, type.structName, genExpr(*assign.left), *assign.left);
         return true;
     }
     return false;
 }
 
+// Новая структура со строками, которой ещё никто не владеет: результат функции или
+// move(имя). Возвращает имя структуры, пусто — не такая.
+std::string CodeGen::freshStruct(const Node& expr) const {
+    if (expr.type != NODE_FUNC_CALL) return "";
+    std::string structName;
+    if (expr.varName == "move" && expr.args.size() == 1) {
+        auto variable = structTypesByVariable.find(expr.args[0].value);
+        if (expr.args[0].type == NODE_IDENTIFIER && variable != structTypesByVariable.end())
+            structName = variable->second;
+    } else if (auto result = funcReturnTypes.find(expr.varName);
+               funcs.contains(expr.varName) && result != funcReturnTypes.end()) {
+        structName = result->second;
+    }
+    return !structName.empty() && structOwnsMemory(structName) ? structName : "";
+}
+
+// Значение-структура для нового места: свежую забрать (без копии), чужую — скопировать (D-016).
+llvm::Value* CodeGen::takeStruct(const Node& expr, llvm::Value* value, const std::string& structName) {
+    if (!structOwnsMemory(structName)) return value;
+    if (!freshStruct(expr).empty()) {
+        consumeTemporary(expr);
+        return value;
+    }
+    llvm::AllocaInst* copy = entryAlloca(value->getType(), "sc.struct.copy");
+    builder.CreateStore(value, copy);
+    copyStructStrings(copy, structName);
+    return builder.CreateLoad(value->getType(), copy);
+}
+
 // x = y / x.inner = y для структуры со строками: сначала копия нового значения, затем
 // освобождение старого (x = x тоже верно).
-void CodeGen::replaceStruct(llvm::Value* address, const std::string& structName, llvm::Value* value) {
-    llvm::AllocaInst* fresh = entryAlloca(value->getType(), "sc.struct.copy");
-    builder.CreateStore(value, fresh);
-    copyStructStrings(fresh, structName);
+void CodeGen::replaceStruct(llvm::Value* address, const std::string& structName, llvm::Value* value,
+                            const Node& source) {
+    value = takeStruct(source, value, structName);
     dropStruct(address, structName);
-    builder.CreateStore(builder.CreateLoad(value->getType(), fresh), address);
+    builder.CreateStore(value, address);
 }
 
 // Временная строка (результат str()/replace/ввода/функции, не положенный в
@@ -297,10 +327,10 @@ void CodeGen::replaceStruct(llvm::Value* address, const std::string& structName,
 void CodeGen::registerTemporary(const Node& expr, llvm::Value* value) {
     llvm::BasicBlock& entry = builder.GetInsertBlock()->getParent()->getEntryBlock();
     llvm::IRBuilder<> at(&entry, entry.getFirstInsertionPt());
-    llvm::AllocaInst* slot = at.CreateAlloca(builder.getPtrTy(), nullptr, "sc.tmp.str");
-    at.CreateStore(llvm::ConstantPointerNull::get(builder.getPtrTy()), slot);
+    llvm::AllocaInst* slot = at.CreateAlloca(value->getType(), nullptr, "sc.tmp");
+    at.CreateStore(llvm::Constant::getNullValue(value->getType()), slot);  // путь без значения: free(NULL)
     builder.CreateStore(value, slot);
-    deferred_.push_back({nullptr, {}, slot, &expr});
+    deferred_.push_back({nullptr, {}, slot, &expr, freshStruct(expr)});
 }
 
 // Значение забрала переменная, поле или return: временной строкой оно больше не считается.
@@ -317,7 +347,9 @@ void CodeGen::releaseTemporaries(size_t mark) {
     const bool reachable = !blockHasTerminator(builder.GetInsertBlock());
     for (size_t i = deferred_.size(); i > mark; --i) {
         if (!deferred_[i - 1].temporary) continue;
-        if (reachable) {
+        if (reachable && !deferred_[i - 1].structName.empty()) {
+            dropStruct(deferred_[i - 1].freeSlot, deferred_[i - 1].structName);
+        } else if (reachable) {
             llvm::Value* slot = deferred_[i - 1].freeSlot;
             builder.CreateCall(runtimeFunction("free"), {builder.CreateLoad(builder.getPtrTy(), slot)});
             builder.CreateStore(llvm::ConstantPointerNull::get(builder.getPtrTy()), slot);
@@ -799,9 +831,8 @@ void CodeGen::initStructLiteral(llvm::Value* storage, llvm::StructType* aggregat
             llvm::Value* value = stableString(*initializer, genExpr(*initializer));
             checkNarrowStore(value, *initializer, fieldType, unsignedTypeName(field.type), *initializer);
             value = castTo(value, fieldType, isUnsignedExpr(*initializer));
+            if (fieldType->isStructTy()) value = takeStruct(*initializer, value, field.type);  // { inner = q }
             builder.CreateStore(value, address);
-            if (fieldType->isStructTy() && structOwnsMemory(field.type))  // { inner = q } — копия q
-                copyStructStrings(address, field.type);
         }
     }
 }
@@ -817,7 +848,7 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
         return genBinary(node, left);
     }
     llvm::Value* value = genOtherExpr(node);
-    if (isFreshString(node)) registerTemporary(node, value);  // D-014
+    if (isFreshString(node) || !freshStruct(node).empty()) registerTemporary(node, value);  // D-014, D-016
     return value;
 }
 
@@ -1580,10 +1611,12 @@ llvm::Value* CodeGen::genCallExpr(const Node& node) {
         }
         if (name == "data" || name == "as_ptr")  // D-014: адрес символов строки
             return genExpr(node.args[0]);
-        if (name == "move") {  // D-015: забрать строку, в старом слоте — NULL (free(NULL) пуст)
+        if (name == "move") {  // D-015/D-016: забрать строку или структуру, в старом слоте — нули
             llvm::Value* slot = vars[node.args[0].value];
-            llvm::Value* value = builder.CreateLoad(builder.getPtrTy(), slot);
-            builder.CreateStore(llvm::ConstantPointerNull::get(builder.getPtrTy()), slot);
+            llvm::Type* type = storageType(slot);
+            if (!type->isStructTy()) type = builder.getPtrTy();
+            llvm::Value* value = builder.CreateLoad(type, slot);
+            builder.CreateStore(llvm::Constant::getNullValue(type), slot);
             return value;
         }
         if (name == "len") {
@@ -1752,7 +1785,7 @@ void CodeGen::genNode(const Node& node) {
             }
             if (auto structName = structTypesByVariable.find(node.varName);
                 structName != structTypesByVariable.end() && structOwnsMemory(structName->second)) {
-                replaceStruct(alloca, structName->second, val);  // w = q — копия, старые строки w освобождаются
+                replaceStruct(alloca, structName->second, val, *node.left);  // w = q — копия, w = f() — без копии
                 return;
             }
             checkNarrowStore(val, *node.left, ty, unsignedVars[node.varName], node);
@@ -1878,6 +1911,15 @@ void CodeGen::genNode(const Node& node) {
                 const auto returnType = funcReturnTypes.find(name.drop_front(6).str());
                 if (returnType != funcReturnTypes.end() && sc::Type::from(returnType->second).isStr())
                     v = ownString(*node.left, v);
+                else if (returnType != funcReturnTypes.end() && structOwnsMemory(returnType->second)) {
+                    // return p (локальная или параметр) — отдать без копии: слот обнуляется, конец
+                    // функции его не освобождает; глобальная, поле — копия; f()/move — забрать.
+                    llvm::Value* slot = node.left->type == NODE_IDENTIFIER ? vars[node.left->value] : nullptr;
+                    if (slot && llvm::isa<llvm::AllocaInst>(slot))
+                        builder.CreateStore(llvm::Constant::getNullValue(v->getType()), slot);
+                    else
+                        v = takeStruct(*node.left, v, returnType->second);
+                }
             }
             emitDeferred(0);
             builder.CreateRet(v);
@@ -2069,8 +2111,7 @@ void CodeGen::genNode(const Node& node) {
             llvm::Value* value = genExpr(*node.left);
             vars[node.varName] = object;
             structTypesByVariable[node.varName] = node.varType;
-            builder.CreateStore(value, object);
-            if (structOwnsMemory(node.varType)) copyStructStrings(object, node.varType);  // P w = q — копия
+            builder.CreateStore(takeStruct(*node.left, value, node.varType), object);  // P w = q — копия
             ownStructSlot(object, node.varType);
             return;
         }
@@ -2140,7 +2181,8 @@ void CodeGen::genNode(const Node& node) {
                 argVals.push_back(v);
             }
             llvm::Value* result = builder.CreateCall(funcs[node.varName], argVals);
-            if (isFreshString(node)) registerTemporary(node, result);  // f(); с результатом string
+            if (isFreshString(node) || !freshStruct(node).empty())
+                registerTemporary(node, result);  // f(); с результатом string или структурой со строками
         } else {
             genExpr(node);
         }

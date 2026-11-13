@@ -54,7 +54,10 @@ class CodeGen {
     void copyStructStrings(llvm::Value* address, const std::string& structName);
     void ownStructSlot(llvm::Value* slot, const std::string& structName);
     bool storeOwnedField(const Node& assign, llvm::Value* address, llvm::Type* fieldType);
-    void replaceStruct(llvm::Value* address, const std::string& structName, llvm::Value* value);
+    std::string freshStruct(const Node& expr) const;
+    llvm::Value* takeStruct(const Node& expr, llvm::Value* value, const std::string& structName);
+    void replaceStruct(llvm::Value* address, const std::string& structName, llvm::Value* value,
+                       const Node& source);
     void registerTemporary(const Node& expr, llvm::Value* value);
     void consumeTemporary(const Node& expr);
     void releaseTemporaries(size_t mark);
