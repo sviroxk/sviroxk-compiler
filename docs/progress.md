@@ -365,3 +365,9 @@
 - Вне задачи, найдено и исправлено попутно (нужно для теста неверного типа поля): `s.name = 5;` для string-поля проходил проверку типов (литерал получал тип поля) и падал при выполнении (segfault на main); теперь «поле ожидает тип 'str', получен 'int/i32'».
 - Возврат структуры со строкой из функции пока ошибка (следующий шаг).
 - Тесты: `tests/memory-safety.sh` `struct-string-fields-release` (LeakSanitizer + ASan: копии, вложенные поля, параметр, цикл с `break`/`continue`, ранний `return`, глобальные); `test.sh` `struct-string-field-copy`, `struct-ptr-field-copy`, `struct-copy-ptr-field` (бывший отрицательный пример `p0_struct_copy_ownership.svx`), `struct-string-field-wrong-type`; удалены отрицательные `struct-copy-nested-owning`, `struct-init-copy-owning`, `struct-copy-ownership` (правило изменено владельцем).
+
+## 2026-11-13 — структуры, шаг 3 (1.2, D-016): возврат и move структуры
+- `fn Person make(…)` возвращает структуру со строками (в том числе во вложенных структурах): `return p;` для локальной переменной отдаёт её без копии и без освобождения, глобальная структура и поле (`return p.tag;`) — копией. Раньше — ошибка «пока нельзя вернуть из функции».
+- `Person b = move(a);`, `move(a)` в аргументе и в `return` — перенос структуры целиком; после него `a` нельзя использовать до нового присваивания, `move` внутри цикла переменной снаружи — ошибка (те же проверки, что для строк, D-015). `Point q = move(p);` для скалярной структуры тоже разрешён.
+- Результат функции-структуры, не положенный в переменную (`size(make(5))`, `make(3);`, `c.tag = tagOf(a);`), освобождается в конце оператора.
+- Тесты: `tests/memory-safety.sh` `struct-return-move-release` (LeakSanitizer + ASan: возврат из ветки, параметр, глобальная, временные, цикл с `continue`, move); `test.sh` `struct-return-string-field`, `struct-use-after-move`, `struct-move-in-loop`; удалён отрицательный `struct-return-owning-field` (правило снято).

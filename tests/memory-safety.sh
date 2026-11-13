@@ -218,6 +218,49 @@ fn void run() {
 }
 run();
 SC
+check_case struct-return-move-release clean $'12\n12\n7\n13\n12\n2\n5\nm\n99\nDan\n5\n0\n2\n0' 1 <<'SC'
+struct Tag { string label = "t"; }
+struct Person { string name; int age = 0; Tag tag; }
+struct Pt { int x = 0; }
+fn Person make(int n) { Person p = { name = str(n); age = n; tag = { label = "m"; }; }; return p; }
+fn Person pass(Person p) { p.age += 1; return p; }
+fn Person pick(int k) { Person a = make(1); Person b = make(2); if (k > 0) { return b; } return a; }
+fn Tag tagOf(Person p) { return p.tag; }
+fn int size(Person p) { return len(p.name); }
+fn Person rename(Person p, string n) { p.name = n; return move(p); }
+Person g = make(5);
+fn Person global() { return g; }
+fn void run() {
+    Person a = make(12);
+    print(a.name);
+    Person b = move(a);
+    print(b.name);
+    a = make(7);
+    print(a.name);
+    Person c = pass(b);
+    print(c.age);
+    print(b.age);
+    Person k = pick(1);
+    print(k.age);
+    print(size(make(12345)));
+    make(3);
+    Tag tg = tagOf(c);
+    print(tg.label);
+    c = make(99);
+    c.tag = tagOf(a);
+    print(c.name);
+    Person d = rename(move(c), "Dan");
+    print(d.name);
+    Person e = global();
+    e.name = "changed";
+    print(g.name);
+    for i in 0..3 { Person t = make(i); if (i == 1) { continue; } print(t.name); }
+    Pt p;
+    Pt q = move(p);
+    print(q.x);
+}
+run();
+SC
 check_case dynamic-grow-release clean $'5\n10\n50\n4' 1 <<'SC'
 ptr values = new int[0];
 values.push(10); values.push(20); values.push(30);
@@ -277,4 +320,4 @@ ptr chars = data(text);
 print(chars[4]);
 SC
 
-echo 'PASS: memory safety suite (12 clean, 3 controlled runtime errors, 3 ASan detector self-tests)'
+echo 'PASS: memory safety suite (13 clean, 3 controlled runtime errors, 3 ASan detector self-tests)'

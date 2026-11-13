@@ -1082,7 +1082,8 @@ private:
                 argumentTypes.push_back(type);
                 const bool expectsString = node.varName == "len" || node.varName == "replace" ||
                     isStringAddress(node) || node.varName == "move";
-                if (expectsString && type != "str" && type != "<error>")
+                if (node.varName == "move" && structs_.contains(type)) {}  // D-016: перенос структуры
+                else if (expectsString && type != "str" && type != "<error>")
                     error(arg, "аргумент " + std::to_string(index + 1) + " функции '" +
                           node.varName + "' должен иметь тип str");
                 else if (!expectsString && node.varName != "str" &&
@@ -1108,9 +1109,10 @@ private:
                 const Node& source = node.args[0];
                 size_t index = 0;
                 Symbol* moved = source.type == NODE_IDENTIFIER ? lookupMutable(source.value, &index) : nullptr;
-                if (argumentTypes[0] != "str") {}  // ошибка типа уже выдана
+                const bool movesStruct = structs_.contains(argumentTypes[0]);
+                if (argumentTypes[0] != "str" && !movesStruct) {}  // ошибка типа уже выдана
                 else if (!moved)
-                    error(source, "move(…) переносит строку из переменной: пишите move(имя)");
+                    error(source, "move(…) переносит строку или структуру из переменной: пишите move(имя)");
                 else if (index < dropBarrier_)
                     error(node, "move '" + source.value + "' внутри цикла или функции, а объявлена она "
                           "снаружи: перенос выполнился бы несколько раз");
@@ -1118,7 +1120,7 @@ private:
                     moved->droppedLine = node.line;
                     moved->releasedBy = "move";
                 }
-                return "str";
+                return movesStruct ? argumentTypes[0] : "str";
             }
             if (isStringAddress(node)) {  // D-014: адрес строки — только явно
                 const Node& source = node.args[0];
@@ -1306,9 +1308,6 @@ private:
         if (const sc::Type result = sc::Type::from(normalize(node.varType)); result.isStruct()) {
             if (!structs_.contains(result.structName))
                 error(node, "неизвестный тип результата '" + node.varType + "'");
-            else if (const std::string field = owningField(result.structName); !field.empty())
-                error(node, "структуру '" + result.structName + "' пока нельзя вернуть из функции: поле '" +
-                      field + "' — строка (возврат структуры со строкой — следующий шаг задачи 1.2)");
         }
         for (const std::string& param : node.params) {
             size_t separator = param.find(':');
