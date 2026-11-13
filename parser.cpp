@@ -897,6 +897,10 @@ std::vector<Node> parseBlock() {
 // Sets node.type to NODE_ARRAY_DECL for array form, NODE_VAR_DECL otherwise.
 void parseDeclBody(Node& node, bool isArray) {
     expect(EQUALS);
+    if (isArray && peek().type != LBRACKET) {  // int[] b = a / move(a) / f() / new int[n] (D-018)
+        node.varType = "dyn<" + node.varType + ">";
+        isArray = false;
+    }
     if (isArray) {
         node.type = NODE_ARRAY_DECL;
         expect(LBRACKET);
@@ -1072,6 +1076,10 @@ Node parseOne() {
             if (!isTypeName(returnType.value) && returnType.type != IDENTIFIER)
                 failAt(returnType, "неизвестный тип результата '" + returnType.value + "'");
             node.varType = canonicalType(returnType.value);
+        } else if (isTypeToken(peek().type) && peek(1).type == LBRACKET && peek(2).type == RBRACKET &&
+                   peek(4).type == LPAREN) {  // fn int[] make(…): растущий массив (D-018)
+            node.varType = "dyn<" + canonicalType(consume().value) + ">";
+            consume(); consume();
         }
         Token functionName = peek();
         if (!isNameToken(functionName.type)) {
@@ -1093,6 +1101,10 @@ Node parseOne() {
             if (typeToken.type != TIP && !structType && !isTypeName(typeToken.value))
                 failAt(typeToken, "неизвестный тип параметра '" + typeToken.value + "'");
             std::string ptype = declaredType(typeToken);
+            if (peek().type == LBRACKET && peek(1).type == RBRACKET) {  // int[] v — растущий массив (D-018)
+                consume(); consume();
+                ptype = "dyn<" + ptype + ">";
+            }
             Token parameterName = peek();
             if (!isNameToken(parameterName.type))
                 failAt(parameterName, "ожидалось имя параметра");

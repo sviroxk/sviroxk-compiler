@@ -183,6 +183,10 @@ private:
 
     static std::string typeName(const std::string& type) {
         const std::string n = normalize(type);
+        if (n.starts_with("dyn<")) {  // растущий массив: int[] (1.3)
+            const std::string element = typeName(n.substr(4, n.size() - 5));
+            return element.substr(0, element.find('/')) + "[]";
+        }
         if (n == "i32") return "int/i32";
         if (n == "u32") return "uint/u32";
         if (n == "i16") return "short/i16";
@@ -339,6 +343,61 @@ private:
         symbol.isInitialized = true;
         fieldArrays_.push_back(std::move(symbol));
         return &fieldArrays_.back();
+    }
+
+    // 1.3 (D-018): значение растущего массива для параметра, переменной, присваивания и
+    // return — имя массива (копия), обычный массив (копия), move(имя) (перенос), результат
+    // функции `fn int[] f()`. Тип элемента; пусто — не растущий массив (выражение не проверено).
+    std::string arrayValue(const Node& expr) {
+        if (expr.type == NODE_IDENTIFIER) {
+            const Symbol* symbol = lookup(expr.value);
+            if (!symbol || (!symbol->isDynArray && !symbol->ty.isArray())) return "";
+            expression(expr);
+            return symbol->isDynArray ? normalize(symbol->dynArrayElementType) : symbol->ty.element->toString();
+        }
+        if (expr.type != NODE_FUNC_CALL) return "";
+        if (expr.varName == "move" && expr.args.size() == 1 && expr.args[0].type == NODE_IDENTIFIER) {
+            size_t index = 0;
+            Symbol* moved = lookupMutable(expr.args[0].value, &index);
+            if (!moved || !moved->isDynArray) return "";
+            expression(expr.args[0]);
+            if (index < dropBarrier_)
+                error(expr, "move '" + expr.args[0].value + "' внутри цикла или функции, а объявлена она "
+                      "снаружи: перенос выполнился бы несколько раз");
+            else if (!moved->droppedLine) {
+                moved->droppedLine = expr.line;
+                moved->releasedBy = "move";
+            }
+            return normalize(moved->dynArrayElementType);
+        }
+        const auto function = functions_.find(expr.varName);
+        if (function == functions_.end() || !function->second.returnTy.isDynArray()) return "";
+        expression(expr);
+        return function->second.returnTy.element->toString();
+    }
+
+    bool isArrayResult(const Node& expr) const {
+        if (expr.type != NODE_FUNC_CALL) return false;
+        if (expr.varName == "move" && expr.args.size() == 1 && expr.args[0].type == NODE_IDENTIFIER) {
+            const Symbol* moved = lookup(expr.args[0].value);
+            return moved && moved->isDynArray;
+        }
+        const auto function = functions_.find(expr.varName);
+        return function != functions_.end() && function->second.returnTy.isDynArray();
+    }
+
+    // Проверка значения для места типа `T[]`: пусто — ошибок нет, иначе текст (без места).
+    std::string checkArrayValue(const Node& expr, const std::string& element) {
+        const std::string actual = arrayValue(expr);
+        if (actual.empty()) {
+            const std::string type = expression(expr);
+            if (type == "<error>") return "";
+            return "ожидался массив '" + typeName("dyn<" + element + ">") + "', получен '" + typeName(type) + "'";
+        }
+        if (normalize(actual) != normalize(element))
+            return "ожидался массив '" + typeName("dyn<" + element + ">") + "', получен массив '" +
+                   typeName("dyn<" + actual + ">") + "'";
+        return "";
     }
 
     void droppedFieldError(const Node& node, const std::string& name, const Symbol& root,
@@ -1300,11 +1359,20 @@ private:
         }
         size_t count = std::min(node.args.size(), function->second.parameters.size());
         for (size_t i = 0; i < node.args.size(); ++i) {
+            if (const sc::Type parameter = sc::Type::from(i < count ? function->second.parameters[i] : "");
+                parameter.isDynArray()) {  // fn f(int[] v): копия, move — перенос (D-018)
+                if (const std::string problem = checkArrayValue(node.args[i], parameter.element->toString());
+                    !problem.empty())
+                    error(node.args[i], "аргумент " + std::to_string(i + 1) + " функции '" + node.varName +
+                          "': " + problem);
+                continue;
+            }
             if (node.args[i].type == NODE_IDENTIFIER) {
                 const Symbol* argument = lookup(node.args[i].value);
                 if (argument && argument->isDynArray) {
                     error(node.args[i], "динамический массив '" + node.args[i].value +
-                          "' пока нельзя передать в функцию (параметр ptr не знает длину массива)");
+                          "' нельзя передать в параметр ptr (он не знает длину массива): объявите параметр "
+                          "как массив, например 'int[] v'");
                     continue;
                 }
             }
@@ -1415,7 +1483,10 @@ private:
         functionScope_ = scopes_.size();
         scopes_.emplace_back();
         returnTypes_.push_back(normalize(node.varType));
-        if (const sc::Type result = sc::Type::from(normalize(node.varType)); result.isStruct()) {
+        if (const sc::Type result = sc::Type::from(normalize(node.varType)); result.isDynArray() &&
+            !knownType(node.varType)) {
+            error(node, "неизвестный тип результата '" + node.varType + "'");
+        } else if (result.isStruct()) {
             if (!structs_.contains(result.structName))
                 error(node, "неизвестный тип результата '" + node.varType + "'");
         }
@@ -1424,7 +1495,10 @@ private:
             std::string type = param.substr(0, separator);
             std::string name = separator == std::string::npos ? "" : param.substr(separator + 1);
             if (!knownType(type)) error(node, "неизвестный тип параметра '" + type + "'");
-            declare(name, type, node, false, true);
+            if (const sc::Type t = ty(type); t.isDynArray())  // int[] v — своя копия массива (D-018)
+                declare(name, "ptr", node, false, true, true, t.element ? t.element->toString() : "i32");
+            else
+                declare(name, type, node, false, true);
         }
         checkStatements(node.children);
         if (normalize(node.varType) != "void" && !alwaysReturns(node.children))
@@ -1437,6 +1511,26 @@ private:
     void checkNode(const Node& node) {
         switch (node.type) {
         case NODE_VAR_DECL: {
+            // int[] b = a (копия), = move(a), = f(), = new int[n]; ptr b = f() / move(a) (D-018)
+            if (const sc::Type declared = ty(node.varType); (declared.isDynArray() && knownType(node.varType)) ||
+                (declared.isPtr() && isArrayResult(*node.left))) {
+                std::string element = declared.isDynArray() ? declared.element->toString() : arrayValue(*node.left);
+                int capacity = 0;
+                if (!declared.isDynArray()) {}
+                else if (node.left->type == NODE_DYN_ARRAY) {
+                    expression(*node.left);
+                    if (normalize(node.left->varType) != element)
+                        error(node, "переменная '" + node.varName + "': ожидался массив '" + typeName(node.varType) +
+                              "', получен массив '" + typeName("dyn<" + node.left->varType + ">") + "'");
+                    if (const auto n = node.left->left && node.left->left->type == NODE_NUMBER
+                        ? constantInteger(*node.left->left) : std::nullopt; n && *n >= 0 && *n <= INT32_MAX)
+                        capacity = static_cast<int>(*n);
+                } else if (const std::string problem = checkArrayValue(*node.left, element); !problem.empty())
+                    error(node, "переменная '" + node.varName + "': " + problem);
+                declare(node.varName, "ptr", node, node.isConst, true, true, element);
+                if (scopes_.back().contains(node.varName)) scopes_.back()[node.varName].dynArrayCapacity = capacity;
+                break;
+            }
             const bool inferType = node.varType.empty();
             if (!inferType && !knownType(node.varType)) error(node, "неизвестный тип переменной '" + node.varType + "'");
             const std::string declaredType = normalize(node.varType);
@@ -1598,6 +1692,16 @@ private:
             if (!symbol) {
                 error(node, "присваивание неизвестному имени '" + node.varName + "'");
                 expression(*node.left);
+                break;
+            }
+            const Symbol* sourceArray = node.left->type == NODE_IDENTIFIER ? lookup(node.left->value) : nullptr;
+            if (symbol->isDynArray && !symbol->isConst && (isArrayResult(*node.left) ||
+                (sourceArray && (sourceArray->isDynArray || sourceArray->ty.isArray())))) {  // v = a: копия (D-018)
+                if (const std::string problem = checkArrayValue(*node.left, symbol->dynArrayElementType);
+                    !problem.empty())
+                    error(node, "'" + node.varName + "': " + problem);
+                if (released && std::string_view(released->releasedBy) == "move")
+                    released->droppedLine = 0;  // v = f(move(v)): после присваивания имя снова пригодно
                 break;
             }
             if (symbol && symbol->isConst) {
@@ -1817,6 +1921,12 @@ private:
                 error(node, "функция с результатом должна вернуть значение");
                 break;
             }
+            if (const sc::Type result = ty(returnTypes_.back()); result.isDynArray()) {  // fn int[] f() (D-018)
+                if (const std::string problem = checkArrayValue(*node.left, result.element->toString());
+                    !problem.empty())
+                    error(node, "return: " + problem);
+                break;
+            }
             // D-007 / аудит 07f: адрес локальной переменной после return висит.
             if (node.left->type == NODE_ADDR && isFunctionLocal(node.left->varName))
                 error(node, "возврат адреса локальной переменной '" + node.left->varName +
@@ -1827,7 +1937,7 @@ private:
                     error(node, "возврат '" + node.left->value +
                           "' — адреса локальной переменной: после выхода из функции она перестаёт существовать");
                 if (returned && returned->isDynArray) {
-                    error(node, "возврат динамического массива из функции пока не поддержан");
+                    error(node, "возврат массива: объявите результат функции массивом, например 'fn int[] имя(…)'");
                     break;
                 }
             }

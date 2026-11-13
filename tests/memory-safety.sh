@@ -370,6 +370,25 @@ check_case dynamic-new-reassign clean $'3\n0' 1 <<'SC'
 fn void g() { ptr v = new int[2]; v[0] = 4; v = new int[3]; print(v.len()); print(v[0]); }
 g();
 SC
+# D-018: копия в параметр, move, возврат без копии, временный результат, b = a — без утечек.
+check_case array-function-release clean $'3\n2\n18\n4\n30\n0\n99\n1\n5\n7\n1\n50' 1 <<'SC'
+fn i64 sum(int[] v) { i64 s = 0; for i in 0..v.len() { s += v[i]; } v.push(100); return s; }
+fn int[] make(int n) { int[] r = new int[0]; for i in 0..n { r.push(i * 10); } if (n > 100) { return r; } return r; }
+fn int[] pass(int[] v) { v.push(7); return v; }
+ptr a = new int[0]; a.push(1); a.push(2);
+print(sum(a)); print(a.len());
+int[] st = [5, 6, 7]; print(sum(st));
+int[] m = make(4); print(m.len());
+print(sum(make(3)));
+make(2);
+int[] c = m; c[0] = 99; print(m[0]); print(c[0]);
+int[] d = move(c);
+c = make(1); print(c.len());
+d = m;
+int[] f = pass(move(m)); print(f.len()); print(f[4]);
+fn int[] glob() { return a; }
+int[] g = glob(); g[0] = 50; print(a[0]); print(g[0]);
+SC
 check_case dynamic-grow-release clean $'5\n10\n50\n4' 1 <<'SC'
 ptr values = new int[0];
 values.push(10); values.push(20); values.push(30);
