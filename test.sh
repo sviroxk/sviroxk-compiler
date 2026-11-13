@@ -749,7 +749,7 @@ expect_compile_error() {
         cat "$work/error.log" >&2
         exit 1
     fi
-    if [[ "$name" == missing-semicolon-* ]] &&
+    if [[ "$name" == missing-semicolon-* || "$name" == comparison-chain-* ]] &&
        [[ $(grep -c 'error\[' "$work/error.log") -ne 1 ]]; then
         echo "FAIL: '$name' reported a false second error" >&2
         cat "$work/error.log" >&2
@@ -1013,6 +1013,12 @@ expect_compile_error "missing-semicolon-next-line" $'int x = 0\nprint(x);' ":1:1
 expect_compile_error "missing-semicolon-comment-gap" $'print(1)  // нет точки с запятой\n\nint y = 2;' ":1:9: error[syntax]: ожидалась ';' после ')'"
 expect_compile_error "missing-semicolon-eof" 'string s = "ab"' ":1:16: error[syntax]: ожидалась ';' после \"ab\""
 expect_compile_error "missing-semicolon-same-line" 'int x = 1 print(x);' ":1:11: error[syntax]: ожидалась ';', получено 'print'"
+# Цепочка сравнений остаётся ошибкой, но с понятным текстом и без ложной второй ошибки (1.7).
+CHAIN_MSG="сравнения нельзя соединять в цепочку (a < b < c): результат сравнения — bool, а не число; пишите a < b && b < c"
+expect_compile_error "comparison-chain-decl" $'bool b = 1 < 2 < 3;\nprint(b);' ":1:16: error[semantic]: $CHAIN_MSG"
+expect_compile_error "comparison-chain-if" $'int x = 5;\nif (0 < x < 10) { print(x); }' ":2:11: error[semantic]: $CHAIN_MSG"
+expect_compile_error "comparison-chain-equal" 'print(1 == 2 == 3);' ":1:14: error[semantic]: $CHAIN_MSG"
+expect_compile_error "comparison-chain-bad-init-used" $'int q = "a" * 2;\nprint(q + 1);' ":1:13: error[semantic]: арифметический оператор '*' требует числовые операнды"
 expect_compile_error "expect-eof-position" $'int x = 0;\nwhile (x < 3) x += 1;' ":3:1: error[syntax]: ожидалась '}', получено конец файла"
 expect_compile_error "field-default-message-russian" $'struct P { int a = 2.5; }\nP p;' "а ожидается 'int/i32'"
 expect_compile_error "open-without-mode" $'file f = open("open-without-mode.txt");' "open: укажите режим открытия вторым аргументом"
