@@ -167,10 +167,10 @@ private:
     std::vector<std::string> returnTypes_;
     unsigned loopDepth_ = 0;
     size_t functionScope_ = 0; // индекс области параметров текущей функции
-    size_t dropBarrier_ = 0;
+    size_t dropBarrier_ = 0;  // drop можно только для имён из областей с индексом >= этого
     // q = f(move(q)) в цикле (решение владельца 13.11): имя, которому этот оператор тут же
     // присваивает новое значение, переносить можно и из внешней области.
-    const Symbol* reassigned_ = nullptr;  // drop можно только для имён из областей с индексом >= этого
+    const Symbol* reassigned_ = nullptr;
 
     static bool isBuiltinFunction(const std::string& name) {
         static const std::set<std::string> names = {
