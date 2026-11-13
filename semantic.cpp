@@ -36,6 +36,7 @@ struct Symbol {
     int dynArrayCapacity = 0; // allocated capacity
     int droppedLine = 0;      // строка drop/close; дальше имя использовать нельзя
     bool pointsToLocal = false; // ptr p = &x, где x — локальная функции (возвращать нельзя)
+    bool pointsToVariable = false; // ptr p = &x (или копия такого ptr): память не из new, del нельзя
     const char* releasedBy = "drop"; // чем освобождено: "drop" или "close" (для текста ошибки)
     int deferDropLine = 0;    // строка defer drop; освобождение при выходе из области
 };
@@ -200,6 +201,14 @@ private:
     }
 
     // Тип, на который указывает ptr: из `ptr p = &x`, иначе i32 (так читает *p).
+    // ptr = &x или ptr = q, где q сам указывает на переменную: del такого ptr освобождал бы стек.
+    bool pointsToVariable(const Node& value) const {
+        if (value.type == NODE_ADDR) return true;
+        if (value.type != NODE_IDENTIFIER) return false;
+        const Symbol* source = lookup(value.value);
+        return source && source->pointsToVariable;
+    }
+
     static std::string pointeeOf(const Symbol& pointer) {
         return pointer.pointee.empty() ? "i32" : normalize(pointer.pointee);
     }
@@ -1298,6 +1307,8 @@ private:
                     scopes_.back()[node.varName].pointee = target->type;
                 scopes_.back()[node.varName].pointsToLocal = isFunctionLocal(node.left->varName);
             }
+            if (scopes_.back().contains(node.varName))
+                scopes_.back()[node.varName].pointsToVariable = pointsToVariable(*node.left);
             break;
         }
         case NODE_ARRAY_DECL: {
@@ -1425,6 +1436,8 @@ private:
                           "', присвоить ему адрес значения типа '" + typeName(target) +
                           "' нельзя; объявите отдельный указатель: ptr q = &…");
             }
+            if (symbol->ty.isPtr())
+                if (Symbol* target = lookupMutable(node.varName)) target->pointsToVariable = pointsToVariable(*node.left);
             // Check for struct assignment with owning fields (dyn array, ptr, etc.)
             sc::Type destTy = symbol->ty;
             if (destTy.isStruct() && structs_.contains(destTy.structName)) {
@@ -1793,6 +1806,9 @@ private:
                       "' не создан через new (его память освобождается сама)");
             else if (!symbol->isDynArray && !symbol->ty.isPtr())
                 error(node, "освободить можно только динамический массив или ptr");
+            else if (symbol->pointsToVariable)
+                error(node, "освобождать нечего: '" + node.varName +
+                      "' указывает на переменную (&…), а не на память из new");
             else if (index >= dropBarrier_) {  // del внешнего имени внутри цикла/функции — без отметки
                 symbol->droppedLine = node.line;
                 symbol->releasedBy = "del";

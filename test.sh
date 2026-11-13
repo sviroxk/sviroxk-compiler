@@ -1013,6 +1013,10 @@ expect_program_output "user-fn-builtin-name" $'fn int len(str s) { return 100; }
 expect_compile_error "user-fn-builtin-name-message" $'fn int max(int a) { return a; }\nprint(max(1, 2));' "'max'"
 expect_compile_error "delete-static-array" $'int[] a = [1, 2];\ndel a;' ":2:1: error[semantic]: освобождать нечего: массив 'a' не создан через new"
 expect_compile_error "defer-delete-static-array" 'int[] a = [1, 2]; defer del a;' "освобождать нечего: массив 'a' не создан через new"
+expect_compile_error "delete-address-of" $'int x = 5;\nptr p = &x;\ndel p;' ":3:1: error[semantic]: освобождать нечего: 'p' указывает на переменную (&…), а не на память из new"
+expect_compile_error "delete-address-copy" $'int x = 5;\nptr p = &x;\nptr q = p;\ndel q;' "освобождать нечего: 'q' указывает на переменную"
+expect_compile_error "delete-address-assigned" $'int x = 5;\nptr p = new int[1];\ndel p;\np = &x;\ndel p;' "освобождать нечего: 'p' указывает на переменную"
+expect_program_output "delete-after-readdress-new" $'int x = 5;\nptr p = &x;\nprint(*p);\np = new int[1];\np[0] = 9;\nprint(p[0]);\ndel p;' $'5\n9'
 expect_compile_error "use-after-del" $'ptr v = new int[2];\ndel v;\nprint(v[0]);' ":3:7: error[semantic]: 'v' используется после del (строка 2)"
 expect_compile_error "double-del" $'ptr v = new int[2];\ndel v;\ndel v;' ":3:1: error[semantic]: повторный del 'v' (уже освобождено в строке 2)"
 expect_program_output "del-then-reassign" $'ptr v = new int[1];\nv[0] = 1;\ndel v;\nv = new int[1];\nv[0] = 7;\nprint(v[0]);\ndel v;\nint i = 0;\nptr w = new int[1];\nwhile (i < 3) { del w; w = new int[1]; i += 1; }\ndel w;\nprint(i);' $'7\n3'
