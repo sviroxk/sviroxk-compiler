@@ -51,6 +51,7 @@ class CodeGen {
     // D-016: строка в поле принадлежит структуре.
     bool structOwnsMemory(const std::string& structName, int depth = 0) const;
     void dropStruct(llvm::Value* address, const std::string& structName);
+    void bindFieldArray(const Node& node);
     void copyStructStrings(llvm::Value* address, const std::string& structName);
     void ownStructSlot(llvm::Value* slot, const std::string& structName);
     bool storeOwnedField(const Node& assign, llvm::Value* address, llvm::Type* fieldType);

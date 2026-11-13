@@ -24,6 +24,8 @@ static Type normalizeName(std::string_view raw) {
     if (raw == "ptr") return Type::ptrTy();
     if (raw == "void") return Type::voidTy();
     if (raw == "file") return Type::fileTy();
+    if (raw.starts_with("dyn<"))  // поле-массив `int[] a;` в структуре (D-016)
+        return Type::dynArrayTy(Type::from(raw.substr(4, raw.size() - 5)));
     if (raw.starts_with("array<")) {
         return Type::arrayTy(Type::from(raw.substr(6, raw.size() - 7)), 0);
     }

@@ -261,6 +261,82 @@ fn void run() {
 }
 run();
 SC
+check_case struct-array-field-release clean $'13
+7
+3
+109
+3
+3
+30
+30
+0
+9
+4
+42
+2.500000
+0
+2
+7
+10
+7
+5
+1' 1 <<'SC'
+struct Stats { int[] scores; string name; }
+struct Team { Stats s; f64[] codes; }
+fn Stats make(int n) { Stats t = { name = "m"; }; for i in 0..n { t.scores.push(i * 10); } return t; }
+fn int total(Stats t) { int sum = 0; for i in 0..t.scores.len() { sum += t.scores[i]; } t.scores.push(1); return sum; }
+fn void run() {
+    Stats a;
+    a.scores.push(5);
+    a.scores.push(7);
+    a.scores[0] += 1;
+    print(a.scores[0] + a.scores[1]);
+    Stats b = a;
+    b.scores[1] = 100;
+    b.scores.push(3);
+    print(a.scores[1]);
+    print(b.scores.len());
+    print(total(b));
+    print(b.scores.len());
+    Stats c = move(b);
+    print(c.scores.pop());
+    Stats d = make(4);
+    print(d.scores[3]);
+    print(total(make(3)));
+    make(2);
+    d.scores.clear();
+    d.scores.clear();
+    print(d.scores.len());
+    d.scores.push(9);
+    print(d.scores[0]);
+    d.scores.resize(3);
+    print(d.scores.cap());
+    Team t;
+    t.s.scores.push(42);
+    t.codes.push(2.5);
+    Team u = t;
+    u.s.scores[0] = 1;
+    print(t.s.scores[0]);
+    print(u.codes[0]);
+    for i in 0..3 { Stats e = make(i); if (i == 1) { continue; } print(e.scores.len()); }
+    d = a;
+    print(d.scores[1]);
+    drop d.scores;
+    d.scores = [7, 8];
+    print(d.scores[1] + d.scores.len());
+    Stats g = d;
+    print(g.scores[0]);
+    ptr v = new int[3];
+    v.clear();
+    v.push(4);
+    print(v.len() + v[0]);
+    drop v;
+    drop t.s.scores;
+    t.s.scores = [1];
+    print(t.s.scores[0]);
+}
+run();
+SC
 check_case dynamic-grow-release clean $'5\n10\n50\n4' 1 <<'SC'
 ptr values = new int[0];
 values.push(10); values.push(20); values.push(30);
@@ -292,6 +368,13 @@ ptr values = new int[2];
 i64 index = values.len();
 values[index] = 9;
 SC
+check_case struct-array-field-cleared-read runtime 'SC runtime error: array index out of bounds' <<'SC'
+struct S { int[] a; }
+S s;
+s.a.push(1);
+s.a.clear();
+print(s.a[0]);
+SC
 check_case missing-file runtime "SC runtime error: cannot open file 'missing/file.txt'" <<'SC'
 file input = open("missing/file.txt", "r");
 str line = read(input);
@@ -320,4 +403,4 @@ ptr chars = data(text);
 print(chars[4]);
 SC
 
-echo 'PASS: memory safety suite (13 clean, 3 controlled runtime errors, 3 ASan detector self-tests)'
+echo 'PASS: memory safety suite (14 clean, 4 controlled runtime errors, 3 ASan detector self-tests)'

@@ -249,6 +249,33 @@ bool isNameToken(TokenType t) {
     return t == IDENTIFIER || isBuiltinToken(t);
 }
 
+// Длина пути `p.a.b` в токенах от текущего (1 — просто имя).
+size_t namePathLength() {
+    size_t n = 1;
+    while (peek(n).type == DOT && isNameToken(peek(n + 1).type)) n += 2;
+    return n;
+}
+
+// Забрать путь из n токенов и вернуть его текстом "p.a.b".
+std::string consumePath(size_t n) {
+    std::string path = consume().value;
+    for (size_t i = 1; i < n; i += 2) { consume(); path += "." + consume().value; }
+    return path;
+}
+
+Node zeroLiteral(const Token& at) {
+    Node zero;
+    zero.type = NODE_NUMBER;
+    zero.value = "0";
+    setPos(zero, at);
+    return zero;
+}
+
+bool isArrayMethod(const Token& t) {
+    return (t.type == IDENTIFIER || t.type == AR) && (t.value == "push" || t.value == "pop" ||
+           t.value == "resize" || t.value == "len" || t.value == "cap" || t.value == "clear");
+}
+
 bool isCallableBuiltinToken(TokenType t) {
     return t == SQRT || t == ABS || t == POW || t == MAX || t == MIN ||
            t == FLO || t == CEL || t == RON || t == RAN || t == AR ||
@@ -572,7 +599,31 @@ Node parsePrimary() {
                     Token nextField = consume();
                     if (nextField.type != IDENTIFIER && !isBuiltinToken(nextField.type))
                         failAt(nextField, "ожидалось имя поля после '.'");
+                    if (isArrayMethod(nextField) && peek().type == LPAREN) {  // p.scores.len() (D-016)
+                        Node method;
+                        method.varName = t.value + "." + left.op;
+                        setPos(method, nextField);
+                        const std::string& name = nextField.value;
+                        method.type = name == "push" ? NODE_ARRAY_PUSH : name == "pop" ? NODE_ARRAY_POP
+                            : name == "resize" || name == "clear" ? NODE_ARRAY_RESIZE
+                            : name == "len" ? NODE_ARRAY_LEN : NODE_ARRAY_CAP;
+                        expect(LPAREN);
+                        if (name == "push" || name == "resize") method.left = makeNode(parseExpr());
+                        expect(RPAREN);
+                        if (name == "clear") method.left = makeNode(zeroLiteral(nextField));
+                        return method;
+                    }
                     left.op += "." + nextField.value;
+                }
+                if (peek().type == LBRACKET) {  // p.scores[i] — элемент поля-массива
+                    consume();
+                    Node access;
+                    access.type = NODE_ARRAY_ACCESS;
+                    setPos(access, t);
+                    access.varName = t.value + "." + left.op;
+                    access.left = makeNode(parseExpr());
+                    expect(RBRACKET);
+                    return access;
                 }
             }
         } else if (peek().type == LBRACKET) {
@@ -1100,7 +1151,7 @@ Node parseOne() {
         node.line = token.line; node.column = token.column; node.file = token.file;
         if (!isNameToken(peek().type))
             failAt(peek(), "после drop ожидалось имя переменной");
-        node.varName = consume().value;
+        node.varName = consumePath(namePathLength());  // drop p.scores; (D-016)
         expect(SEMICOLON);
         return node;
     }
@@ -1168,6 +1219,21 @@ Node parseOne() {
             node.varName = inst.value;
             node.op = path;
             Token operation = consume();
+            if (operation.type == EQUALS && peek().type == LBRACKET) {  // t.scores = [1, 2] (D-017)
+                Node list;
+                list.type = NODE_ARRAY_DECL;
+                setPos(list, peek());
+                consume();
+                while (peek().type != RBRACKET && peek().type != END) {
+                    list.args.push_back(parseExpr());
+                    if (peek().type == COMMA) consume();
+                    else if (peek().type != RBRACKET) { failAt(peek(), "ожидалась ',' между элементами массива"); break; }
+                }
+                expect(RBRACKET);
+                node.left = makeNode(list);
+                expect(SEMICOLON);
+                return node;
+            }
             Node right = parseExpr();
             if (operation.type != EQUALS) {
                 Node field;
@@ -1183,11 +1249,11 @@ Node parseOne() {
         }
     }
     // arr[0] = 10 — присваивание элемента массива
-    if (isNameToken(peek().type) && peek(1).type == LBRACKET) {
+    if (isNameToken(peek().type) && peek(namePathLength()).type == LBRACKET) {  // и p.scores[i] = v
         Node node; node.type = NODE_ARRAY_ASSIGN;
         node.line = peek().line; node.column = peek().column; node.file = peek().file;
-        Token arrayName = consume();
-        node.varName = arrayName.value;
+        Token arrayName = peek();
+        node.varName = consumePath(namePathLength());
         consume(); // [
         node.left = makeNode(parseExpr());
         expect(RBRACKET);
@@ -1196,7 +1262,7 @@ Node parseOne() {
             Token operation = consume();
             Node element;
             element.type = NODE_ARRAY_ACCESS;
-            element.varName = arrayName.value;
+            element.varName = node.varName;
             element.line = arrayName.line; element.column = arrayName.column; element.file = arrayName.file;
             element.left = makeNode(*node.left);
             node.right = makeNode(compoundValue(operation, element, parseExpr()));
@@ -1242,18 +1308,17 @@ Node parseOne() {
     // Array method calls as statements: arr.push(x), arr.pop(), arr.resize(n), arr.len(), arr.cap()
     if (peek().type == IDENTIFIER && peek(1).type == DOT) {
         Token name = peek();
-        Token field = peek(2);
-        if ((field.type == IDENTIFIER || field.type == AR) &&
-            (field.value == "push" || field.value == "pop" ||
-             field.value == "resize" || field.value == "len" || field.value == "cap")) {
-            consume(); // identifier
+        const size_t length = namePathLength();  // p.scores.push(x) — метод поля-массива (D-016)
+        Token field = peek(length - 1);
+        if (isArrayMethod(field) && (length == 3 || peek(length).type == LPAREN)) {
+            const std::string path = consumePath(length - 2);
             consume(); // DOT
             Token method = consume(); // method name
             Node node;
             node.line = name.line;
             node.column = name.column;
             node.file = name.file;
-            node.varName = name.value;
+            node.varName = path;
             if (method.value == "push") {
                 node.type = NODE_ARRAY_PUSH;
                 expect(LPAREN);
@@ -1276,6 +1341,11 @@ Node parseOne() {
                 node.type = NODE_ARRAY_CAP;
                 expect(LPAREN);
                 expect(RPAREN);
+            } else if (method.value == "clear") {  // v.clear() — resize(0): пустой, как в C++ (D-017)
+                node.type = NODE_ARRAY_RESIZE;
+                expect(LPAREN);
+                expect(RPAREN);
+                node.left = makeNode(zeroLiteral(method));
             }
             expect(SEMICOLON);
             return node;
@@ -1517,6 +1587,12 @@ Node parseOne() {
             if (fieldType.type != TIP && !isTypeName(fieldType.value) && fieldType.type != IDENTIFIER)
                 failAt(fieldType, "неизвестный тип поля '" + fieldType.value + "'");
             field.varType = declaredType(fieldType);
+            if (peek().type == LBRACKET && peek(1).type == RBRACKET) {  // int[] scores; — растущий массив (D-016)
+                consume(); consume();
+                field.varType = "dyn<" + field.varType + ">";
+                if (peek(1).type == EQUALS)
+                    failAt(peek(1), "поле-массив сначала пустое: значение по умолчанию не пишется, заполняйте push");
+            }
             field.varName = consume().value;
             if (peek().type == EQUALS) {
                 consume(); // =

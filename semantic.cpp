@@ -1,4 +1,5 @@
 #include <climits>
+#include <deque>
 #include <unordered_map>
 #include <optional>
 #include <cctype>
@@ -39,7 +40,27 @@ struct Symbol {
     bool pointsToVariable = false; // ptr p = &x (или копия такого ptr): память не из new, del нельзя
     const char* releasedBy = "drop"; // чем освобождено: "drop" или "close" (для текста ошибки)
     int deferDropLine = 0;    // строка defer drop; освобождение при выходе из области
+    std::map<std::string, int> droppedFields; // поле-массив после drop t.scores: путь -> строка (D-017)
 };
+
+// Тип поля по пути "a.b" в структуре (пусто — нет такого поля).
+static std::string fieldTypeAt(const std::map<std::string, const Node*>& structs, std::string structName,
+                               const std::string& path) {
+    size_t pos = 0;
+    for (int depth = 0; depth < 256; ++depth) {
+        auto structure = structs.find(structName);
+        if (structure == structs.end()) return "";
+        const size_t dot = path.find('.', pos);
+        const std::string name = path.substr(pos, dot == std::string::npos ? std::string::npos : dot - pos);
+        const Node* found = nullptr;
+        for (const Node& field : structure->second->children) if (field.varName == name) found = &field;
+        if (!found) return "";
+        if (dot == std::string::npos) return sc::Type::from(found->varType).toString();
+        structName = found->varType;
+        pos = dot + 1;
+    }
+    return "";
+}
 
 struct Function {
     std::string returnType;
@@ -142,6 +163,7 @@ private:
         return text + ")";
     }
     std::map<std::string, const Node*> structs_;
+    mutable std::deque<Symbol> fieldArrays_;  // символы полей-массивов p.scores (D-016)
     std::vector<std::string> returnTypes_;
     unsigned loopDepth_ = 0;
     size_t functionScope_ = 0; // индекс области параметров текущей функции
@@ -205,6 +227,7 @@ private:
     bool knownType(const std::string& raw) const {
         const sc::Type t = sc::Type::from(raw);
         if (!t.isKnown()) return false;
+        if (t.isDynArray()) return t.element && t.element->isScalar();  // поле int[] (D-016)
         return t.isScalar() || t.isStr() || t.isPtr() || t.isVoid() || t.isFile() ||
                (t.isStruct() && structs_.contains(t.structName));
     }
@@ -298,7 +321,39 @@ private:
     }
 
     // Использование имени: ошибка, если значение уже освобождено drop.
+    // p.scores (D-016): поле-массив как символ динамического массива для проверок методов и индекса.
+    const Symbol* fieldArray(const Node& node, const std::string& name, bool checkDropped = true) const {
+        const size_t dot = name.find('.');
+        const Symbol* root = use(node, name.substr(0, dot));
+        if (!root || !root->ty.isStruct()) return nullptr;
+        const sc::Type type = sc::Type::from(fieldTypeAt(structs_, root->ty.structName, name.substr(dot + 1)));
+        if (!type.isDynArray()) return nullptr;
+        if (auto dropped = root->droppedFields.find(name.substr(dot + 1));
+            checkDropped && dropped != root->droppedFields.end())
+            error(node, "'" + name + "' используется после drop (строка " + std::to_string(dropped->second) + ")");
+        Symbol symbol;
+        symbol.type = type.toString();
+        symbol.isDynArray = true;
+        symbol.dynArrayElementType = type.element->toString();
+        symbol.isConst = root->isConst;
+        symbol.isInitialized = true;
+        fieldArrays_.push_back(std::move(symbol));
+        return &fieldArrays_.back();
+    }
+
+    void droppedFieldError(const Node& node, const std::string& name, const Symbol& root,
+                           const std::string& prefix) const {
+        for (const auto& [path, line] : root.droppedFields)
+            if (path.starts_with(prefix)) {
+                error(node, "'" + name + (prefix.empty() ? "" : "." + prefix.substr(0, prefix.size() - 1)) +
+                      "' нельзя копировать, передавать, возвращать или переносить: поле '" + name + "." + path +
+                      "' освобождено drop (строка " + std::to_string(line) + "), сначала присвойте его заново");
+                return;
+            }
+    }
+
     const Symbol* use(const Node& node, const std::string& name) const {
+        if (name.find('.') != std::string::npos) return fieldArray(node, name);
         const Symbol* symbol = lookup(name);
         if (symbol && symbol->droppedLine)
             error(node, "'" + name + "' используется после " + symbol->releasedBy + " (строка " +
@@ -321,6 +376,22 @@ private:
     // close(f) освобождает файл так же, как drop f (D-007): verb — только для текста ошибок.
     Symbol* checkDrop(const Node& node, const std::string& verb = "drop") {
         size_t index = 0;
+        if (const size_t dot = node.varName.find('.'); dot != std::string::npos) {  // drop t.scores (D-017)
+            if (!fieldArray(node, node.varName, false)) {
+                error(node, "drop поля поддерживается только для поля-массива: '" + node.varName + "'");
+                return nullptr;
+            }
+            Symbol* root = lookupMutable(node.varName.substr(0, dot), &index);
+            const std::string path = node.varName.substr(dot + 1);
+            if (auto dropped = root->droppedFields.find(path); dropped != root->droppedFields.end())
+                error(node, "повторный drop '" + node.varName + "' (уже освобождено в строке " +
+                      std::to_string(dropped->second) + ")");
+            else if (index < dropBarrier_)
+                error(node, "drop '" + node.varName + "' внутри цикла или функции, а структура объявлена "
+                      "снаружи: освобождение выполнилось бы несколько раз");
+            else root->droppedFields[path] = node.line;
+            return nullptr;
+        }
         Symbol* symbol = lookupMutable(node.varName, &index);
         if (!symbol) { error(node, "неизвестное имя '" + node.varName + "'"); return nullptr; }
         if (symbol->ty.isStr() && verb == "drop") {  // D-014: строка освобождается сама
@@ -451,6 +522,8 @@ private:
                 return "<error>";
             }
             checkInitialized(node, node.value);
+            if (!symbol->droppedFields.empty())  // D-017: структура со сброшенным полем целиком не уходит
+                droppedFieldError(node, node.value, *symbol, "");
             return symbol->type;
         }
         case NODE_STRUCT_FIELD: {
@@ -461,6 +534,7 @@ private:
             }
             // Definite assignment: object must be initialized before field access
             checkInitialized(node, node.varName);
+            droppedFieldError(node, node.varName, *object, node.op + ".");  // t.inner после drop t.inner.a
             std::string currentStruct = object->ty.structName;
             // Split field path on dots and traverse nested structs
             size_t pos = 0;
@@ -482,7 +556,12 @@ private:
                     return "<error>";
                 }
                 std::string fieldType = normalize(fieldNode->varType);
-                if (dotPos == std::string::npos) return fieldType;
+                if (dotPos == std::string::npos) {
+                    if (ty(fieldType).isDynArray())  // D-016: копия массива — только вместе со структурой
+                        error(node, "поле-массив '" + node.varName + "." + node.op + "' целиком не берётся: "
+                              "пишите " + node.varName + "." + node.op + "[i], .len(), .push(x)");
+                    return fieldType;
+                }
                 currentStruct = fieldType;
                 pos = dotPos + 1;
             }
@@ -1220,7 +1299,10 @@ private:
     void checkStruct(const Node& node) {
         std::set<std::string> fields;
         for (const Node& field : node.children) {
-            if (!knownType(field.varType)) error(field, "неизвестный тип поля '" + field.varType + "'");
+            if (const sc::Type t = ty(field.varType); t.isDynArray() && !knownType(field.varType))
+                error(field, "поле-массив: элементы пока только числа, bool и char, а не '" +
+                      typeName(t.element->toString()) + "'");
+            else if (!knownType(field.varType)) error(field, "неизвестный тип поля '" + field.varType + "'");
             if (!fields.insert(field.varName).second)
                 error(field, "повторное объявление поля '" + field.varName + "'");
             if (field.left) {
@@ -1455,7 +1537,7 @@ private:
                 }
                 // Check for mandatory fields (no default value and not provided)
                 // Only enforce when a struct literal is provided (instance has children)
-                bool hasDefault = field.left != nullptr;
+                bool hasDefault = field.left != nullptr || ty(field.varType).isDynArray();  // int[] — пустой
                 if (!value && !hasDefault && !node.children.empty()) {
                     error(node, "поле '" + field.varName + "' не имеет значения по умолчанию и должно быть инициализировано");
                 }
@@ -1481,6 +1563,7 @@ private:
                                   (std::string_view(released->releasedBy) == "del" ||
                                    std::string_view(released->releasedBy) == "move");
             if (afterDel) released->droppedLine = 0;  // p = new … / s = … после move: имя снова пригодно
+            if (released) released->droppedFields.clear();  // t = q: сброшенные поля снова есть (D-017)
             const Symbol* symbol = afterDel ? released : use(node, node.varName);
             if (!symbol) {
                 error(node, "присваивание неизвестному имени '" + node.varName + "'");
@@ -1555,6 +1638,32 @@ private:
             break;
         }
         case NODE_STRUCT_FIELD_ASSIGN: {
+            if (Symbol* root = lookupMutable(node.varName); root && root->ty.isStruct()) {
+                const sc::Type fieldTy = ty(fieldTypeAt(structs_, root->ty.structName, node.op));
+                if (node.left->type == NODE_ARRAY_DECL) {  // t.scores = [1, 2] (D-017)
+                    if (!fieldTy.isDynArray())
+                        error(node, "список [...] присваивается только полю-массиву");
+                    else if (root->isConst)
+                        error(node, "нельзя изменять поле константной структуры '" + node.varName + "'");
+                    for (const Node& element : node.left->args) {
+                        const std::string value = expression(element);
+                        if (fieldTy.isDynArray() && value != "<error>" &&
+                            !compatible(fieldTy.element->toString(), value) &&
+                            !constantFits(element, fieldTy.element->toString()))
+                            error(element, "элемент массива ожидает тип '" + typeName(fieldTy.element->toString()) + "'");
+                    }
+                    root->droppedFields.erase(node.op);
+                    break;
+                }
+                if (fieldTy.isDynArray()) {
+                    error(node, "полю-массиву '" + node.varName + "." + node.op + "' присваивается только "
+                          "список: " + node.varName + "." + node.op + " = [ ... ];");
+                    expression(*node.left);
+                    break;
+                }
+                std::erase_if(root->droppedFields,  // t.inner = q: сброшенные поля t.inner снова есть
+                              [&](const auto& item) { return item.first.starts_with(node.op + "."); });
+            }
             if (node.op.find('.') != std::string::npos) {
                 const Symbol* root = use(node, node.varName);
                 if (root && root->isConst) {
@@ -1836,7 +1945,9 @@ private:
                 error(node, "defer: переходы управления и объявления пока запрещены");
                 break;
             case NODE_DROP:
-                if (Symbol* symbol = checkDrop(*node.left)) symbol->deferDropLine = node.line;
+                if (node.left->varName.find('.') != std::string::npos)
+                    error(node, "defer drop поля не нужен: массив в поле освобождается вместе со структурой");
+                else if (Symbol* symbol = checkDrop(*node.left)) symbol->deferDropLine = node.line;
                 break;
             case NODE_ASSIGN: case NODE_ARRAY_ASSIGN: case NODE_DEREF_ASSIGN:
             case NODE_STRUCT_FIELD_ASSIGN: case NODE_FUNC_CALL: case NODE_SLOV:
