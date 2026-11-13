@@ -346,3 +346,8 @@
 - Результат `str()`, `replace`, `input_str`, `read`, функции с результатом `string`, не положенный в переменную/поле/`return` (`print(str(1))`, `f(str(1))`, `s == str(5)`, `f();`), освобождается в конце оператора: слот в начале функции (NULL) + запись в `deferred_`; `return`/`break`/`continue` освобождают его вместе с переменными; условие `while` — после каждой проверки; `defer` с временной строкой — тоже.
 - `data(str(1))` / `as_ptr(…)` от временной строки — ошибка компиляции (висячий адрес); аргумент — переменная, параметр или поле.
 - Тесты: `tests/memory-safety.sh` `string-temporaries-release` (LeakSanitizer; на сборке до правки — утечка, код 86), `test.sh` `string-data-of-temporary`.
+
+## 2026-11-13 — строки, шаг 4 (0б, D-015): перенос move(имя)
+- `move(a)` — встроенная функция (решение владельца 13.11: только со скобками): отдаёт строку без копии, в слоте `a` — NULL. После переноса `a` — ошибка «используется после move» (как после `drop`, с объединением веток); `a = …` (и `a = move(a)`) снова делает имя пригодным. Аргумент — имя string-переменной/параметра; `move` внешней переменной в цикле/функции — ошибка; `move a` — синтаксическая ошибка «ожидалась ';'».
+- Тесты: `tests/memory-safety.sh` `string-move-release` (LeakSanitizer), `test.sh` `string-move`, `string-use-after-move`, `string-move-after-branch`, `string-move-without-parens`, `string-move-in-loop`, `string-move-not-name`. До правки `move` — «неизвестная функция 'move'».
+- Задача 0б закрыта (D-014, D-015).

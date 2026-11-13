@@ -150,7 +150,7 @@ private:
     static bool isBuiltinFunction(const std::string& name) {
         static const std::set<std::string> names = {
             "sqrt", "abs", "pow", "max", "min", "floor", "ceil", "round",
-            "rand", "len", "replace", "str", "data", "as_ptr"
+            "rand", "len", "replace", "str", "data", "as_ptr", "move"
         };
         return names.contains(name);
     }
@@ -1049,7 +1049,7 @@ private:
             {"max", {2,2}}, {"min", {2,2}}, {"floor", {1,1}},
             {"ceil", {1,1}}, {"round", {1,1}}, {"rand", {0,0}},
             {"len", {1,1}}, {"replace", {3,3}}, {"str", {1,1}},
-            {"data", {1,1}}, {"as_ptr", {1,1}}
+            {"data", {1,1}}, {"as_ptr", {1,1}}, {"move", {1,1}}
         };
         auto builtin = builtins.find(node.varName);
         if (builtin != builtins.end()) {
@@ -1064,7 +1064,7 @@ private:
                 std::string type = expression(arg);
                 argumentTypes.push_back(type);
                 const bool expectsString = node.varName == "len" || node.varName == "replace" ||
-                    isStringAddress(node);
+                    isStringAddress(node) || node.varName == "move";
                 if (expectsString && type != "str" && type != "<error>")
                     error(arg, "аргумент " + std::to_string(index + 1) + " функции '" +
                           node.varName + "' должен иметь тип str");
@@ -1087,6 +1087,22 @@ private:
                 return "str";
             }
             if (node.varName == "replace") return "str";  // D-014: только строка
+            if (node.varName == "move") {  // D-015: перенос строки, старое имя дальше нельзя
+                const Node& source = node.args[0];
+                size_t index = 0;
+                Symbol* moved = source.type == NODE_IDENTIFIER ? lookupMutable(source.value, &index) : nullptr;
+                if (argumentTypes[0] != "str") {}  // ошибка типа уже выдана
+                else if (!moved)
+                    error(source, "move(…) переносит строку из переменной: пишите move(имя)");
+                else if (index < dropBarrier_)
+                    error(node, "move '" + source.value + "' внутри цикла или функции, а объявлена она "
+                          "снаружи: перенос выполнился бы несколько раз");
+                else if (!moved->droppedLine) {
+                    moved->droppedLine = node.line;
+                    moved->releasedBy = "move";
+                }
+                return "str";
+            }
             if (isStringAddress(node)) {  // D-014: адрес строки — только явно
                 const Node& source = node.args[0];
                 if (source.type != NODE_IDENTIFIER && source.type != NODE_STRUCT_FIELD &&
@@ -1433,8 +1449,9 @@ private:
         case NODE_ASSIGN: {
             Symbol* released = lookupMutable(node.varName);
             const bool afterDel = released && released->droppedLine &&
-                                  std::string_view(released->releasedBy) == "del";
-            if (afterDel) released->droppedLine = 0;  // p = new …: имя снова пригодно
+                                  (std::string_view(released->releasedBy) == "del" ||
+                                   std::string_view(released->releasedBy) == "move");
+            if (afterDel) released->droppedLine = 0;  // p = new … / s = … после move: имя снова пригодно
             const Symbol* symbol = afterDel ? released : use(node, node.varName);
             if (!symbol) {
                 error(node, "присваивание неизвестному имени '" + node.varName + "'");
@@ -1515,6 +1532,10 @@ private:
                       castHint(expected, actual));
             else
                 markInitialized(node.varName);
+            // s = move(s): после присваивания у имени снова есть значение (D-015).
+            if (Symbol* target = lookupMutable(node.varName);
+                target && std::string_view(target->releasedBy) == "move")
+                target->droppedLine = 0;
             break;
         }
         case NODE_STRUCT_FIELD_ASSIGN: {

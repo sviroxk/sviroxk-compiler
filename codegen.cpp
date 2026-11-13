@@ -155,7 +155,7 @@ bool CodeGen::isFreshString(const Node& expr) const {
     if (expr.type == NODE_FILE_READ) return true;
     if (expr.type == NODE_INPUT) return sc::Type::from(expr.varType).isStr();
     if (expr.type != NODE_FUNC_CALL) return false;
-    if (expr.varName == "str" || expr.varName == "replace") return true;
+    if (expr.varName == "str" || expr.varName == "replace" || expr.varName == "move") return true;
     const auto result = funcReturnTypes.find(expr.varName);
     return funcs.contains(expr.varName) && result != funcReturnTypes.end() &&
            sc::Type::from(result->second).isStr();
@@ -1486,6 +1486,12 @@ llvm::Value* CodeGen::genCallExpr(const Node& node) {
         }
         if (name == "data" || name == "as_ptr")  // D-014: адрес символов строки
             return genExpr(node.args[0]);
+        if (name == "move") {  // D-015: забрать строку, в старом слоте — NULL (free(NULL) пуст)
+            llvm::Value* slot = vars[node.args[0].value];
+            llvm::Value* value = builder.CreateLoad(builder.getPtrTy(), slot);
+            builder.CreateStore(llvm::ConstantPointerNull::get(builder.getPtrTy()), slot);
+            return value;
+        }
         if (name == "len") {
             llvm::Function* strlenF = runtimeFunction("strlen");
             llvm::Value* str = genExpr(node.args[0]);
