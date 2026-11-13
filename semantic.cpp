@@ -1125,6 +1125,17 @@ private:
             return "bool";
         if (comparison) {
             if (!leftTy.isNumeric() || !rightTy.isNumeric()) {
+                // 1 < 2 < 3 — это (1 < 2) < 3: bool сравнивается с числом. Как в Rust,
+                // цепочка — ошибка; сказать это прямо и подсказать запись через &&.
+                const auto isComparison = [](const Node& side) {
+                    return side.type == NODE_BINOP && (side.op == "<" || side.op == ">" ||
+                        side.op == "<=" || side.op == ">=" || side.op == "==" || side.op == "!=");
+                };
+                if (isComparison(*node.left) || isComparison(*node.right)) {
+                    error(node, "сравнения нельзя соединять в цепочку (a < b < c): результат "
+                          "сравнения — bool, а не число; пишите a < b && b < c");
+                    return "<error>";
+                }
                 error(node, "оператор сравнения принимает только числа");
                 return "<error>";
             }
@@ -1464,7 +1475,9 @@ private:
                         dynCapacity = static_cast<int>(*n);
                 }
             }
-            declare(node.varName, node.varType, node, node.isConst, actual != "<error>",
+            // С инициализатором переменная инициализирована, даже если в нём ошибка:
+            // иначе каждое её использование дало бы ложную вторую ошибку (1.7).
+            declare(node.varName, node.varType, node, node.isConst, true,
                     dynArrayInit, dynElementType);
             if (dynArrayInit && scopes_.back().contains(node.varName))
                 scopes_.back()[node.varName].dynArrayCapacity = dynCapacity;
