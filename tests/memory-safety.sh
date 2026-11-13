@@ -435,6 +435,55 @@ ptr chars = data(text);
 release(chars);
 print(chars[0]);
 SC
+check_case task11-people-release clean $'2\nAnn\nAnn-2\n11\n7\nAnn\n31\nTver\nBob\n43\nOmsk\nEve\n25\nKazan' 1 <<'SC'
+struct Address { string city = ""; int zip = 0; }
+struct Person { string name = ""; int age = 0; Address home; int[] scores; }
+
+fn Person make(string name, int age, string city) {
+    Person p = { name = name; age = age; home = { city = city; }; };
+    return p;
+}
+
+fn int total(Person p) {
+    int sum = 0;
+    for i in 0..p.scores.len() { sum += p.scores[i]; }
+    return sum;
+}
+
+fn Person older(Person p, int years) {
+    p.age += years;
+    return p;
+}
+
+Person bob = make("Bob", 41, "Omsk");
+bob.scores.push(7);
+Person[] people = [make("Ann", 30, "Tver"), bob, { name = "Eve"; age = 25; home = { city = "?"; }; }];
+people[2].home.city = "Kazan";
+people[2].home.zip = 420000;
+people[0].age += 1;
+people[1] = older(people[1], 2);
+
+int found = -1;
+for i in 0..people.len() {
+    if (people[i].name == "Eve") { found = i; }
+}
+print(found);
+
+Person copy = people[0];
+copy.name = "Ann-2";
+copy.scores.push(5);
+copy.scores.push(6);
+print(people[0].name);
+print(copy.name);
+print(total(copy));
+print(total(people[1]));
+
+for p in people {
+    print(p.name);
+    print(p.age);
+    print(p.home.city);
+}
+SC
 check_case double-delete detector attempting\ double-free <<'SC'
 fn void release(ptr p) { del p; }
 string text = str(123456);
@@ -448,4 +497,4 @@ ptr chars = data(text);
 print(chars[4]);
 SC
 
-echo 'PASS: memory safety suite (15 clean, 4 controlled runtime errors, 3 ASan detector self-tests)'
+echo 'PASS: memory safety suite (16 clean, 4 controlled runtime errors, 3 ASan detector self-tests)'

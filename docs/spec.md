@@ -468,6 +468,87 @@ pts[0].x = "один";
 поле ожидает тип 'int/i32', получен 'str'
 ```
 
+**Задача 11 «набор людей»** — записи хранятся одним массивом структур, без
+параллельных массивов: вложенная запись (`home`), строка и растущий массив в полях,
+возврат структуры из функции, передача элемента в функцию (копия), поиск, изменение
+и полная копия элемента. Вся память освобождается сама (D-016/D-017).
+
+```sc
+struct Address { string city = ""; int zip = 0; }
+struct Person { string name = ""; int age = 0; Address home; int[] scores; }
+
+fn Person make(string name, int age, string city) {
+    Person p = { name = name; age = age; home = { city = city; }; };
+    return p;
+}
+
+fn int total(Person p) {
+    int sum = 0;
+    for i in 0..p.scores.len() { sum += p.scores[i]; }
+    return sum;
+}
+
+fn Person older(Person p, int years) {
+    p.age += years;
+    return p;
+}
+
+Person bob = make("Bob", 41, "Omsk");
+bob.scores.push(7);
+Person[] people = [make("Ann", 30, "Tver"), bob, { name = "Eve"; age = 25; home = { city = "?"; }; }];
+people[2].home.city = "Kazan";
+people[2].home.zip = 420000;
+people[0].age += 1;
+people[1] = older(people[1], 2);
+
+int found = -1;
+for i in 0..people.len() {
+    if (people[i].name == "Eve") { found = i; }
+}
+print(found);
+
+Person copy = people[0];
+copy.name = "Ann-2";
+copy.scores.push(5);
+copy.scores.push(6);
+print(people[0].name);
+print(copy.name);
+print(total(copy));
+print(total(people[1]));
+
+for p in people {
+    print(p.name);
+    print(p.age);
+    print(p.home.city);
+}
+```
+```text
+2
+Ann
+Ann-2
+11
+7
+Ann
+31
+Tver
+Bob
+43
+Omsk
+Eve
+25
+Kazan
+```
+
+```sc-error
+struct Address { string city = ""; int zip = 0; }
+struct Person { string name = ""; Address home; }
+Person[] people = [{ name = "Ann"; home = { city = "Tver"; }; }];
+people[0].home.zip = "Tver";
+```
+```text
+поле ожидает тип 'int/i32', получен 'str'
+```
+
 ## 8. Массивы
 
 Статический массив имеет фиксированную длину; индекс проверяется
