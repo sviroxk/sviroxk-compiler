@@ -749,6 +749,12 @@ expect_compile_error() {
         cat "$work/error.log" >&2
         exit 1
     fi
+    if [[ "$name" == missing-semicolon-* ]] &&
+       [[ $(grep -c 'error\[' "$work/error.log") -ne 1 ]]; then
+        echo "FAIL: '$name' reported a false second error" >&2
+        cat "$work/error.log" >&2
+        exit 1
+    fi
     if [[ -n "$expected" ]] &&
        ! grep -Fq "$expected" "$work/error.log"; then
         echo "FAIL: '$name' did not produce expected error '$expected'" >&2
@@ -1002,7 +1008,11 @@ expect_compile_error "digit-separator-double" 'print(1__000);' "error"
 expect_compile_error "array-literal-no-commas" $'int[] a = [1 2 3];\nprint(a[2]);' "ожидалась ',' между элементами массива"
 expect_compile_error "array-literal-no-commas-let" $'let a: int[] = [1, 2 3];' "ожидалась ',' между элементами массива"
 expect_program_output "array-literal-trailing-comma" $'int[] a = [1, 2, 3,];\nprint(a[2]);' '3'
-expect_compile_error "expect-names-token" $'int x = 0\nprint(x);' "2:1: error[syntax]: ожидалась ';', получено 'print'"
+# Пропущенная `;` в конце строки: позиция сразу после последнего токена, одна ошибка (1.7).
+expect_compile_error "missing-semicolon-next-line" $'int x = 0\nprint(x);' ":1:10: error[syntax]: ожидалась ';' после '0'"
+expect_compile_error "missing-semicolon-comment-gap" $'print(1)  // нет точки с запятой\n\nint y = 2;' ":1:9: error[syntax]: ожидалась ';' после ')'"
+expect_compile_error "missing-semicolon-eof" 'string s = "ab"' ":1:16: error[syntax]: ожидалась ';' после \"ab\""
+expect_compile_error "missing-semicolon-same-line" 'int x = 1 print(x);' ":1:11: error[syntax]: ожидалась ';', получено 'print'"
 expect_compile_error "expect-eof-position" $'int x = 0;\nwhile (x < 3) x += 1;' ":3:1: error[syntax]: ожидалась '}', получено конец файла"
 expect_compile_error "field-default-message-russian" $'struct P { int a = 2.5; }\nP p;' "а ожидается 'int/i32'"
 expect_compile_error "open-without-mode" $'file f = open("open-without-mode.txt");' "open: укажите режим открытия вторым аргументом"
