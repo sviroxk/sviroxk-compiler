@@ -569,6 +569,25 @@ for p in people {
     print(p.home.city);
 }
 SC
+check_case move-in-loop-reassign clean $'4\n30\n6\n100\nabbbb\nочередь' 1 <<'SC'
+struct Queue { int[] items; string name; }
+fn Queue enqueue(Queue q, int x) { q.items.push(x); return q; }
+fn int[] add(int[] v, int x) { v.push(x); return v; }
+fn string grow(string s) { return replace(s, "a", "ab"); }
+Queue q;
+q.name = "очередь";
+int[] v = new int[0];
+string s = "a";
+for i in 0..4 {
+    q = enqueue(move(q), i * 10);
+    v = add(move(v), i);
+    s = grow(move(s));
+}
+int k = 0;
+while (k < 2) { v = add(move(v), 100); k += 1; }
+print(q.items.len()); print(q.items[3]); print(v.len()); print(v[5]); print(s); print(q.name);
+SC
+
 check_case double-delete detector attempting\ double-free <<'SC'
 fn void release(ptr p) { del p; }
 string text = str(123456);
