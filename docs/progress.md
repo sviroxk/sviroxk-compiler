@@ -413,3 +413,8 @@
 - Параметр `int[] v` — копия (как `vector` в C++), обычный массив — тоже копией; `move(a)` — перенос, `a` нельзя до присваивания (как в Rust); `fn int[] f()` — локальный/параметр возвращается без копии, глобальный — копией; `int[] b = a`/`b = a` — копия, `int[] b = move(a)`, `ptr b = f()`, `int[] v = new int[n]`; результат, не положенный в переменную, освобождается в конце оператора.
 - Ошибки: «ожидался массив 'int[]', получен массив 'byte[]'», «return: ожидался массив …», параметр `ptr` — с подсказкой `int[] v`; `fn ptr` с `return v` — подсказка `fn int[]`.
 - Тесты: `test.sh` `array-function-copy-move`, `array-use-after-move`, `array-argument-element`, `array-return-type`, `array-param-type`; `memory-safety.sh` `array-function-release` (LeakSanitizer). Spec §8, §17.
+
+## 2026-11-13 — растущий массив (1.3), шаг 3: растущий массив структур
+- `P[] a = new P[n]` — элементы со значениями полей по умолчанию; `push(q)` (копия) / `push(f())` (без копии), `a[i].x`, `a[i] = q`, `P r = a[i]`, `resize`/`clear`, передача/возврат/`move`/копия массива — со строками и массивами в полях, без утечек (LeakSanitizer).
+- Размер элемента теперь из DataLayout (`elementSize`), а не `getPrimitiveSizeInBits/8` (для структуры давал 0).
+- `pop()` у массива структур — ошибка с подсказкой (пока нет). Тесты `struct-dynamic-array`, `-pop`, `-push-type`, `memory-safety.sh` `struct-dynamic-array-release`. Spec §7, §17.

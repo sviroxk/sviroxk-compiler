@@ -1076,8 +1076,8 @@ Node parseOne() {
             if (!isTypeName(returnType.value) && returnType.type != IDENTIFIER)
                 failAt(returnType, "неизвестный тип результата '" + returnType.value + "'");
             node.varType = canonicalType(returnType.value);
-        } else if (isTypeToken(peek().type) && peek(1).type == LBRACKET && peek(2).type == RBRACKET &&
-                   peek(4).type == LPAREN) {  // fn int[] make(…): растущий массив (D-018)
+        } else if ((isTypeToken(peek().type) || peek().type == IDENTIFIER) && peek(1).type == LBRACKET &&
+                   peek(2).type == RBRACKET && peek(4).type == LPAREN) {  // fn int[] make(…): растущий массив (D-018)
             node.varType = "dyn<" + canonicalType(consume().value) + ">";
             consume(); consume();
         }

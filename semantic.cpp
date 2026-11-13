@@ -231,7 +231,8 @@ private:
     bool knownType(const std::string& raw) const {
         const sc::Type t = sc::Type::from(raw);
         if (!t.isKnown()) return false;
-        if (t.isDynArray()) return t.element && t.element->isScalar();  // поле int[] (D-016)
+        if (t.isDynArray())  // int[] (D-016), растущий массив структур P[] (1.3)
+            return t.element && (t.element->isScalar() || (t.element->isStruct() && structs_.contains(t.element->structName)));
         return t.isScalar() || t.isStr() || t.isPtr() || t.isVoid() || t.isFile() ||
                (t.isStruct() && structs_.contains(t.structName));
     }
@@ -860,6 +861,11 @@ private:
                 error(node, "pop поддерживается только для динамических массивов");
                 return "void";
             }
+            if (structs_.contains(array->dynArrayElementType)) {
+                error(node, "pop() у массива структур пока нет: читайте '" + node.varName + "[" + node.varName +
+                      ".len() - 1]' и уменьшайте '" + node.varName + ".resize(…)'");
+                return "<error>";
+            }
             return array->isDynArray ? array->dynArrayElementType : array->ty.element->toString();
         }
         case NODE_ARRAY_RESIZE: {
@@ -1395,7 +1401,7 @@ private:
     void checkStruct(const Node& node) {
         std::set<std::string> fields;
         for (const Node& field : node.children) {
-            if (const sc::Type t = ty(field.varType); t.isDynArray() && !knownType(field.varType))
+            if (const sc::Type t = ty(field.varType); t.isDynArray() && !(t.element && t.element->isScalar()))
                 error(field, "поле-массив: элементы пока только числа, bool и char, а не '" +
                       typeName(t.element->toString()) + "'");
             else if (!knownType(field.varType)) error(field, "неизвестный тип поля '" + field.varType + "'");
