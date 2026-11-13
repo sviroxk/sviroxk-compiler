@@ -527,6 +527,22 @@ private:
             return symbol->type;
         }
         case NODE_STRUCT_FIELD: {
+            std::string currentStruct;
+            if (node.right) {  // a[i].x: поле элемента массива структур
+                Node access;
+                access.type = NODE_ARRAY_ACCESS;
+                access.varName = node.varName;
+                access.left = node.right;
+                access.line = node.line; access.column = node.column; access.file = node.file;
+                const std::string element = expression(access);
+                if (element == "<error>") return "<error>";
+                if (!structs_.contains(element)) {
+                    error(node, "элемент массива '" + node.varName + "' имеет тип '" + typeName(element) +
+                          "' и не имеет полей");
+                    return "<error>";
+                }
+                currentStruct = element;
+            } else {
             const Symbol* object = use(node, node.varName);
             if (!object) {
                 error(node, "неизвестное имя '" + node.varName + "'");
@@ -535,7 +551,8 @@ private:
             // Definite assignment: object must be initialized before field access
             checkInitialized(node, node.varName);
             droppedFieldError(node, node.varName, *object, node.op + ".");  // t.inner после drop t.inner.a
-            std::string currentStruct = object->ty.structName;
+            currentStruct = object->ty.structName;
+            }
             // Split field path on dots and traverse nested structs
             size_t pos = 0;
             std::string path = node.op;
@@ -1664,7 +1681,7 @@ private:
                 std::erase_if(root->droppedFields,  // t.inner = q: сброшенные поля t.inner снова есть
                               [&](const auto& item) { return item.first.starts_with(node.op + "."); });
             }
-            if (node.op.find('.') != std::string::npos) {
+            if (node.op.find('.') != std::string::npos || node.right) {
                 const Symbol* root = use(node, node.varName);
                 if (root && root->isConst) {
                     error(node, "нельзя изменять поле константной структуры '" + node.varName + "'");
@@ -1675,6 +1692,7 @@ private:
                 field.type = NODE_STRUCT_FIELD;
                 field.varName = node.varName;
                 field.op = node.op;
+                field.right = node.right;  // a[i].x = v
                 field.line = node.line; field.column = node.column; field.file = node.file;
                 const std::string fieldType = expression(field);
                 if (fieldType == "<error>") { expression(*node.left); break; }

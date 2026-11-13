@@ -368,6 +368,51 @@ ptr values = new int[2];
 i64 index = values.len();
 values[index] = 9;
 SC
+check_case struct-array-owning-release clean $'Kate
+Kira
+41
+40
+Ola
+Copy
+41
+Kate
+40
+50
+1
+Ann
+Bob
+Bo
+0
+50' 1 <<'SC'
+struct Pos { int x = 0; int y = 0; }
+struct Person { string name; int age; Pos at; int[] marks; }
+fn Person make(string n, int a) { Person p = { name = n; age = a; at = { x = 0; y = 0; }; }; p.marks.push(a); return p; }
+fn int older(Person p) { p.name = "zz"; return p.age + 1; }
+Person[] all = [make("Ann", 30), { name = "Bob"; age = 20; at = { x = 0; y = 0; }; }];
+fn void run() {
+    Person k = make("Kate", 40);
+    Person[] people = [k, make("Max", 25), { name = "Eve"; age = 33; at = { x = 1; y = 2; }; }];
+    k.name = "Kira";
+    print(people[0].name);
+    people[1] = k;
+    people[1].age += 1;
+    print(people[1].name); print(people[1].age); print(k.age);
+    people[2] = make("Ola", 50);
+    Person c = people[2];
+    c.name = "Copy";
+    print(people[2].name); print(c.name);
+    print(older(people[0]));
+    print(people[0].name);
+    for p in people { p.name = "x"; if (p.age == 41) { continue; } print(p.age); }
+    for p in people { if (p.age > 45) { break; } }
+    Person m = people[0]; print(m.marks.len());
+    print(all[0].name); print(all[1].name);
+    all[1].name = "Bo";
+    print(all[1].name);
+    print(people[2].at.x); Person o = people[2]; print(o.marks[0]);
+}
+run();
+SC
 check_case struct-array-field-cleared-read runtime 'SC runtime error: array index out of bounds' <<'SC'
 struct S { int[] a; }
 S s;
@@ -403,4 +448,4 @@ ptr chars = data(text);
 print(chars[4]);
 SC
 
-echo 'PASS: memory safety suite (14 clean, 4 controlled runtime errors, 3 ASan detector self-tests)'
+echo 'PASS: memory safety suite (15 clean, 4 controlled runtime errors, 3 ASan detector self-tests)'

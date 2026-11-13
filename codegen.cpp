@@ -275,7 +275,9 @@ void CodeGen::ownStructSlot(llvm::Value* slot, const std::string& structName) {
 // p.name = v / p.inner = q: строка поля — своя копия, старая освобождается (D-016).
 bool CodeGen::storeOwnedField(const Node& assign, llvm::Value* address, llvm::Type* fieldType) {
     std::string fieldTypeName;
-    if (auto root = structTypesByVariable.find(assign.varName); root != structTypesByVariable.end()) {
+    auto root = structTypesByVariable.find(assign.varName);
+    if (assign.right) root = arrayStructNames.find(assign.varName);  // a[i].name = "x"
+    if (root != structTypesByVariable.end() && root != arrayStructNames.end()) {
         fieldTypeName = root->second;
         for (size_t pos = 0; pos <= assign.op.size();) {
             const size_t dot = std::min(assign.op.find('.', pos), assign.op.size());
@@ -724,7 +726,10 @@ void CodeGen::growDynArray(const std::string& varName, llvm::Value* newCapacity,
 
 bool CodeGen::fieldIsUnsigned(const std::string& variable, std::string_view path) const {
     auto structName = structTypesByVariable.find(variable);
-    if (structName == structTypesByVariable.end()) return false;
+    if (structName == structTypesByVariable.end()) {
+        structName = arrayStructNames.find(variable);  // a[i].x
+        if (structName == arrayStructNames.end()) return false;
+    }
     // Обход пути `a.b.c` по string_view и указателям на имена типов — без
     // копии каждого сегмента и каждого имени типа.
     const std::string* current = &structName->second;
@@ -949,18 +954,35 @@ llvm::Value* CodeGen::genOtherExpr(const Node& node) {
     // Maintain a pointer through the chain; only load the final value.
     std::string currentVar = node.varName;
     std::string fieldPath = node.op;
+    llvm::Value* currentPtr = nullptr;
+    std::string structName;
+    if (node.right) {  // a[i].x: адрес элемента статического массива структур
+        auto array = arrays.find(currentVar);
+        auto element = arrayStructNames.find(currentVar);
+        if (array == arrays.end() || element == arrayStructNames.end()) {
+            codegenFailure(node, "неизвестный массив структур '" + currentVar + "'");
+            return nullptr;
+        }
+        const unsigned n = arrayLengths[currentVar];
+        llvm::Value* idx = genExpr(*node.right);
+        emitArrayBoundsCheck(idx, builder.getInt64(n), node);
+        currentPtr = builder.CreateInBoundsGEP(llvm::ArrayType::get(arrayElementTypes[currentVar], n),
+                                               array->second, {builder.getInt32(0), idx});
+        structName = element->second;
+    } else {
     auto objectIt = vars.find(currentVar);
     if (objectIt == vars.end()) {
         codegenFailure(node, "неизвестная переменная '" + currentVar + "'");
         return nullptr;
     }
-    llvm::Value* currentPtr = objectIt->second;
+    currentPtr = objectIt->second;
     auto structNameIt = structTypesByVariable.find(currentVar);
     if (structNameIt == structTypesByVariable.end()) {
         codegenFailure(node, "неизвестная структура '" + currentVar + "'");
         return nullptr;
     }
-    std::string structName = structNameIt->second;
+    structName = structNameIt->second;
+    }
     auto llvmTypeIt = llvmStructTypes.find(structName);
     if (llvmTypeIt == llvmStructTypes.end()) {
         codegenFailure(node, "неизвестная структура '" + structName + "'");
@@ -1869,18 +1891,22 @@ void CodeGen::genNode(const Node& node) {
         builder.CreateStore(builder.getInt64(count), builder.CreateStructGEP(dynArrayType(), desc, 1));
         builder.CreateStore(builder.getInt64(count), builder.CreateStructGEP(dynArrayType(), desc, 2));
     }
-    else if (node.type == NODE_STRUCT_FIELD_ASSIGN && node.op.find('.') != std::string::npos) {
+    else if (node.type == NODE_STRUCT_FIELD_ASSIGN && (node.op.find('.') != std::string::npos || node.right)) {
         Node field;
         field.type = NODE_STRUCT_FIELD;
         field.varName = node.varName;
         field.op = node.op;
+        field.right = node.right;  // a[i].x = v
         field.line = node.line; field.column = node.column; field.file = node.file;
+        // a[i].x += v: индекс вычисляется один раз и для адреса, и для чтения поля.
+        if (node.right) precomputed_[node.right.get()] = genExpr(*node.right);
         structFieldAddressOnly_ = true;
         llvm::Value* address = genExpr(field);
         structFieldAddressOnly_ = false;
         llvm::Type* fieldType = lastFieldType_;
-        if (storeOwnedField(node, address, fieldType)) return;
+        if (storeOwnedField(node, address, fieldType)) { precomputed_.clear(); return; }
         llvm::Value* value = stableString(*node.left, genExpr(*node.left));
+        precomputed_.clear();
         checkNarrowStore(value, *node.left, fieldType, fieldIsUnsigned(node.varName, node.op), node);
         builder.CreateStore(castTo(value, fieldType, isUnsignedExpr(*node.left)), address);
     }
@@ -1950,6 +1976,13 @@ void CodeGen::genNode(const Node& node) {
                 if (node.op == "compound") precomputed_[node.right->left->left.get()] = idx;
                 llvm::Value* value = stableString(*node.right, genExpr(*node.right));
                 precomputed_.clear();
+                if (auto structName = arrayStructNames.find(node.varName); structName != arrayStructNames.end()) {
+                    if (structOwnsMemory(structName->second))  // a[i] = q: копия q, старый элемент освобождается
+                        replaceStruct(gep, structName->second, value, *node.right);
+                    else
+                        builder.CreateStore(value, gep);
+                    return;
+                }
                 checkNarrowStore(value, *node.right, elementType, unsignedElements[node.varName], node);
                 builder.CreateStore(castTo(value, elementType, isUnsignedExpr(*node.right)), gep);
             }
@@ -2018,14 +2051,27 @@ void CodeGen::genNode(const Node& node) {
         arrayLengths[node.varName] = n;
         arrayElementTypes[node.varName] = elementType;
         unsignedElements[node.varName] = sc::Type::from(node.varType).isUnsigned();
+        if (structDefs.contains(node.varType)) arrayStructNames[node.varName] = node.varType;
         for (unsigned i = 0; i < n; i++) {
             llvm::Value* gep = builder.CreateInBoundsGEP(
                 at, arr, {builder.getInt32(0), builder.getInt32(i)});
+            if (node.args[i].type == NODE_STRUCT_LITERAL) {  // P[] a = [{1, 2}]
+                initStructLiteral(gep, llvmStructTypes[node.varType], node.varType, node.args[i]);
+                continue;
+            }
             llvm::Value* val = stableString(node.args[i], genExpr(node.args[i]));
+            if (arrayStructNames.contains(node.varName)) {  // [q, f()]: копия q, результат f() забирается
+                builder.CreateStore(takeStruct(node.args[i], val, node.varType), gep);
+                continue;
+            }
             checkNarrowStore(val, node.args[i], elementType, unsignedElements[node.varName], node.args[i]);
             val = castTo(val, elementType, isUnsignedExpr(node.args[i]));
             builder.CreateStore(val, gep);
         }
+        if (arrayStructNames.contains(node.varName) && structOwnsMemory(node.varType))
+            for (unsigned i = 0; i < n; i++)  // строки и массивы полей элементов освобождаются с массивом (D-016)
+                ownStructSlot(builder.CreateInBoundsGEP(at, arr, {builder.getInt32(0), builder.getInt32(i)}),
+                              node.varType);
     }
     else if (node.type == NODE_ARRAY_POP) {
         auto found = dynArrays.find(node.varName);
@@ -2403,6 +2449,8 @@ void CodeGen::genNode(const Node& node) {
         const size_t savedLoopBase = loopDeferredBase_;
         loopDeferredBase_ = deferred_.size();
         vars[node.varName] = element;
+        if (auto structName = arrayStructNames.find(node.left->value); structName != arrayStructNames.end())
+            structTypesByVariable[node.varName] = structName->second;  // for p in people { p.age }
         unsignedVars[node.varName] = false;
         charVars[node.varName] = false;
         integerWidths[node.varName] = elementType->isIntegerTy() ? elementType->getIntegerBitWidth() : 32;
@@ -2417,7 +2465,18 @@ void CodeGen::genNode(const Node& node) {
             arrayType, array, {builder.getInt32(0), current});
         llvm::Value* value = builder.CreateLoad(elementType, address);
         builder.CreateStore(value, element);
+        std::string ownedElement;  // for p in a: p — своя копия элемента (D-016), освобождается на каждом шаге
+        if (auto structName = arrayStructNames.find(node.left->value);
+            structName != arrayStructNames.end() && structOwnsMemory(structName->second)) {
+            ownedElement = structName->second;
+            copyStructStrings(element, ownedElement);
+            ownStructSlot(element, ownedElement);
+        }
         genScope(node.children);
+        if (!ownedElement.empty()) {
+            if (!blockHasTerminator(builder.GetInsertBlock())) dropStruct(element, ownedElement);
+            deferred_.resize(loopDeferredBase_);
+        }
         if ((builder.GetInsertBlock()->empty() || !builder.GetInsertBlock()->back().isTerminator())) builder.CreateBr(stepBlock);
         builder.SetInsertPoint(stepBlock);
         current = builder.CreateLoad(builder.getInt32Ty(), index);
