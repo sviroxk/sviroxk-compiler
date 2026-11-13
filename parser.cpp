@@ -1626,6 +1626,39 @@ Node parseOne() {
             expect(RBRACE);
             return node;
         }
+        // for part in split(s, ",") { … }: части строки по разделителю (D-025).
+        if (peek().type == IDENTIFIER && peek().value == "split" && peek(1).type == LPAREN) {
+            node.type = NODE_FOR_EACH;
+            node.op = "split";
+            consume();
+            consume();
+            Token text = peek();
+            Token sep = peek(2);
+            if (!isNameToken(text.type) || peek(1).type != COMMA ||
+                (sep.type != STRING && !isNameToken(sep.type)) || peek(3).type != RPAREN)
+                failAt(text, "split(s, sep): в скобках — имя строки и разделитель (строка в кавычках или имя)");
+            consume();
+            consume();
+            consume();
+            consume();
+            node.left = makeNode();
+            node.left->type = NODE_IDENTIFIER;
+            node.left->value = text.value;
+            node.left->line = text.line;
+            node.left->column = text.column;
+            node.left->file = text.file;
+            node.right = makeNode();
+            node.right->type = sep.type == STRING ? NODE_STRING : NODE_IDENTIFIER;
+            if (sep.type == STRING) node.right->varType = "str";
+            node.right->value = sep.value;
+            node.right->line = sep.line;
+            node.right->column = sep.column;
+            node.right->file = sep.file;
+            expect(LBRACE);
+            node.children = parseBlock();
+            expect(RBRACE);
+            return node;
+        }
         if (peek().type == IDENTIFIER && peek(1).type == LBRACE) {
             node.type = NODE_FOR_EACH;
             Token arrayToken = consume();

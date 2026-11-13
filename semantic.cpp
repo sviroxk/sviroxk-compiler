@@ -42,6 +42,7 @@ struct Symbol {
     int deferDropLine = 0;    // строка defer drop; освобождение при выходе из области
     std::map<std::string, int> droppedFields; // поле-массив после drop t.scores: путь -> строка (D-017)
     bool isView = false;      // параметр-окно int[..] / slice int[]: часть чужого массива (D-018)
+    bool iteratedSplit = false;  // for part in split(s, …): «по её частям»
     int iteratedLine = 0;     // строка for x in v, внутри которого длину v менять нельзя
 };
 
@@ -299,7 +300,8 @@ private:
     // Внутри for x in v длина и сам массив v не меняются (как в Rust; в C++ — UB).
     void iteratedError(const Node& node, const std::string& name, const Symbol& array) const {
         if (array.ty.isStr()) {
-            error(node, "нельзя менять строку '" + name + "' внутри цикла for по её буквам (строка " +
+            error(node, "нельзя менять строку '" + name + "' внутри цикла for по её " +
+                  (array.iteratedSplit ? "частям" : "буквам") + " (строка " +
                   std::to_string(array.iteratedLine) + ")");
             return;
         }
@@ -2153,17 +2155,43 @@ private:
         case NODE_FOR_EACH: {
             const std::string collectionType = expression(*node.left);
             Symbol* collection = lookupMutable(node.left->value);
-            if (node.op == "letters") {  // for c in letters(s): c — char; s в цикле не меняется (D-022)
+            if (node.op == "letters" || node.op == "split") {  // c — char / part — string; s не меняется (D-022, D-025)
+                const bool split = node.op == "split";
                 if (collectionType == "<error>") break;
                 if (!sc::Type::from(collectionType).isStr()) {
-                    error(*node.left, "letters(s): '" + node.left->value + "' — не строка, а '" +
-                          typeName(collectionType) + "'");
+                    error(*node.left, node.op + (split ? "(s, sep)" : "(s)") + ": '" + node.left->value +
+                          "' — не строка, а '" + typeName(collectionType) + "'");
                     break;
                 }
+                if (split) {
+                    const std::string sepType = expression(*node.right);
+                    if (sepType == "<error>") break;
+                    if (!sc::Type::from(sepType).isStr()) {
+                        error(*node.right, "split(s, sep): разделитель — строка, а не '" + typeName(sepType) + "'");
+                        break;
+                    }
+                    if (node.right->type == NODE_STRING && node.right->value.empty()) {
+                        error(*node.right, "split(s, sep): разделитель не может быть пустым; буквы — for c in letters(s)");
+                        break;
+                    }
+                }
                 const int savedLine = collection ? collection->iteratedLine : 0;
-                if (collection && !collection->iteratedLine) collection->iteratedLine = node.line;
+                const bool savedSplit = collection ? collection->iteratedSplit : false;
+                if (collection && !collection->iteratedLine) {
+                    collection->iteratedLine = node.line;
+                    collection->iteratedSplit = split;
+                }
+                // Разделитель-имя в цикле тоже не меняется: его адрес взят до цикла.
+                Symbol* separator = split && node.right->type == NODE_IDENTIFIER ? lookupMutable(node.right->value) : nullptr;
+                if (separator == collection) separator = nullptr;
+                const int savedSepLine = separator ? separator->iteratedLine : 0;
+                const bool savedSepSplit = separator ? separator->iteratedSplit : false;
+                if (separator && !separator->iteratedLine) {
+                    separator->iteratedLine = node.line;
+                    separator->iteratedSplit = true;
+                }
                 scopes_.emplace_back();
-                declare(node.varName, "char", node, false, true);
+                declare(node.varName, split ? "string" : "char", node, false, true);
                 ++loopDepth_;
                 const size_t savedBarrier = dropBarrier_;
                 dropBarrier_ = scopes_.size() - 1;
@@ -2171,7 +2199,8 @@ private:
                 --loopDepth_;
                 dropBarrier_ = savedBarrier;
                 scopes_.pop_back();
-                if (collection) collection->iteratedLine = savedLine;
+                if (collection) { collection->iteratedLine = savedLine; collection->iteratedSplit = savedSplit; }
+                if (separator) { separator->iteratedLine = savedSepLine; separator->iteratedSplit = savedSepSplit; }
                 break;
             }
             const bool growing = collection && collection->isDynArray;  // растущий массив или окно

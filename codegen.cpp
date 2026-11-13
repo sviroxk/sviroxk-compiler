@@ -2882,6 +2882,76 @@ void CodeGen::genNode(const Node& node) {
         continueBlock = savedContinue;
         loopDeferredBase_ = savedLoopBase;
     }
+    else if (node.type == NODE_FOR_EACH && node.op == "split") {
+        // for part in split(s, sep): начало куска pos; кусок до следующего sep (strstr) копируется
+        // в свою строку part, она освобождается в конце шага; без sep — последний кусок (D-025).
+        auto orEmpty = [&](llvm::Value* v) {
+            return builder.CreateSelect(builder.CreateICmpEQ(v, llvm::ConstantPointerNull::get(builder.getPtrTy())),
+                                        getStringPtr(""), v);
+        };
+        llvm::Value* text = orEmpty(genExpr(*node.left));
+        llvm::Value* sep = orEmpty(genExpr(*node.right));
+        llvm::Value* sepLen = builder.CreateCall(runtimeFunction("strlen"), {sep});
+        emitRuntimeFailureIf(builder.CreateICmpEQ(sepLen, builder.getInt64(0)), "split: empty separator", node);
+        llvm::Function* function = builder.GetInsertBlock()->getParent();
+        llvm::AllocaInst* pos = builder.CreateAlloca(builder.getInt64Ty(), nullptr, "split_pos");
+        llvm::AllocaInst* last = builder.CreateAlloca(builder.getInt1Ty(), nullptr, "split_last");
+        llvm::AllocaInst* part = builder.CreateAlloca(builder.getPtrTy(), nullptr, node.varName);
+        builder.CreateStore(builder.getInt64(0), pos);
+        builder.CreateStore(builder.getFalse(), last);
+        llvm::BasicBlock* conditionBlock = llvm::BasicBlock::Create(context, "split_cond", function);
+        llvm::BasicBlock* bodyBlock = llvm::BasicBlock::Create(context, "split_body", function);
+        llvm::BasicBlock* stepBlock = llvm::BasicBlock::Create(context, "split_step", function);
+        llvm::BasicBlock* afterBlock = llvm::BasicBlock::Create(context, "split_after", function);
+        const ScopeSnapshot parentScope = saveScope();
+        const auto savedBreak = breakBlock;
+        const auto savedContinue = continueBlock;
+        const size_t savedLoopBase = loopDeferredBase_;
+        loopDeferredBase_ = deferred_.size();
+        vars[node.varName] = part;
+        unsignedVars[node.varName] = false;
+        charVars[node.varName] = false;
+        breakBlock = afterBlock;
+        continueBlock = stepBlock;
+        builder.CreateBr(conditionBlock);
+        builder.SetInsertPoint(conditionBlock);
+        builder.CreateCondBr(builder.CreateLoad(builder.getInt1Ty(), last), afterBlock, bodyBlock);
+        builder.SetInsertPoint(bodyBlock);
+        llvm::Value* start = builder.CreateInBoundsGEP(builder.getInt8Ty(), text, builder.CreateLoad(builder.getInt64Ty(), pos));
+        llvm::Value* found = builder.CreateCall(runtimeFunction("strstr"), {start, sep});
+        llvm::Value* none = builder.CreateICmpEQ(found, llvm::ConstantPointerNull::get(builder.getPtrTy()));
+        llvm::Value* length = builder.CreateSelect(none, builder.CreateCall(runtimeFunction("strlen"), {start}),
+                                                   builder.CreatePtrDiff(builder.getInt8Ty(), found, start));
+        builder.CreateStore(none, last);
+        builder.CreateStore(builder.CreateAdd(builder.CreateLoad(builder.getInt64Ty(), pos),
+                                              builder.CreateAdd(length, sepLen)), pos);
+        llvm::Value* copy = builder.CreateCall(runtimeFunction("malloc"), {builder.CreateAdd(length, builder.getInt64(1))});
+        llvm::BasicBlock* failed = llvm::BasicBlock::Create(context, "split_nomem", function);
+        llvm::BasicBlock* filled = llvm::BasicBlock::Create(context, "split_copy", function);
+        builder.CreateCondBr(builder.CreateICmpEQ(copy, llvm::ConstantPointerNull::get(builder.getPtrTy())), failed, filled);
+        builder.SetInsertPoint(failed);
+        builder.CreateCall(runtimeFunction("abort"), {});
+        builder.CreateUnreachable();
+        builder.SetInsertPoint(filled);
+        builder.CreateCall(runtimeFunction("memcpy"), {copy, start, length});
+        builder.CreateStore(builder.getInt8(0), builder.CreateInBoundsGEP(builder.getInt8Ty(), copy, length));
+        builder.CreateStore(copy, part);
+        const size_t partBase = deferred_.size();
+        ownStringSlot(part);  // part освобождается в конце шага, при break/continue/return
+        genScope(node.children);
+        if (!blockHasTerminator(builder.GetInsertBlock())) {
+            emitDeferred(partBase);
+            builder.CreateBr(stepBlock);
+        }
+        deferred_.resize(partBase);
+        builder.SetInsertPoint(stepBlock);
+        builder.CreateBr(conditionBlock);
+        builder.SetInsertPoint(afterBlock);
+        restoreScope(parentScope);
+        breakBlock = savedBreak;
+        continueBlock = savedContinue;
+        loopDeferredBase_ = savedLoopBase;
+    }
     else if (node.type == NODE_FOR_EACH && node.op == "letters") {
         // for c in letters(s): номер байта i, на каждом шаге — буква UTF-8 с s[i] и её длина (D-022).
         llvm::Value* text = genExpr(*node.left);
