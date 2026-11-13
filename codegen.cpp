@@ -936,6 +936,7 @@ bool CodeGen::isUnsignedExpr(const Node& node) const {
     }
     if (node.type == NODE_STRUCT_FIELD) return fieldIsUnsigned(node.varName, node.op);
     if (node.type == NODE_ARRAY_ACCESS) {
+        if (node.varType == "string") return true;  // байт строки — u8
         auto found = unsignedElements.find(node.varName);
         return found != unsignedElements.end() && found->second;
     }
@@ -1196,6 +1197,20 @@ llvm::Value* CodeGen::genOtherExpr(const Node& node) {
         codegenFailure(node, "неизвестная переменная '" + node.value + "'");
     }
     if (node.type == NODE_ARRAY_ACCESS) {
+        if (node.varType == "string") {  // D-019: s[i] — байт строки; вне [0, len(s)) — ошибка
+            Node name;
+            name.type = NODE_IDENTIFIER;
+            name.value = node.varName;
+            name.line = node.line; name.column = node.column; name.file = node.file;
+            llvm::Value* str = genExpr(name);
+            llvm::Value* length = builder.CreateCall(runtimeFunction("strlen"), {str});
+            llvm::Value* idx = genExpr(*node.left);
+            if (idx->getType()->getIntegerBitWidth() < 64)
+                idx = isUnsignedExpr(*node.left) ? builder.CreateZExt(idx, builder.getInt64Ty())
+                                                 : builder.CreateSExt(idx, builder.getInt64Ty());
+            emitRuntimeFailureIf(builder.CreateICmpUGE(idx, length), "string index out of bounds", node);
+            return builder.CreateLoad(builder.getInt8Ty(), builder.CreateGEP(builder.getInt8Ty(), str, {idx}));
+        }
         if (dynArrays.contains(node.varName)) {
             llvm::Value* desc = dynArrays[node.varName];
             llvm::StructType* descType = dynArrayType();

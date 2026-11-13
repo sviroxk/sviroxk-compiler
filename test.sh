@@ -1380,6 +1380,17 @@ expect_compile_error "for-each-grow-assign" $'int[] v = new int[2];\nfor x in v 
 expect_compile_error "for-each-window-clear" $'fn void f(int[..] p) { for x in p { p.clear(); } }' "нельзя менять длину массива 'p' внутри цикла for по нему"
 expect_compile_error "for-each-not-array" $'int n = 3;\nfor x in n { print(x); }' "for x in v: 'n' — не массив, а 'int/i32'"
 expect_program_output "for-each-grow-after" $'int[] v = new int[1];\nfor x in v { print(x); }\nv.push(5);\nprint(v.len());' $'0\n2'
+# 1.1 (D-019): s[i] — байт строки по номеру (u8), границы по len(s).
+expect_program_output "string-byte-index" "$(cat examples/string_bytes.svx)" $'104\n1\n2\n2\n2\n195\n169'
+expect_program_output "string-byte-param" $'fn byte at(string t, i64 i) { return t[i]; }\nu8 k = 2;\nstring s = "abc";\nprint(at(s, 0));\nprint(s[k]);' $'97\n99'
+expect_compile_error "string-byte-assign" $'string s = "ab";\ns[0] = \'x\';' "байт строки 's' по номеру можно только читать; изменить — через ptr p = data(s); p[i] = ..."
+expect_compile_error "string-byte-index-type" $'string s = "ab";\nprint(s[true]);' "индекс массива должен иметь целочисленный тип"
+printf '%s\n' 'string s = "ab";' 'int i = 2;' 'print(s[i]);' > "$RUNTIME_DIR/string_byte_end.svx"
+expect_runtime_error "string-byte-past-end" "$RUNTIME_DIR/string_byte_end.svx" "string index out of bounds at line 3, column 7"
+printf '%s\n' 'string s = "ab";' 'int i = 0 - 1;' 'print(s[i]);' > "$RUNTIME_DIR/string_byte_negative.svx"
+expect_runtime_error "string-byte-negative" "$RUNTIME_DIR/string_byte_negative.svx" "string index out of bounds at line 3, column 7"
+printf '%s\n' 'string s = "";' 'print(s[0]);' > "$RUNTIME_DIR/string_byte_empty.svx"
+expect_runtime_error "string-byte-empty" "$RUNTIME_DIR/string_byte_empty.svx" "string index out of bounds at line 2, column 7"
 # 1.3: move в цикле, если тот же оператор присваивает имени новое значение (D-015, уточнение владельца).
 expect_program_output "move-in-loop-reassign" $'struct Queue { int[] items; string name; }\nfn Queue enqueue(Queue q, int x) { q.items.push(x); return q; }\nfn int[] add(int[] v, int x) { v.push(x); return v; }\nfn string grow(string s) { return replace(s, "a", "ab"); }\nQueue q;\nq.name = "очередь";\nint[] v = new int[0];\nstring s = "a";\nfor i in 0..4 {\n    q = enqueue(move(q), i * 10);\n    v = add(move(v), i);\n    s = grow(move(s));\n}\nint k = 0;\nwhile (k < 2) { v = add(move(v), 100); k += 1; }\nprint(q.items.len()); print(q.items[3]); print(v.len()); print(v[5]); print(s); print(q.name);' $'4\n30\n6\n100\nabbbb\nочередь'
 expect_compile_error "move-in-loop-reassign-other" $'fn int[] add(int[] v, int x) { v.push(x); return v; }\nint[] v = new int[0];\nint[] w = new int[0];\nfor i in 0..3 { w = add(move(v), i); }' "move 'v' внутри цикла или функции, а объявлена она снаружи"
