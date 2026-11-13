@@ -1,0 +1,36 @@
+// for x in v: обход растущего массива, окна и массива структур (копии элементов).
+struct P { string name; int[] s; }
+fn int sum(int[..] part) {
+    int t = 0;
+    for x in part { t += x; }
+    return t;
+}
+int[] v = new int[0];
+for i in 1..=4 { v.push(i * 10); }
+for x in v { print(x); }
+print(sum(v[1..3]));
+print(sum(v));
+u8[] b = new u8[2];
+b[0] = 200;
+for c in b { print(c); }
+P[] ps = new P[0];
+P q;
+q.name = "Ann";
+q.s.push(1);
+q.s.push(2);
+ps.push(q);
+q.name = "Bob";
+ps.push(q);
+for p in ps {
+    p.s.push(3);
+    print(p.name);
+    print(p.s.len());
+    if (p.name == "Ann") { continue; }
+    break;
+}
+P first = ps[0];
+print(first.s.len());
+int[] e = new int[0];
+for x in e { print(x); }
+for x in v { v[0] = x; }
+print(v[0]);
