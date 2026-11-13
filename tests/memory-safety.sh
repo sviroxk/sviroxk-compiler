@@ -415,6 +415,13 @@ drop t2;
 Person[] st = [make("S", 9)];
 print(oldest(st));
 SC
+# 1.3 шаг 4: задачи 11, 13, 14, 20 через функции — без утечек (LeakSanitizer) и порчи памяти.
+EXAMPLES="$(cd "$(dirname "${BASH_SOURCE[0]}")/../examples" && pwd)"
+check_case task11-people-grow clean $'3\n2\n-1\nEve\n27\n5\n31\n32\nEva' 1 < "$EXAMPLES/task11_people_grow.svx"
+check_case task13-stack-queue clean $'30\n30\n2\n1\n2\n3' 1 < "$EXAMPLES/task13_stack_queue.svx"
+check_case task14-matrix clean $'58\n64\n139\n154\n6' 1 < "$EXAMPLES/task14_matrix.svx"
+check_case task20-grow clean $'1000\n1\n499500\n10\n45\n0\n12\n13\n0\n144' 1 < "$EXAMPLES/task20_grow.svx"
+
 check_case dynamic-grow-release clean $'5\n10\n50\n4' 1 <<'SC'
 ptr values = new int[0];
 values.push(10); values.push(20); values.push(30);

@@ -1348,6 +1348,13 @@ expect_program_output "struct-dynamic-array" $'struct Person { string name = "?"
 expect_compile_error "struct-dynamic-array-pop" $'struct P { int x; }\nP[] v = new P[1];\nP z = v.pop();' "pop() у массива структур пока нет"
 expect_compile_error "struct-dynamic-array-push-type" $'struct P { int x; }\nP[] v = new P[0];\nv.push(3);' "элемент массива ожидает тип 'P'"
 expect_compile_error "dynamic-array-del-then-drop" $'ptr v = new int[2];\ndel v;\ndrop v;' "повторный drop 'v' (уже освобождено в строке 2)"
+# 1.3 шаг 4: задачи 11, 13, 14, 20 через функции над растущими массивами (docs/tasks.md).
+expect_program_output "task11-people-grow" "$(cat examples/task11_people_grow.svx)" $'3\n2\n-1\nEve\n27\n5\n31\n32\nEva'
+expect_program_output "task13-stack-queue" "$(cat examples/task13_stack_queue.svx)" $'30\n30\n2\n1\n2\n3'
+expect_program_output "task14-matrix" "$(cat examples/task14_matrix.svx)" $'58\n64\n139\n154\n6'
+expect_program_output "task20-grow" "$(cat examples/task20_grow.svx)" $'1000\n1\n499500\n10\n45\n0\n12\n13\n0\n144'
+expect_compile_error "task11-wrong-array" $'struct Person { string name; }\nfn i64 count(int[] v) { return v.len(); }\nPerson[] people = new Person[0];\nprint(count(people));' "аргумент 1 функции 'count': ожидался массив 'int[]', получен массив 'Person[]'"
+expect_compile_error "task11-use-after-move" $'struct Person { string name; }\nfn Person[] add(Person[] list) { return list; }\nPerson[] people = new Person[0];\nPerson[] other = add(move(people));\nprint(people.len());' "'people' используется после move (строка 4)"
 expect_compile_error "struct-array-field-assign" $'struct S { int[] a; }\nS s;\ns.a = 5;' "полю-массиву 's.a' присваивается только список"
 expect_compile_error "struct-array-field-use-after-drop" $'struct S { int[] a; }\nS s;\ndrop s.a;\ns.a.push(1);' "'s.a' используется после drop (строка 3)"
 expect_compile_error "struct-array-field-double-drop" $'struct S { int[] a; }\nS s;\ndrop s.a;\ndrop s.a;' "повторный drop 's.a' (уже освобождено в строке 3)"

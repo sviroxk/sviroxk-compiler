@@ -1,0 +1,28 @@
+fn int[] fill(int[] v, int n) {
+    for i in 0..n { v.push(i); }
+    return v;
+}
+
+fn i64 total(int[] v) {
+    i64 s = 0;
+    for i in 0..v.len() { s += v[i]; }
+    return s;
+}
+
+int[] v = new int[0];
+v = fill(move(v), 1000);
+print(v.len());
+print(v.cap() >= v.len());
+print(total(v));
+v.resize(10);
+print(v.len());
+print(total(v));
+v.resize(12);
+print(v[11]);
+int[] w = v;
+w.push(99);
+print(v.len());
+print(w.len());
+v.clear();
+print(v.len());
+print(total(w));

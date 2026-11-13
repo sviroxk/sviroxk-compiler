@@ -418,3 +418,8 @@
 - `P[] a = new P[n]` — элементы со значениями полей по умолчанию; `push(q)` (копия) / `push(f())` (без копии), `a[i].x`, `a[i] = q`, `P r = a[i]`, `resize`/`clear`, передача/возврат/`move`/копия массива — со строками и массивами в полях, без утечек (LeakSanitizer).
 - Размер элемента теперь из DataLayout (`elementSize`), а не `getPrimitiveSizeInBits/8` (для структуры давал 0).
 - `pop()` у массива структур — ошибка с подсказкой (пока нет). Тесты `struct-dynamic-array`, `-pop`, `-push-type`, `memory-safety.sh` `struct-dynamic-array-release`. Spec §7, §17.
+
+## 2026-11-13 — растущий массив (1.3), шаг 4: задачи 11, 13, 14, 20 через функции
+- Программы `examples/task11_people_grow.svx`, `task13_stack_queue.svx`, `task14_matrix.svx`, `task20_grow.svx`: массивы передаются в функции и возвращаются (`x = f(move(x))`), копия до изменения остаётся прежней; вывод проверяет `test.sh`, отсутствие утечек — `tests/memory-safety.sh` (LeakSanitizer). Ошибки: чужой тип массива в аргументе, имя после move.
+- `docs/tasks.md` — список 30 типовых задач из исходного запроса владельца; ссылка из `docs/handoff.md`.
+- Найдено (не сделано, в письме и spec §17): `a[i].v[j]`, литерал-массив в аргументе, `x = f(move(x))` в цикле.
