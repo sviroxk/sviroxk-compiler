@@ -2,6 +2,7 @@
 #include "diagnostics.h"
 #include <iostream>
 #include <cctype>
+#include <cstdint>
 #include <cstdlib>
 #include <algorithm>
 #include <string_view>
