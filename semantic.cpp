@@ -168,6 +168,9 @@ private:
     unsigned loopDepth_ = 0;
     size_t functionScope_ = 0; // индекс области параметров текущей функции
     size_t dropBarrier_ = 0;  // drop можно только для имён из областей с индексом >= этого
+    // q = f(move(q)) в цикле (решение владельца 13.11): имя, которому этот оператор тут же
+    // присваивает новое значение, переносить можно и из внешней области.
+    const Symbol* reassigned_ = nullptr;
 
     static bool isBuiltinFunction(const std::string& name) {
         static const std::set<std::string> names = {
@@ -362,7 +365,7 @@ private:
             Symbol* moved = lookupMutable(expr.args[0].value, &index);
             if (!moved || !moved->isDynArray) return "";
             expression(expr.args[0]);
-            if (index < dropBarrier_)
+            if (index < dropBarrier_ && moved != reassigned_)
                 error(expr, "move '" + expr.args[0].value + "' внутри цикла или функции, а объявлена она "
                       "снаружи: перенос выполнился бы несколько раз");
             else if (!moved->droppedLine) {
@@ -1285,7 +1288,7 @@ private:
                 if (argumentTypes[0] != "str" && !movesStruct) {}  // ошибка типа уже выдана
                 else if (!moved)
                     error(source, "move(…) переносит строку или структуру из переменной: пишите move(имя)");
-                else if (index < dropBarrier_)
+                else if (index < dropBarrier_ && moved != reassigned_)
                     error(node, "move '" + source.value + "' внутри цикла или функции, а объявлена она "
                           "снаружи: перенос выполнился бы несколько раз");
                 else if (!moved->droppedLine) {
@@ -1689,6 +1692,10 @@ private:
         }
         case NODE_ASSIGN: {
             Symbol* released = lookupMutable(node.varName);
+            const Symbol* savedReassigned = reassigned_;
+            reassigned_ = released;
+            struct Restore { const Symbol*& slot; const Symbol* value; ~Restore() { slot = value; } }
+                restore{reassigned_, savedReassigned};
             const bool afterDel = released && released->droppedLine &&
                                   (std::string_view(released->releasedBy) == "del" ||
                                    std::string_view(released->releasedBy) == "move");

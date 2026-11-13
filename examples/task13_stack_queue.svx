@@ -16,11 +16,6 @@ fn Queue enqueue(Queue q, int x) {
     return q;
 }
 
-fn Queue fill(Queue q, int n) {
-    for i in 1..n + 1 { q.items.push(i); }
-    return q;
-}
-
 fn int front(Queue q) { return q.items[q.head]; }
 
 fn i64 size(Queue q) { return q.items.len() - q.head; }
@@ -37,7 +32,7 @@ print(sum_pop(stack));
 print(stack.len());
 
 Queue q;
-q = fill(move(q), 3);
+for i in 1..4 { q = enqueue(move(q), i); }  // перенос и тут же новое значение
 q = enqueue(move(q), 4);
 print(front(q));
 q = dequeue(move(q));
