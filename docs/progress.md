@@ -465,3 +465,7 @@
 ## 2026-11-13 — 1.1: сборка строки s.push(c)
 - `s.push(c)` — буква в конец строки-переменной (D-023); строку можно собрать по буквам (задача 8 — перевернуть строку).
 - spec §11 «Сборка строки», §17; тесты `string-push`, `string-push-in-letters`, `string-push-string`, `string-push-int`; memory-safety `string-push`.
+
+## 2026-11-13 — 1.1: сложение строк a + b
+- `a + b` — новая строка, `s += t` (D-024); строка + число или `char` — ошибка с подсказкой.
+- spec §11 «Сложение строк», §17; тесты `string-plus`, `string-plus-number`, `string-plus-char`, `string-plus-in-letters`; memory-safety `string-plus`.
