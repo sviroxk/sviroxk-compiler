@@ -335,3 +335,9 @@
 - `data(s)` и `as_ptr(s)` — явный адрес символов (`ptr` на `char`); `&s` — ошибка с подсказкой; `del` такого указателя — «освобождать нечего».
 - Переписаны: spec §9, §11, §15, `examples/string_replace.svx`, `new-words-builtins`, `tests/memory-safety.sh` (`heap-release` → `replace-string`, ASan-самопроверки `use-after-delete`/`double-delete`/`raw-pointer-overrun` — через `data(s)` и освобождение параметром функции).
 - Письмо: решение владельца 13.11 о сайте, 0а закрыта, «Рабочие факты» — сайт не пересобирать.
+
+## 2026-11-13 — строки, шаг 2 (0б, D-014): память строки освобождается сама
+- Каждая string-переменная и string-параметр владеют своей копией в куче (`strdup`; свежий результат `str()`/`replace`/ввода/`read`/функции забирается без копии) и освобождают её в конце блока — через тот же список, что `defer` (`return`, `break`, `continue`, ветки, все виды циклов). `s = …` освобождает старое значение после вычисления нового.
+- `string b = a` — копия (запись через `data(b)` не меняет `a`); функция получает копию аргумента, `return` отдаёт копию. Запись строки-переменной в поле структуры/элемент массива — копия (иначе висячий адрес после конца блока), она пока не освобождается (spec §17).
+- `drop` строки — ошибка «drop для строки не пишется».
+- Тесты: `tests/memory-safety.sh` — 5 новых случаев с LeakSanitizer (`string-copy-assign-release`, `string-function-release`, `string-loop-release`, `string-input-release`, `string-field-outlives-variable`), `replace-string` и `file-roundtrip-eof` теперь с проверкой утечек; `test.sh` — `string-copy-independent`, `drop-string`. На сборке до правки `string-copy-assign-release` и `string-loop-release` падали (LeakSanitizer, код 86).

@@ -55,11 +55,81 @@ check_case() {
     echo "PASS: memory safety $mode '$name'"
 }
 
-# replace returns an owning string (D-014); automatic release comes with task 0b,
-# until then its leak is expected and leak detection is off for this case only.
-check_case replace-string clean 'after' <<'SC'
-string text = replace("before", "before", "after");
-print(text);
+# Strings live in functions: a leaked local is unreachable, so LeakSanitizer sees it.
+check_case replace-string clean 'after' 1 <<'SC'
+fn void run() { string text = replace("before", "before", "after"); print(text); }
+run();
+SC
+# D-014: string variables own their heap copy and free it at block end; leak detection on.
+check_case string-copy-assign-release clean $'hello\njello\nZello\nhello' 1 <<'SC'
+fn void run() {
+    string a = "hello";
+    string b = a;
+    b = replace(b, "h", "j");
+    print(a); print(b);
+    ptr chars = data(b);
+    chars[0] = 'Z';
+    print(b); print(a);
+}
+run();
+SC
+check_case string-function-release clean $'hi sam\nhi \nchanged\nkeep' 1 <<'SC'
+fn string greet(string name) {
+    string prefix = "hi ";
+    if (len(name) == 0) { return prefix; }
+    string result = replace("hi X", "X", name);
+    return result;
+}
+fn void show(string s) { s = "changed"; print(s); }
+string first = greet("sam");
+string second = greet("");
+print(first); print(second);
+string kept = "keep";
+show(kept);
+print(kept);
+SC
+check_case string-loop-release clean $'3\n42\n2' 1 <<'SC'
+fn int count(int n) {
+    int total = 0;
+    int i = 0;
+    while (i < n) {
+        string s = str(i);
+        i++;
+        if (i == 2) { continue; }
+        if (i == 5) { break; }
+        total += len(s);
+    }
+    return total;
+}
+print(count(10));
+if (true) { string inner = str(42); print(inner); }
+repeat (3) { string w = str(1); }
+for j in 0..3 { string w2 = replace("aa", "a", "b"); if (j == 1) { break; } }
+loop { string q = str(3); if (len(q) == 1) { break; } }
+int seen = 0;
+string[] names = ["a", "b"];
+for nm in names { string copy = nm; seen += len(copy); }
+print(seen);
+SC
+check_case string-input-release clean $'0\n0' 1 <<'SC'
+fn void run() {
+    string line = input_str("");
+    print(len(line));
+    file output = open("text.txt", "w");
+    close(output);
+    file input = open("text.txt", "r");
+    string empty = read(input);
+    close(input);
+    print(len(empty));
+}
+run();
+SC
+check_case string-field-outlives-variable clean $'7\n7' 1 <<'SC'
+struct Box { string text = "x"; }
+Box box;
+string[] items = ["a"];
+if (true) { string local = str(7); box.text = local; items[0] = local; }
+print(box.text); print(items[0]);
 SC
 check_case dynamic-grow-release clean $'5\n10\n50\n4' 1 <<'SC'
 ptr values = new int[0];
@@ -74,8 +144,7 @@ ptr values = new int[0];
 print(values.len());
 del values;
 SC
-# read() returns owning heap strings that SC cannot yet release: leaks disabled here only.
-check_case file-roundtrip-eof clean $'first\nsecond\n0\nfirst' <<'SC'
+check_case file-roundtrip-eof clean $'first\nsecond\n0\nfirst' 1 <<'SC'
 file output = open("roundtrip.txt", "w");
 write(output, "first\nsecond"); close(output);
 file input = open("roundtrip.txt", "r");
@@ -121,4 +190,4 @@ ptr chars = data(text);
 print(chars[4]);
 SC
 
-echo 'PASS: memory safety suite (4 clean, 3 controlled runtime errors, 3 ASan detector self-tests)'
+echo 'PASS: memory safety suite (9 clean, 3 controlled runtime errors, 3 ASan detector self-tests)'
