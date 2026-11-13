@@ -213,7 +213,8 @@ bool CodeGen::structOwnsMemory(const std::string& structName, int depth) const {
     if (def == structDefs.end() || depth > 256) return false;
     for (const StructField& field : def->second) {
         const sc::Type type = sc::Type::from(field.type);
-        if (type.isStr() || (type.isStruct() && structOwnsMemory(type.structName, depth + 1))) return true;
+        if (type.isStr() || type.isDynArray() ||
+            (type.isStruct() && structOwnsMemory(type.structName, depth + 1))) return true;
     }
     return false;
 }
@@ -229,6 +230,10 @@ void CodeGen::dropStruct(llvm::Value* address, const std::string& structName) {
         if (fieldType.isStr()) {
             builder.CreateCall(runtimeFunction("free"), {builder.CreateLoad(builder.getPtrTy(), field)});
             builder.CreateStore(llvm::ConstantPointerNull::get(builder.getPtrTy()), field);
+        } else if (fieldType.isDynArray()) {  // поле-массив: буфер и пустой описатель (D-016)
+            builder.CreateCall(runtimeFunction("free"), {builder.CreateLoad(builder.getPtrTy(),
+                builder.CreateStructGEP(dynArrayType(), field, 0))});
+            builder.CreateStore(llvm::Constant::getNullValue(dynArrayType()), field);
         } else if (fieldType.isStruct() && structOwnsMemory(fieldType.structName)) {
             dropStruct(field, fieldType.structName);
         }
@@ -244,6 +249,19 @@ void CodeGen::copyStructStrings(llvm::Value* address, const std::string& structN
         llvm::Value* field = builder.CreateStructGEP(type, address, i);
         if (fieldType.isStr())
             builder.CreateStore(copyString(builder.CreateLoad(builder.getPtrTy(), field)), field);
+        else if (fieldType.isDynArray()) {  // своя копия буфера: ёмкость (минимум 1) и len элементов
+            llvm::Type* element = svType(fieldType.element->toString());
+            llvm::Value* size = builder.getInt64(element->getPrimitiveSizeInBits() / 8);
+            llvm::Value* capacity = builder.CreateLoad(builder.getInt64Ty(), builder.CreateStructGEP(dynArrayType(), field, 2));
+            capacity = builder.CreateSelect(builder.CreateICmpEQ(capacity, builder.getInt64(0)), builder.getInt64(1), capacity);
+            llvm::Value* data = builder.CreateCall(runtimeFunction("malloc"), {builder.CreateMul(capacity, size)});
+            emitRuntimeFailureIf(builder.CreateIsNull(data), "out of memory", Node{});
+            llvm::Value* dataSlot = builder.CreateStructGEP(dynArrayType(), field, 0);
+            llvm::Value* length = builder.CreateLoad(builder.getInt64Ty(), builder.CreateStructGEP(dynArrayType(), field, 1));
+            builder.CreateCall(runtimeFunction("memcpy"), {data, builder.CreateLoad(builder.getPtrTy(), dataSlot),
+                builder.CreateMul(length, size)});
+            builder.CreateStore(data, dataSlot);
+        }
         else if (fieldType.isStruct() && structOwnsMemory(fieldType.structName))
             copyStructStrings(field, fieldType.structName);
     }
@@ -818,7 +836,9 @@ void CodeGen::initStructLiteral(llvm::Value* storage, llvm::StructType* aggregat
         llvm::Type* fieldType = aggregateType->getStructElementType(static_cast<unsigned>(index));
         llvm::Value* address = builder.CreateStructGEP(aggregateType, storage,
                                                         static_cast<unsigned>(index));
-        if (initializer->type == NODE_STRUCT_LITERAL) {
+        if (sc::Type::from(field.type).isDynArray()) {  // int[] a; — пустой массив (D-016)
+            builder.CreateStore(llvm::Constant::getNullValue(fieldType), address);
+        } else if (initializer->type == NODE_STRUCT_LITERAL) {
             // Nested struct field: allocate a temp, initialize it, store the pointer
             llvm::AllocaInst* temp = builder.CreateAlloca(fieldType, nullptr, field.name);
             llvm::StructType* nestedType = llvmStructTypes[field.type];
@@ -852,7 +872,40 @@ llvm::Value* CodeGen::genExpr(const Node& node) {
     return value;
 }
 
+// p.scores (D-016): описатель поля-массива под именем пути — дальше код динамических массивов.
+void CodeGen::bindFieldArray(const Node& node) {
+    if (node.varName.find('.') == std::string::npos) return;
+    switch (node.type) {
+    case NODE_ARRAY_ACCESS: case NODE_ARRAY_ASSIGN: case NODE_ARRAY_PUSH: case NODE_ARRAY_POP:
+    case NODE_ARRAY_RESIZE: case NODE_ARRAY_LEN: case NODE_ARRAY_CAP: case NODE_DROP: break;
+    default: return;
+    }
+    const size_t dot = node.varName.find('.');
+    Node field;
+    field.type = NODE_STRUCT_FIELD;
+    field.varName = node.varName.substr(0, dot);
+    field.op = node.varName.substr(dot + 1);
+    field.line = node.line; field.column = node.column; field.file = node.file;
+    structFieldAddressOnly_ = true;
+    llvm::Value* address = genOtherExpr(field);
+    structFieldAddressOnly_ = false;
+    std::string structName = structTypesByVariable[field.varName], type;
+    for (size_t pos = 0; !structName.empty();) {
+        const size_t next = field.op.find('.', pos);
+        const std::string name = field.op.substr(pos, next == std::string::npos ? std::string::npos : next - pos);
+        for (const StructField& candidate : structDefs[structName]) if (candidate.name == name) type = candidate.type;
+        if (next == std::string::npos) break;
+        structName = type;
+        pos = next + 1;
+    }
+    const sc::Type arrayType = sc::Type::from(type);
+    dynArrays[node.varName] = address;
+    dynArrayElementTypes[node.varName] = svType(arrayType.element->toString());
+    unsignedElements[node.varName] = arrayType.element->isUnsigned();
+}
+
 llvm::Value* CodeGen::genOtherExpr(const Node& node) {
+    bindFieldArray(node);
     if (node.type == NODE_CHAR) {
         return builder.getInt8(static_cast<uint8_t>(std::stoul(node.value)));
     }
@@ -1649,6 +1702,7 @@ llvm::Value* CodeGen::genCallExpr(const Node& node) {
 }
 
 void CodeGen::genNode(const Node& node) {
+    bindFieldArray(node);
     if (!unsignedCache_.empty()) unsignedCache_.clear();
     if (!widthCache_.empty()) widthCache_.clear();
     // Тела функций генерируются после завершённого main, поэтому для них
@@ -1792,6 +1846,28 @@ void CodeGen::genNode(const Node& node) {
             val = castTo(val, ty, isUnsignedExpr(*node.left));
             builder.CreateStore(val, alloca);
         }
+    }
+    else if (node.type == NODE_STRUCT_FIELD_ASSIGN && node.left->type == NODE_ARRAY_DECL) {
+        Node target = node;  // t.scores = [1, 2]: старый буфер освобождается, новый — из списка (D-017)
+        target.type = NODE_DROP;
+        target.varName = node.varName + "." + node.op;
+        bindFieldArray(target);
+        llvm::Value* desc = dynArrays[target.varName];
+        llvm::Type* element = dynArrayElementTypes[target.varName];
+        llvm::Value* dataSlot = builder.CreateStructGEP(dynArrayType(), desc, 0);
+        builder.CreateCall(runtimeFunction("free"), {builder.CreateLoad(builder.getPtrTy(), dataSlot)});
+        const uint64_t count = node.left->args.size();
+        llvm::Value* data = builder.CreateCall(runtimeFunction("calloc"), {builder.getInt64(count ? count : 1),
+            builder.getInt64(element->getPrimitiveSizeInBits() / 8)});
+        emitRuntimeFailureIf(builder.CreateIsNull(data), "out of memory", node);
+        for (uint64_t i = 0; i < count; ++i) {
+            const Node& item = node.left->args[i];
+            builder.CreateStore(castTo(genExpr(item), element, isUnsignedExpr(item)),
+                                builder.CreateGEP(element, data, {builder.getInt64(i)}));
+        }
+        builder.CreateStore(data, dataSlot);
+        builder.CreateStore(builder.getInt64(count), builder.CreateStructGEP(dynArrayType(), desc, 1));
+        builder.CreateStore(builder.getInt64(count), builder.CreateStructGEP(dynArrayType(), desc, 2));
     }
     else if (node.type == NODE_STRUCT_FIELD_ASSIGN && node.op.find('.') != std::string::npos) {
         Node field;
@@ -2092,7 +2168,8 @@ void CodeGen::genNode(const Node& node) {
         std::vector<llvm::Type*> fieldTypes;
         std::map<std::string, unsigned> fieldIndices;
         for (size_t index = 0; index < fields.size(); ++index) {
-            fieldTypes.push_back(svType(fields[index].type));
+            fieldTypes.push_back(sc::Type::from(fields[index].type).isDynArray()
+                ? dynArrayType() : svType(fields[index].type));  // поле-массив — описатель внутри
             fieldIndices[fields[index].name] = static_cast<unsigned>(index);
         }
         llvm::StructType* llvmType = llvm::StructType::create(context, node.varName);
