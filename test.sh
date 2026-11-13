@@ -1331,6 +1331,16 @@ expect_compile_error "struct-array-field-element-type" $'struct S { string[] a; 
 expect_compile_error "struct-array-field-push-type" $'struct S { int[] a; }\nS s;\ns.a.push("x");' "элемент массива ожидает тип 'int/i32'"
 expect_compile_error "struct-use-after-move" $'struct P { string n = ""; }\nP a;\nP b = move(a);\nprint(a.n);' "'a' используется после move"
 expect_compile_error "struct-move-in-loop" $'struct P { string n = ""; }\nfn void f() { P a; for i in 0..2 { P b = move(a); } }' "move 'a' внутри цикла или функции"
+expect_program_output "struct-array" $'struct Pos { int x; int y; }\nstruct P { int id; u8 lvl; Pos at; }\nfn P mk(int a) { P p = {a, 200, {a, a * 2}}; return p; }\nfn int sum(P p) { return p.id + p.at.x + p.at.y; }\nP q = mk(3);\nP[] arr = [{1, 7, {2, 3}}, mk(5), q];\nprint(arr.len());\nprint(arr[1].at.y);\nprint(arr[0].lvl + arr[1].lvl);\narr[0].id = 40;\narr[2].at.x += 100;\nint i = 0;\narr[i + 1].lvl += 50;\nprint(arr[0].id);\nprint(arr[2].at.x);\nprint(arr[1].lvl);\narr[1] = mk(9);\nP r = arr[1];\nr.id = 0;\nprint(arr[1].id);\nprint(sum(arr[2]));\nprint(q.at.x);\nfor k in 0..arr.len() { print(arr[k].id); }\nfor p in arr { print(p.at.y); }' $'3\n10\n207\n40\n103\n250\n9\n112\n3\n40\n9\n3\n3\n18\n6'
+printf '%s\n' 'struct P { int x = 0; }' 'P[] a = [{ x = 1; }];' 'int i = 1;' 'print(a[i].x);' >"$RUNTIME_DIR/struct_array_oob.svx"
+expect_runtime_error "struct-array-field-oob" "$RUNTIME_DIR/struct_array_oob.svx" "array index out of bounds at line 4, column 7"
+expect_program_output "struct-array-owning" $'struct S { string n = ""; int[] v; }\nfn S mk(string n) { S s = { n = n; }; s.v.push(4); return s; }\nS q = mk("q");\nS[] a = [{ n = "x"; }, mk("y"), q];\nq.n = "w";\na[0] = q;\na[1].n = "z";\nS c = a[2];\nc.n = "c";\nfor p in a { print(p.n); }\nprint(c.v[0]);' $'w\nz\nq\n4'
+expect_compile_error "struct-array-move-element" $'struct S { string n = ""; }\nS[] a = [{ n = "x"; }];\nS b = move(a[0]);' "move(…) переносит строку или структуру из переменной: пишите move(имя)"
+expect_compile_error "struct-array-unknown-field" $'struct S { int n = 0; }\nS[] a = [{ n = 1; }];\nprint(a[0].m);' "у структуры 'S' нет поля 'm'"
+expect_compile_error "struct-array-field-wrong-type" $'struct S { int n = 0; }\nS[] a = [{ n = 1; }];\na[0].n = "z";' "поле ожидает тип 'int/i32', получен 'str'"
+expect_compile_error "struct-array-element-wrong-type" $'struct S { int n = 0; }\nstruct T { int n = 0; }\nT t;\nS[] a = [t];' "элемент массива должен иметь тип 'S'"
+expect_compile_error "int-array-field" $'int[] b = [1];\nprint(b[0].x);' "элемент массива 'b' имеет тип 'int/i32' и не имеет полей"
+expect_compile_error "struct-array-const-oob" $'struct S { int n = 0; }\nS[] a = [{ n = 1; }];\nprint(a[3].n);' "индекс массива выходит за границы [1]"
 expect_compile_error "struct-return-wrong-type" $'struct P { int a = 1; }\nfn P f() { return 1; }' "функция должна вернуть 'P', получено 'int/i32'"
 expect_compile_error "struct-init-wrong-type" $'struct P { int a = 1; }\nstruct Q { int a = 1; }\nfn Q f() { Q q; return q; }\nP p = f();' "переменная 'p' имеет тип 'P', но инициализируется значением типа 'Q'"
 expect_compile_error "struct-result-into-int" $'struct P { int a = 1; }\nfn P f() { P p; return p; }\nint z = f();' "переменная 'z' имеет тип 'int/i32', но инициализируется значением типа 'P'"

@@ -366,6 +366,20 @@ Node parseStructInstance(const Token& declarationToken, const std::string& struc
     return node;
 }
 
+// .x.y после элемента массива: имена полей через точку.
+std::string parseFieldPath() {
+    std::string path;
+    while (peek().type == DOT) {
+        consume();
+        Token field = consume();
+        if (field.type != IDENTIFIER && !isBuiltinToken(field.type))
+            failAt(field, "ожидалось имя поля после '.'");
+        if (!path.empty()) path += ".";
+        path += field.value;
+    }
+    return path;
+}
+
 Node parseStructLiteral() {
     Node node; node.type = NODE_STRUCT_LITERAL;
     setPos(node, expect(LBRACE));
@@ -635,6 +649,12 @@ Node parsePrimary() {
             access->left = makeNode(parseExpr());
             expect(RBRACKET);
             left = *access;
+            if (peek().type == DOT && peek(1).type == IDENTIFIER) {  // a[i].x.y — поле элемента
+                left.type = NODE_STRUCT_FIELD;
+                left.right = access->left;  // индекс
+                left.left.reset();
+                left.op = parseFieldPath();
+            }
         }
     } else {
         failAt(t, "ожидалось выражение, получено " + tokenDescription(t));
@@ -868,7 +888,11 @@ void parseDeclBody(Node& node, bool isArray) {
         node.type = NODE_ARRAY_DECL;
         expect(LBRACKET);
         while (peek().type != RBRACKET && peek().type != END) {
-            node.args.push_back(parseExpr());
+            if (peek().type == LBRACE && structNames.contains(node.varType)) {
+                node.args.push_back(parseStructLiteral());  // P[] a = [{1, 2}, …]
+                node.args.back().varType = node.varType;
+            } else
+                node.args.push_back(parseExpr());
             if (peek().type == COMMA) consume();
             else if (peek().type != RBRACKET) {  // [1 2 3] раньше молча принимался
                 failAt(peek(), "ожидалась ',' между элементами массива");
@@ -886,6 +910,17 @@ void parseDeclBody(Node& node, bool isArray) {
 Node parseOne() {
     operatorsInStatement = 0;  // выражения разных инструкций не вкладываются друг в друга
     // P p; / P p = { ... }; — переменная-структура
+    if (peek().type == IDENTIFIER && structNames.contains(peek().value) &&
+        peek(1).type == LBRACKET && peek(2).type == RBRACKET) {  // P[] a = [{…}, f(), q];
+        Token typeToken = consume();
+        consume(); consume();
+        Node node;
+        setPos(node, typeToken);
+        node.varType = typeToken.value;
+        node.varName = consume().value;
+        parseDeclBody(node, true);
+        return node;
+    }
     if (peek().type == IDENTIFIER && structNames.contains(peek().value) && peek(1).type == IDENTIFIER) {
         Token declarationToken = consume();
         return parseStructInstance(declarationToken, declarationToken.value, consume().value);
@@ -1257,6 +1292,27 @@ Node parseOne() {
         consume(); // [
         node.left = makeNode(parseExpr());
         expect(RBRACKET);
+        if (peek().type == DOT) {  // a[i].x = v; a[i].x += v — поле элемента-структуры
+            node.type = NODE_STRUCT_FIELD_ASSIGN;
+            node.right = node.left;  // индекс
+            node.op = parseFieldPath();
+            Token operation = peek();
+            if (!isAssignOperator(operation.type)) failAt(operation, "ожидалось присваивание полю");
+            consume();
+            Node value = parseExpr();
+            if (operation.type != EQUALS) {
+                Node field;
+                field.type = NODE_STRUCT_FIELD;
+                field.varName = node.varName;
+                field.op = node.op;
+                field.right = node.right;  // тот же узел индекса: codegen вычисляет его один раз
+                field.line = arrayName.line; field.column = arrayName.column; field.file = arrayName.file;
+                value = compoundValue(operation, field, value);
+            }
+            node.left = makeNode(value);
+            expect(SEMICOLON);
+            return node;
+        }
         if (isAssignOperator(peek().type) && peek().type != EQUALS) {
             // a[i] += x: индекс вычисляется один раз (codegen подставляет готовое значение).
             Token operation = consume();

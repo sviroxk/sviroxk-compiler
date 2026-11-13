@@ -379,3 +379,10 @@
 - Ошибки: `p.scores = 5` («присваивается только список»), использование после `drop`, повторный `drop`, копия структуры со сброшенным полем, `drop` поля в цикле, `ptr q = p.scores` («целиком не берётся»), `string[] a;` в поле, неверный тип в `push`, значение по умолчанию у поля-массива.
 - Не сделано: `for x in p.scores`, массив строк или структур в поле.
 - Тесты: `tests/memory-safety.sh` `struct-array-field-release` (LeakSanitizer + ASan), `struct-array-field-cleared-read` (ошибка выполнения); `test.sh` `struct-array-field`, `struct-array-field-assign`, `-use-after-drop`, `-double-drop`, `-copy-dropped`, `-drop-in-loop`, `struct-array-field-whole`, `struct-array-field-element-type`, `struct-array-field-push-type`.
+
+## 2026-11-13 — структуры, шаг 5 (1.2): массив структур
+- Статический массив структур: `P[] a = [{ … }, make(5), q];` (литерал, результат функции, копия переменной), `a[i].x` и `a[i].x.y` чтение, `a[i].x = v` / `+=` (индекс вычисляется один раз), `a[i] = make(7);`, `P r = a[i];`, `for p in a` (копия элемента), `a.len()`, проверка индекса во время выполнения.
+- Элементы со строками и массивами в полях (D-016/D-017): освобождаются вместе с массивом (локальным и глобальным), `a[i] = q` освобождает старый элемент и копирует `q`, `a[i].name = "x"` освобождает старую строку, `for p in a` — своя копия на каждом шаге (в т.ч. при `continue`/`break`).
+- Ошибки: неизвестное поле, неверный тип поля, элемент другого типа, поле у элемента `int[]`, константный индекс за границей, `move(a[i])`.
+- Не сделано: `a[i].v.push(x)` (методы поля-массива у элемента), динамический массив структур.
+- Тесты: `test.sh` `struct-array`, `struct-array-owning`, `struct-array-field-oob`, `struct-array-move-element` и др.; `tests/memory-safety.sh` `struct-array-owning-release` (LeakSanitizer + ASan).

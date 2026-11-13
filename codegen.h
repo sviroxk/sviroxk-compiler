@@ -92,6 +92,7 @@ public:
     std::map<std::string, llvm::StructType*> llvmStructTypes;
     std::map<std::string, std::map<std::string, unsigned>> structFieldIndices;
     std::map<std::string, std::string> structTypesByVariable;
+    std::map<std::string, std::string> arrayStructNames;  // P[] a: a → P
     llvm::BasicBlock* breakBlock = nullptr;
     llvm::BasicBlock* continueBlock = nullptr;
     llvm::Function* putsFunc = nullptr;
