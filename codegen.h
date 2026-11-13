@@ -30,7 +30,11 @@ class CodeGen {
     ScopeSnapshot saveScope() const;
     void restoreScope(const ScopeSnapshot& scope);
     // statement == nullptr: освободить строку из слота freeSlot (D-014, конец блока).
-    struct Deferred { const Node* statement; ScopeSnapshot bindings; llvm::Value* freeSlot = nullptr; };
+    // temporary — временная строка выражения temporary (освобождается в конце оператора).
+    struct Deferred {
+        const Node* statement; ScopeSnapshot bindings; llvm::Value* freeSlot = nullptr;
+        const Node* temporary = nullptr;
+    };
     std::vector<Deferred> deferred_;
     size_t loopDeferredBase_ = 0;
     void emitDeferred(size_t base);
@@ -43,6 +47,10 @@ class CodeGen {
     llvm::Value* ownString(const Node& expr, llvm::Value* value);
     llvm::Value* stableString(const Node& expr, llvm::Value* value);
     void ownStringSlot(llvm::Value* slot);
+    void registerTemporary(const Node& expr, llvm::Value* value);
+    void consumeTemporary(const Node& expr);
+    void releaseTemporaries(size_t mark);
+    void genStatement(const Node& statement);
 
 public:
     llvm::LLVMContext context;

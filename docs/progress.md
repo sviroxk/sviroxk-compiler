@@ -341,3 +341,8 @@
 - `string b = a` — копия (запись через `data(b)` не меняет `a`); функция получает копию аргумента, `return` отдаёт копию. Запись строки-переменной в поле структуры/элемент массива — копия (иначе висячий адрес после конца блока), она пока не освобождается (spec §17).
 - `drop` строки — ошибка «drop для строки не пишется».
 - Тесты: `tests/memory-safety.sh` — 5 новых случаев с LeakSanitizer (`string-copy-assign-release`, `string-function-release`, `string-loop-release`, `string-input-release`, `string-field-outlives-variable`), `replace-string` и `file-roundtrip-eof` теперь с проверкой утечек; `test.sh` — `string-copy-independent`, `drop-string`. На сборке до правки `string-copy-assign-release` и `string-loop-release` падали (LeakSanitizer, код 86).
+
+## 2026-11-13 — строки, шаг 3 (0б, D-014): временные строки освобождаются в конце оператора
+- Результат `str()`, `replace`, `input_str`, `read`, функции с результатом `string`, не положенный в переменную/поле/`return` (`print(str(1))`, `f(str(1))`, `s == str(5)`, `f();`), освобождается в конце оператора: слот в начале функции (NULL) + запись в `deferred_`; `return`/`break`/`continue` освобождают его вместе с переменными; условие `while` — после каждой проверки; `defer` с временной строкой — тоже.
+- `data(str(1))` / `as_ptr(…)` от временной строки — ошибка компиляции (висячий адрес); аргумент — переменная, параметр или поле.
+- Тесты: `tests/memory-safety.sh` `string-temporaries-release` (LeakSanitizer; на сборке до правки — утечка, код 86), `test.sh` `string-data-of-temporary`.

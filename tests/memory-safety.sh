@@ -131,6 +131,30 @@ string[] items = ["a"];
 if (true) { string local = str(7); box.text = local; items[0] = local; }
 print(box.text); print(items[0]);
 SC
+check_case string-temporaries-release clean $'42\na+b\n5\n7\n3\n10\n1\n1\n99' 1 <<'SC'
+fn int size(string s) { return len(s); }
+fn string make(int n) { return str(n); }
+fn int early(int n) { if (len(str(n)) > 1) { return len(replace(str(n), "1", "22")); } return 0; }
+fn void run() {
+    print(str(42));
+    print(replace("a-b", "-", "+"));
+    print(size(str(12345)));
+    print(make(7));
+    make(8);
+    print(early(15));
+    int i = 0;
+    while (len(str(i)) < 2) { i++; if (len(str(i)) == 1) { continue; } }
+    print(i);
+    bool same = str(5) == "5" && replace("x", "x", "y") == "y";
+    print(same);
+    string t = true ? str(1) : str(2);
+    print(t);
+    input_str("");
+    defer print(str(99));
+    loop { if (len(str(3)) == 1) { break; } }
+}
+run();
+SC
 check_case dynamic-grow-release clean $'5\n10\n50\n4' 1 <<'SC'
 ptr values = new int[0];
 values.push(10); values.push(20); values.push(30);
@@ -190,4 +214,4 @@ ptr chars = data(text);
 print(chars[4]);
 SC
 
-echo 'PASS: memory safety suite (9 clean, 3 controlled runtime errors, 3 ASan detector self-tests)'
+echo 'PASS: memory safety suite (10 clean, 3 controlled runtime errors, 3 ASan detector self-tests)'
